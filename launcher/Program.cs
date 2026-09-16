@@ -293,7 +293,7 @@ namespace CodeAtlas
 
         public static void SaveConfig(Config c)
         {
-            try { File.WriteAllText(ConfigPath, JsonSerializer.Serialize(c, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8); }
+            try { File.WriteAllText(ConfigPath, JsonSerializer.Serialize(c, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false)); }
             catch (Exception ex) { ConfigSaveError = ex.Message; }
         }
 
