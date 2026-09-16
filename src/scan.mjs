@@ -16,7 +16,7 @@ import { WASM_DIR, LANGUAGES, languageForExt, resolveLanguages } from './languag
 import { preprocess } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
-export const VERSION = '0.1.0';
+export const VERSION = '1.0.0';
 
 const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** 起子进程时用它调回自己（__extract 内部命令） */

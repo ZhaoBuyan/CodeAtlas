@@ -114,6 +114,8 @@ npm run publish:lite   # 只出精简版
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - 反编译工具（`ilspycmd` / `sfextract` / `cfr.jar`）**不打进包**，用到时按提示装。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
+- **发版流程**：打 tag 推上去就行 —— `git tag v1.0.0 && git push --tags`。CI 会先跑测试，
+  然后打两个 exe 并挂到 GitHub Release 当下载资产（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
 
 ## 没有源码也能扫（ingest）
 

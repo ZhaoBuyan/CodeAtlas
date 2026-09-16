@@ -1,0 +1,72 @@
+name: CI
+
+# 推代码/PR：跑测试（24 门语言回归 + MCP 自检）
+# 打 tag（v*）：同上 + 打两个发行版 exe，并挂到 GitHub Release 当下载资产
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # 打 tag 时创建 Release 需要
+
+jobs:
+  test:
+    name: 测试（语言回归 24 门 + MCP 自检）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 装依赖
+        run: npm ci
+
+      - name: 语言 fixtures 回归（24 门，每门独立进程）
+        run: node tests/run-fixtures.mjs
+
+      - name: 先扫一份 bundle（MCP 自检要用）
+        run: node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua
+
+      - name: MCP 协议自检（工具表 / 各工具 / map / impact / 成员搜索）
+        run: node tests/mcp-selftest.mjs tests/.out/ci
+
+  release:
+    name: 打包发行（只在打 tag 时）
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: 装依赖
+        run: npm ci
+
+      - name: 打两个发行版（完全版 + 精简版）
+        run: npm run publish
+
+      - name: 核对产物
+        run: |
+          Get-ChildItem publish-sc, publish-lite | Select-Object Name, Length
+
+      - name: 发布到 GitHub Release（资产 = 两个 exe）
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            publish-sc/CodeAtlas.exe
+            publish-lite/CodeAtlas-lite.exe
+          generate_release_notes: true

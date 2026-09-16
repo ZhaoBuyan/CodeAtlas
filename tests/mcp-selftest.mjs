@@ -66,16 +66,16 @@ const groupName = bundle.facets?.systems?.[0]?.name || biggestFile.path.split('/
 const overview = await call('overview', {});
 check(/类型|types/.test(overview) && overview.length > 60, 'overview', overview.split('\n')[0].slice(0, 60));
 
-const search = await call('search', { query: hottest.name.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))) });
+const search = await call('search', { query: hottest.fqn.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))) });
 check(search.includes(hottest.name), 'search', `找到 ${hottest.name}`);
 
-const sym = await call('symbol', { name: hottest.name });
+const sym = await call('symbol', { name: String(hottest.id) });   // 用 id：多语言 bundle 里同名同全名的类型可能有好几个（C# 和 TS 的 Animal）
 check(sym.includes(hottest.name) && /文件|file/.test(sym), 'symbol', sym.split('\n')[0].slice(0, 70));
 
-const refs = await call('refs', { name: hottest.name, direction: 'in' });
+const refs = await call('refs', { name: hottest.fqn, direction: 'in' });
 check(refs.length > 10, 'refs', refs.split('\n')[0].slice(0, 70));
 
-const sub = await call('subgraph', { name: hottest.name, depth: 2 });
+const sub = await call('subgraph', { name: hottest.fqn, depth: 2 });
 check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));
 
 const fileOut = await call('file', { path: biggestFile.path.slice(0, Math.max(4, biggestFile.path.length - 4)) });
@@ -84,7 +84,7 @@ check(fileOut.includes('行') || fileOut.includes('line'), 'file', fileOut.split
 const miss = await call('symbol', { name: 'zzz-this-does-not-exist' });
 check(/没有|找不到|not found/i.test(miss), '找不到时给提示', miss.split('\n')[0].slice(0, 60));
 
-const byKind = await call('search', { query: hottest.name.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))), kind: hottest.kind });
+const byKind = await call('search', { query: hottest.fqn.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))), kind: hottest.kind });
 check(byKind.length > 0, 'search（带类别过滤）', byKind.split('\n')[0].slice(0, 60));
 
 // 成员名搜索：同样从 bundle 自己里挑（谁定义了某个成员）
@@ -103,7 +103,7 @@ if (owner) {
 const map600 = await call('map', { budget: 600 });
 check(map600.length > 80 && map600.length / 4 < 600 * 1.4, 'map（token 预算）', `约 ${Math.ceil(map600.length / 4)} token / 预算 600`);
 
-const impact = await call('impact', { name: hottest.name, depth: 2 });
+const impact = await call('impact', { name: String(hottest.id), depth: 2 });
 check(impact.includes('影响面') && /第 1 层|没有已知的引用者/.test(impact), 'impact（影响面）', impact.split('\n')[0].slice(0, 70));
 const impactMiss = await call('impact', { name: 'zzz-this-does-not-exist' });
 check(/找不到/.test(impactMiss), 'impact（找不到时给提示）', impactMiss.split('\n')[0].slice(0, 50));
