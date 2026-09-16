@@ -33,3 +33,6 @@ atlas.facets.json
 
 # 内部交接文件：只本地保存，不入库
 ROADMAP.md
+
+# 打包产物（别进仓库：一个 zip 就 77 MB）
+*.zip
