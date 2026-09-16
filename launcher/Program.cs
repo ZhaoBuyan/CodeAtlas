@@ -39,6 +39,20 @@ namespace CodeAtlas
             for (int i = 0; i < args.Length - 1; i++) if (args[i] == "--auto") autoPath = args[i + 1];
             var form = new Launcher();
             if (!string.IsNullOrWhiteSpace(autoPath)) form.Shown += (s, e) => form.AutoRun(autoPath);
+            // 兜底：漏网的异常别让程序"无声消失"，也别弹 WinForms 那个丑陋的报错框。
+            // 写一份 crash.log 在 exe 旁边（朋友反馈问题时把这个发过来就够了），然后尽量继续跑。
+            void FatalCrash(Exception ex)
+            {
+                try
+                {
+                    string p = Path.Combine(AppContext.BaseDirectory, "crash.log");
+                    File.AppendAllText(p, DateTime.Now.ToString("s") + "  " + ex + Environment.NewLine + Environment.NewLine);
+                    MessageBox.Show("出了个意外错误，已经记到：\n" + p, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                catch { }
+            }
+            Application.ThreadException += (s2, e2) => FatalCrash(e2.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (s2, e2) => FatalCrash(e2.ExceptionObject as Exception);
             Application.Run(form);
         }
     }
@@ -96,6 +110,8 @@ namespace CodeAtlas
         public string Color { get; set; } = "#8b949e";
         public List<string> Paths { get; set; }
         public List<string> Files { get; set; }
+        /// <summary>按命名空间草拟时用：namespaces 规则（写进 facets 文件的就是它）</summary>
+        public List<string> Namespaces { get; set; }
         [System.Text.Json.Serialization.JsonIgnore] public int FileCount { get; set; }
     }
 

@@ -462,8 +462,11 @@ namespace CodeAtlas
             for (int i = 0; i < _systems.Count; i++)
             {
                 var s = _systems[i];
-                string rule = (s.Paths != null && s.Paths.Count > 0) ? string.Join("  ", s.Paths) : (s.Files != null ? string.Join("  ", s.Files) : "");
-                _list.Items.Add($"{s.Name}    ·    {s.FileCount} 个文件    ·    {rule}");
+                string rule = (s.Paths != null && s.Paths.Count > 0) ? string.Join("  ", s.Paths)
+                    : (s.Namespaces != null && s.Namespaces.Count > 0) ? string.Join("  ", s.Namespaces)
+                    : (s.Files != null ? string.Join("  ", s.Files) : "");
+                string unit = (s.Namespaces != null && s.Namespaces.Count > 0) ? "个类型" : "个文件";
+                _list.Items.Add($"{s.Name}    ·    {s.FileCount} {unit}    ·    {rule}");
                 _list.SetItemChecked(i, firstTime || checkedIdx.Contains(i));
             }
             if (select >= 0 && select < _list.Items.Count) _list.SelectedIndex = select;
