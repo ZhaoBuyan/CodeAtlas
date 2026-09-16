@@ -1,0 +1,31 @@
+node_modules/
+dist/
+dist-*/
+ingest/
+out-launcher/
+*.log
+
+# 启动器构建产物（源码在 launcher/）
+CodeAtlas.exe
+CodeAtlas.pdb
+launcher.config.json
+launcher/bin/
+launcher/obj/
+
+# 本地调试产物
+.o-*/
+tests/.out/
+tests/.*.txt
+cli-test.*
+
+# 打包产物（体积大，不入库；用 npm run publish 重新生成）
+build/
+publish-sc/
+publish-lite/
+launcher/payload.zip
+launcher/payload-lite.zip
+launcher/payload*.zip.stamp
+
+# 各项目自己的分组规则（跟具体项目绑，不进仓库；要演示格式就看 example.facets.json）
+configs/*.facets.json
+!configs/example.facets.json

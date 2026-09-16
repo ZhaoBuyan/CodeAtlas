@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>CodeAtlas</AssemblyName>
+    <RootNamespace>CodeAtlas</RootNamespace>
+    <AssemblyTitle>Code Atlas 启动台</AssemblyTitle>
+    <Product>Code Atlas</Product>
+    <!-- 启动器版本：界面和日志里显示的就是这个值（程序运行时从程序集读，别再写第二份） -->
+    <Version>0.3.0</Version>
+    <!-- 高 DPI：不设这个的话进程会是非 DPI 感知的，系统会把整个窗口拉大 1.5 倍→字发虚 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!--
+      精简版换 exe 名（完全版保持 CodeAtlas.exe）：
+        完全版：-p:CodeAtlasEdition=full -p:CodeAtlasPayload=payload.zip
+        精简版：-p:CodeAtlasEdition=lite -p:CodeAtlasPayload=payload-lite.zip
+      引擎包由 tools/build-payload.mjs 生成；不传就构建成"开发模式"（引擎从 exe 旁边的 src/ 找）。
+    -->
+    <AssemblyName Condition="'$(CodeAtlasEdition)' == 'lite'">CodeAtlas-lite</AssemblyName>
+    <AssemblyTitle Condition="'$(CodeAtlasEdition)' == 'lite'">Code Atlas 启动台（精简版）</AssemblyTitle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 内嵌地图：WebView2（Edge 内核），和浏览器里是同一套页面、同一份观感 -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3351.48" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 版本标记（full / lite / 空），程序启动时读出来显示，免得界面和构建参数对不上 -->
+    <AssemblyMetadata Include="Edition" Value="$(CodeAtlasEdition)" />
+    <!-- 引擎包指纹（内容哈希，由 tools/build-payload.mjs 写成 <zip>.stamp）
+         释放目录名用它而不是“包大小”——内容改了但大小不变时会继续用旧解包目录（实际踩过） -->
+    <AssemblyMetadata Include="PayloadStamp" Value="$(CodeAtlasPayloadStamp)" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <CodeAtlasPayloadStamp Condition="'$(CodeAtlasPayload)' != '' and Exists('$(MSBuildProjectDirectory)/$(CodeAtlasPayload).stamp')">$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/$(CodeAtlasPayload).stamp').Trim())</CodeAtlasPayloadStamp>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(CodeAtlasPayload)' != ''">
+    <!-- 引擎包（zip）整个嵌进 exe；首次运行释放到 %LocalAppData%\CodeAtlas\engine\<版本-包指纹>\ -->
+    <EmbeddedResource Include="$(CodeAtlasPayload)" LogicalName="CodeAtlas.engine.zip" />
+  </ItemGroup>
+
+  <Target Name="CheckPayload" BeforeTargets="PrepareForBuild" Condition="'$(CodeAtlasPayload)' != ''">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)/$(CodeAtlasPayload)')"
+           Text="引擎包不存在：$(CodeAtlasPayload)。先跑：node tools/build-payload.mjs（精简版加 --no-node 生成 payload-lite.zip）" />
+    <Warning Condition="!Exists('$(MSBuildProjectDirectory)/$(CodeAtlasPayload).stamp')"
+             Text="引擎包没有对应的指纹文件（$(CodeAtlasPayload).stamp）：释放目录只能退回用“包大小”当指纹。重跑 node tools/build-payload.mjs 生成即可。" />
+  </Target>
+
+</Project>

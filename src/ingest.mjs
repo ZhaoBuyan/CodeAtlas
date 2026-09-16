@@ -1,0 +1,341 @@
+/**
+ * ingest：把"不是源码的东西"变成能扫的源码目录。
+ *
+ *   目录里有源码        -> 直接扫
+ *   .dll / .exe（.NET）  -> ILSpy 反编译成 .cs 再扫
+ *   .jar（Java）         -> 用 cfr / vineflower 反编译再扫（需要 java，指定 --decompiler）
+ *   单文件发行版 .exe    -> 识别出来并给出可行路径（解包暂未做）
+ *
+ * 设计原则：ingest 只负责"把产物变源码"，产出的目录就是普通源码目录，
+ * 后面全部走同一个 scan；反编译这件事本身不污染中间数据，只记进 source.ingest。
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { scanToDisk } from './scan.mjs';
+import { LANGUAGES, languageForExt } from './languages.mjs';
+
+const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+const SOURCE_EXTS = new Set(Object.values(LANGUAGES).flatMap((l) => l.exts));
+const SKIP_ASM = /^(System|Microsoft|netstandard|WindowsBase|mscorlib|PresentationFramework|PresentationCore|Accessibility|UIAutomation)/i;
+
+const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts });
+
+// ---------------------------------------------------------------------------
+// 工具探测
+// ---------------------------------------------------------------------------
+
+export function findIlspy() {
+  const cands = [
+    process.env.ILSPYCMD,
+    'ilspycmd',
+    path.join(os.homedir(), '.dotnet', 'tools', 'ilspycmd.exe'),
+    path.join(os.homedir(), '.dotnet', 'tools', 'ilspycmd'),
+  ].filter(Boolean);
+  for (const c of cands) {
+    if (c.includes(path.sep) && !fs.existsSync(c)) continue;
+    const r = run(c, ['--version']);
+    if (!r.error && r.status === 0) return { cmd: c, version: String(r.stdout || '').trim().split('\n')[0] };
+  }
+  return null;
+}
+
+function findJava() {
+  const r = run('java', ['-version']);
+  if (r.error || r.status !== 0) return null;
+  return String(r.stderr || r.stdout || '').split('\n')[0].trim();
+}
+
+/** 找 Java 反编译器（cfr / vineflower），可用 --decompiler 指定 */
+function findJarDecompiler(explicit) {
+  const cands = [
+    explicit,
+    process.env.CFR_JAR,
+    process.env.VINEFLOWER_JAR,
+    path.join(os.homedir(), '.code-atlas', 'cfr.jar'),
+    path.join(os.homedir(), '.code-atlas', 'vineflower.jar'),
+  ].filter(Boolean);
+  for (const c of cands) if (c.includes(path.sep) && fs.existsSync(c)) return c;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 目标识别
+// ---------------------------------------------------------------------------
+
+/** 目录里有没有可扫的源码 */
+function hasSource(dir, depth = 3) {
+  const stack = [[dir, 0]];
+  while (stack.length) {
+    const [d, level] = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (level < depth && !e.name.startsWith('.') && e.name !== 'node_modules') stack.push([path.join(d, e.name), level + 1]);
+      } else if (SOURCE_EXTS.has(path.extname(e.name).toLowerCase())) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 这是 .NET 托管程序集，还是原生宿主（单文件 bundle 的外壳）？
+ * 不能靠搜 "BSJB" 字符串：单文件 bundle 里嵌着程序集，字节里也有 BSJB，会误判。
+ * 正确做法是读 PE 可选头的数据目录表第 14 项（CLR 运行时头），为零就不是托管程序集。
+ */
+export function looksManaged(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const dos = Buffer.alloc(64);
+    fs.readSync(fd, dos, 0, 64, 0);
+    if (dos.readUInt16LE(0) !== 0x5a4d) return false; // 'MZ'
+    const peOff = dos.readUInt32LE(0x3c);
+    const pe = Buffer.alloc(24);
+    fs.readSync(fd, pe, 0, 24, peOff);
+    if (pe.readUInt32LE(0) !== 0x00004550) return false; // 'PE\0\0'
+    const optOff = peOff + 24;
+    const magicBuf = Buffer.alloc(2);
+    fs.readSync(fd, magicBuf, 0, 2, optOff);
+    const magic = magicBuf.readUInt16LE(0); // 0x10b=PE32, 0x20b=PE32+
+    const ddOff = optOff + (magic === 0x20b ? 112 : 96);
+    const clr = Buffer.alloc(8);
+    fs.readSync(fd, clr, 0, 8, ddOff + 14 * 8);
+    return clr.readUInt32LE(0) !== 0 && clr.readUInt32LE(4) !== 0;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
+ * 没指定 --facets 时，自动找 configs/<程序集名>.facets.json。
+ * 这样 `atlas ingest App.exe` 也能直接拿到系统分组，不用每次手写参数。
+ */
+function autoFacets(stem, explicit) {
+  if (explicit) return { facets: explicit, note: null };
+  const p = path.join(PROJECT_ROOT, 'configs', `${stem}.facets.json`);
+  if (fs.existsSync(p)) return { facets: p, note: `分组规则：configs/${stem}.facets.json（自动匹配）` };
+  return { facets: null, note: null };
+}
+
+/** 找单文件解包工具 sfextract（SingleFileExtractor） */
+function findSfextract() {
+  const cands = [
+    process.env.SFEXTRACT,
+    path.join(os.homedir(), '.dotnet', 'tools', 'sfextract.exe'),
+    path.join(os.homedir(), '.dotnet', 'tools', 'sfextract'),
+    'sfextract',
+  ].filter(Boolean);
+  for (const c of cands) {
+    if (c.includes(path.sep)) {
+      if (fs.existsSync(c)) return c;
+      continue;
+    }
+    const r = run(c, ['--help']);
+    if (!r.error) return c;
+  }
+  return null;
+}
+
+/**
+ * 单文件发行版（PublishSingleFile）：先用 sfextract 解包，再反编译应用自己的程序集。
+ * 这样"指一个发行版 exe 就能出图"就成立了。
+ */
+function decompileBundle(exe, workDir, notes) {
+  const sf = findSfextract();
+  if (!sf) {
+    throw new Error([
+      `${path.basename(exe)} 是 .NET 单文件发行版（原生宿主），程序集打在里面，要先用工具解包。`,
+      '装一个解包工具：dotnet tool install -g sfextract',
+      '或者：把同版本构建输出里的 .dll 直接丢进来（bin/Release/.../win-x64/App.dll）。',
+    ].join('\n'));
+  }
+  const bundleDir = path.join(workDir, '_bundle');
+  fs.mkdirSync(bundleDir, { recursive: true });
+  const r = run(sf, [exe, '-o', bundleDir]);
+  if (r.status !== 0) throw new Error(`解包失败：${String(r.stderr || r.stdout || '').trim().slice(0, 300)}`);
+  const dllCount = countFiles(bundleDir, '.dll');
+  notes.push(`解包单文件发行版：${path.basename(exe)} → ${dllCount} 个 dll（sfextract）`);
+
+  const base = path.basename(exe).replace(/\.exe$/i, '');
+  const preferred = path.join(bundleDir, `${base}.dll`);
+  let assemblies;
+  if (fs.existsSync(preferred)) {
+    assemblies = [preferred];
+  } else {
+    assemblies = fs.readdirSync(bundleDir)
+      .filter((n) => n.toLowerCase().endsWith('.dll') && !SKIP_ASM.test(n))
+      .slice(0, 5)
+      .map((n) => path.join(bundleDir, n));
+  }
+  if (!assemblies.length) throw new Error('解包后没找到应用自己的程序集（可能不是 .NET 应用？）');
+  return decompileAssemblies(assemblies, path.join(workDir, 'src'), notes);
+}
+
+function listExes(dir) {
+  try {
+    return fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.exe')).map((n) => path.join(dir, n));
+  } catch { return []; }
+}
+function pickAssemblies(dir, dllPattern, baseName) {
+  const all = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.dll'));
+  if (dllPattern) {
+    const re = new RegExp(`^${String(dllPattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i');
+    return all.filter((n) => re.test(n)).map((n) => path.join(dir, n));
+  }
+  const exact = all.find((n) => n.toLowerCase() === `${baseName.toLowerCase()}.dll`);
+  if (exact) return [path.join(dir, exact)];
+  const own = all.filter((n) => !SKIP_ASM.test(n));
+  return own.length && own.length <= 5 ? own.map((n) => path.join(dir, n)) : [];
+}
+
+// ---------------------------------------------------------------------------
+// 反编译
+// ---------------------------------------------------------------------------
+
+function decompileAssemblies(assemblies, workDir, notes) {
+  const ilspy = findIlspy();
+  if (!ilspy) {
+    throw new Error('找不到 ilspycmd。装一个：dotnet tool install -g ilspycmd --version 9.1.0.7988');
+  }
+  notes.push(`反编译工具：ilspycmd ${ilspy.version}`);
+  let csCount = 0;
+  for (const asm of assemblies) {
+    const stem = path.basename(asm).replace(/\.(dll|exe)$/i, '');
+    const out = path.join(workDir, stem);
+    fs.mkdirSync(out, { recursive: true });
+    const r = run(ilspy.cmd, [asm, '-o', out, '-p']);
+    if (r.status !== 0) {
+      notes.push(`反编译失败（跳过）：${path.basename(asm)} — ${String(r.stderr || r.stdout || '').trim().split('\n').slice(0, 2).join(' ')}`);
+      continue;
+    }
+    const n = countFiles(out, '.cs');
+    csCount += n;
+    notes.push(`反编译 ${path.basename(asm)} → ${n} 个 .cs（${path.relative(process.cwd(), out)}）`);
+  }
+  if (!csCount) throw new Error('反编译没有产出任何 .cs 文件');
+  return workDir;
+}
+
+function countFiles(dir, ext) {
+  let n = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) stack.push(path.join(d, e.name));
+      else if (path.extname(e.name).toLowerCase() === ext) n++;
+    }
+  }
+  return n;
+}
+
+function decompileJar(jar, workDir, notes, decompilerPath) {
+  const java = findJava();
+  if (!java) throw new Error('这个目标是 .jar，需要 Java 运行时（JRE/JDK）才能反编译。装个 JRE 再来。');
+  const dec = findJarDecompiler(decompilerPath);
+  if (!dec) {
+    throw new Error(`要反编译 .jar 需要 cfr 或 vineflower（下载 cfr.jar 后放到 ${path.join(os.homedir(), '.code-atlas', 'cfr.jar')}，或用 --decompiler <路径> 指定）`);
+  }
+  notes.push(`反编译工具：${path.basename(dec)} + ${java}`);
+  fs.mkdirSync(workDir, { recursive: true });
+  const r = run('java', ['-jar', dec, jar, workDir, '--silent', 'true']);
+  if (r.status !== 0) throw new Error(`反编译 .jar 失败：${String(r.stderr || r.stdout || '').slice(0, 400)}`);
+  notes.push(`反编译 ${path.basename(jar)} → ${countFiles(workDir, '.java')} 个 .java`);
+  return workDir;
+}
+
+// ---------------------------------------------------------------------------
+// 主入口
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} o
+ * @param {string} o.target        目标：目录 / .dll / .exe / .jar
+ * @param {string} o.outDir        输出目录（默认 dist）
+ * @param {string} o.work          反编译产物放哪（默认 ingest/<名字>）
+ * @param {string} o.lang          scan 的语言
+ * @param {string} o.dll           目录场景下限定要反编译的程序集（glob）
+ * @param {string} o.decompiler    .jar 场景下的反编译器路径
+ * @param {string} o.facets        分组规则文件
+ */
+export async function ingest(o) {
+  if (!o.target) throw new Error('用法：atlas ingest <目录|.dll|.exe|.jar>');
+  const target = path.resolve(o.target);
+  if (!fs.existsSync(target)) throw new Error(`目标不存在：${target}`);
+  const stat = fs.statSync(target);
+  const baseName = stat.isDirectory() ? path.basename(target) : path.basename(target).replace(/\.[^.]+$/, '');
+  const workDir = path.resolve(o.work || path.join('ingest', baseName));
+  const notes = [];
+
+  // 选中的是单个源码文件（比如直接点了 Loc.cs）：没有"单文件扫描"这个概念，就扫它所在目录，并明说
+  if (!stat.isDirectory()) {
+    const oneLang = languageForExt(path.extname(target).toLowerCase());
+    if (oneLang) {
+      const dir = path.dirname(target);
+      notes.push(`目标是单个源码文件（${oneLang.label}）：${path.basename(target)}`);
+      notes.push(`改为扫描它所在的目录：${dir}`);
+      const q = autoFacets(path.basename(dir), o.facets);
+      if (q.note) notes.push(q.note);
+      const res = await scanToDisk({ roots: [dir], outDir: o.outDir, lang: o.lang, facets: q.facets, maxKb: o.maxKb, ingest: { original: target, tool: null, sourceDir: dir, notes } });
+      return { bundle: res.bundle, out: res.out, original: target, tool: null, sourceDir: dir, notes };
+    }
+  }
+
+  if (stat.isDirectory() && hasSource(target)) {
+    notes.push('目录里已有可扫源码，跳过反编译');
+    const res = await scanToDisk({ roots: [target], outDir: o.outDir, lang: o.lang, facets: o.facets, maxKb: o.maxKb, ingest: { original: target, tool: null, sourceDir: target, notes } });
+    return { ...res, sourceDir: target, tool: null, notes, original: target };
+  }
+
+  let sourceDir;
+  let tool;
+  if (target.toLowerCase().endsWith('.jar')) {
+    tool = 'cfr/vineflower';
+    sourceDir = decompileJar(target, workDir, notes, o.decompiler);
+  } else {
+    let assemblies = null;
+    if (stat.isDirectory()) {
+      assemblies = pickAssemblies(target, o.dll, baseName);
+      if (assemblies.length) {
+        tool = 'ilspycmd';
+      } else {
+        // 目录里可能只有单文件发行版
+        const exes = listExes(target);
+        const exact = exes.find((e) => path.basename(e, '.exe').toLowerCase() === baseName.toLowerCase());
+        const pick = exact || exes[0];
+        if (pick && !looksManaged(pick)) {
+          tool = 'sfextract + ilspycmd';
+          sourceDir = decompileBundle(pick, workDir, notes);
+        }
+      }
+    } else if (looksManaged(target)) {
+      assemblies = [target];
+      tool = 'ilspycmd';
+    } else {
+      // 单个原生宿主 exe：单文件发行版
+      tool = 'sfextract + ilspycmd';
+      sourceDir = decompileBundle(target, workDir, notes);
+    }
+
+    if (!sourceDir && assemblies) sourceDir = decompileAssemblies(assemblies, workDir, notes);
+    if (!sourceDir) {
+      throw new Error([
+        `没有什么可以分析的：${target}`,
+        '目录里既没有源码，也没有可反编译的程序集。',
+        '办法：① 指向源码目录；② 指向 .dll；③ 指向 .exe（单文件发行版会自动解包，需 sfextract）；④ --dll "App*.dll" 指定。',
+      ].join('\n'));
+    }
+  }
+
+  const q = autoFacets(stat.isDirectory() ? baseName : path.basename(target).replace(/\.[^.]+$/, ''), o.facets);
+  if (q.note) notes.push(q.note);
+  const res = await scanToDisk({ roots: [sourceDir], outDir: o.outDir, lang: o.lang, facets: q.facets, maxKb: o.maxKb, ingest: { original: target, tool, sourceDir, notes } });
+  return { ...res, sourceDir, tool, notes, original: target };
+}

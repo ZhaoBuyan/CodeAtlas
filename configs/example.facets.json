@@ -1,0 +1,10 @@
+{
+  "_comment": "系统/模块分组规则示例。放项目根目录叫 atlas.facets.json，或放到本仓库 configs/<项目目录名>.facets.json，扫描时会自动匹配。规则按顺序匹配，第一条命中即生效；匹配对象 = 文件相对路径 / 文件名 / 命名空间 / 完整限定名（glob，** 表示任意层级）。exclude 是额外的忽略目录。",
+  "exclude": ["third_party", "reference"],
+  "systems": [
+    { "name": "界面层", "color": "#f778ba", "files": ["*Form.cs", "*Window.xaml.cs"] },
+    { "name": "业务模块", "color": "#58a6ff", "paths": ["Modules/**", "Services/**"] },
+    { "name": "平台相关", "color": "#d29922", "paths": ["Platform/**"], "namespaces": ["YourApp.Win32*"] },
+    { "name": "工具与基础设施", "color": "#bc8cff", "paths": ["Utils/**"], "namespaces": ["YourApp.Utils*"] }
+  ]
+}

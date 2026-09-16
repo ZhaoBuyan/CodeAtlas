@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Code Atlas</title>
+  <link rel="stylesheet" href="/web/style.css" />
+  <script src="/vendor/d3.js"></script>
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">Code&nbsp;Atlas<span class="ver" id="ver"></span></div>
+    <div id="meta" class="meta"></div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <div class="panel">
+        <label class="field">
+          <span>分组方式</span>
+          <select id="groupBy"></select>
+          <span id="groupHint" class="hintline"></span>
+        </label>
+        <label class="field" id="depthField">
+          <span>分组层级</span>
+          <select id="groupDepth">
+            <option value="1">1 层</option>
+            <option value="2">2 层</option>
+            <option value="3">3 层</option>
+            <option value="4">4 层</option>
+            <option value="0">全部（最细）</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>视图</span>
+          <select id="view">
+            <option value="treemap">树形图（面积）</option>
+            <option value="tree">树状列表</option>
+            <option value="graph">依赖图（力导向）</option>
+            <option value="matrix">依赖矩阵（模块间）</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>面积代表</span>
+          <select id="metric"></select>
+        </label>
+        <label class="field">
+          <span>着色</span>
+          <select id="colorMode">
+            <option value="file">按文件（色多）</option>
+            <option value="group">按分组</option>
+            <option value="kind">按类型类别</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>搜索</span>
+          <input id="q" type="search" placeholder="类型 / 成员 / 命名空间" />
+        </label>
+        <label class="field check">
+          <input id="depFocus" type="checkbox" />
+          <span>依赖聚焦（只看选中项及其关联）</span>
+        </label>
+        <label class="field check" id="hideGenField">
+          <input id="hideGen" type="checkbox" />
+          <span>隐藏编译器生成物 <b id="genCount"></b></span>
+        </label>
+        <label class="field">
+          <span>最小代码行 <b id="minCodeVal">0</b></span>
+          <input id="minCode" type="range" min="0" max="300" step="10" value="0" />
+        </label>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">类型类别</div>
+        <div id="kinds" class="kinds"></div>
+      </div>
+
+      <div class="panel" id="langPanel">
+        <div class="panel-title">语言</div>
+        <div id="langs" class="kinds"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title" id="legendTitle">分组</div>
+        <ul id="legend" class="legend"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title" id="topTitle">最大的类型</div>
+        <ol id="topList" class="toplist"></ol>
+      </div>
+    </aside>
+
+    <section id="stage">
+      <div id="crumbs" class="crumbs"></div>
+      <div id="chart"></div>
+    </section>
+
+    <aside id="inspector"></aside>
+  </main>
+
+  <footer id="statusbar"></footer>
+  <div id="tooltip" class="tooltip hidden"></div>
+  <script type="module" src="/web/app.js"></script>
+</body>
+</html>

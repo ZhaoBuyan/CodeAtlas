@@ -1,0 +1,7 @@
+// 样例寄存器映射
+addrmap my_map {
+  reg {
+    // 状态寄存器
+    field { sw = rw; hw = r; } data[7:0];
+  } status @ 0x0;
+};

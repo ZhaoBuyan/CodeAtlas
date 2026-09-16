@@ -1,0 +1,33 @@
+{
+  "name": "code-atlas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Code Atlas —— 把任意代码库扫成一份可读的中间数据（bundle），供人探索、供 AI 查询",
+  "license": "MIT",
+  "bin": {
+    "atlas": "src/cli.mjs"
+  },
+  "scripts": {
+    "scan": "node src/cli.mjs scan",
+    "serve": "node src/cli.mjs serve",
+    "test": "node tests/run-fixtures.mjs && node tests/mcp-selftest.mjs",
+    "probe": "node tests/probe-nodes.mjs",
+    "probe:mem": "node tests/probe-grammars.mjs",
+    "mcp": "node src/cli.mjs mcp",
+    "launcher": "dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -o .",
+    "payload": "node tools/build-payload.mjs",
+    "payload:lite": "node tools/build-payload.mjs --no-node",
+    "publish:sc": "node tools/build-payload.mjs && dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:CodeAtlasEdition=full -p:CodeAtlasPayload=payload.zip -o publish-sc",
+    "publish:lite": "node tools/build-payload.mjs --no-node && dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:CodeAtlasEdition=lite -p:CodeAtlasPayload=payload-lite.zip -o publish-lite",
+    "publish": "npm run publish:sc && npm run publish:lite"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "d3": "^7.9.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "0.20.8"
+  }
+}
