@@ -6,6 +6,13 @@
 
 首个正式版本。
 
+**相对上一版（还没发出去的那份）的变化**
+- 版本号统一成 **1.0.0** —— 之前 exe 里写 0.3.0、地图顶栏写 v0.1.0，现在两处对得上
+- **配置文件不再写 BOM** —— 用脚本或别的工具读 `launcher.config.json`，不会再报 JSON 解析错误
+- 文档补齐：新增本文件；README 加了「和同名项目的区别」「灵感来源」；去掉指向内部文件的引用
+
+（功能与上一版完全一致。）
+
 **扫什么**
 - 24 门代码语言：C# / TypeScript / TSX / JavaScript / Java / Python / Kotlin / Lua / Go / Rust / C / C++ /
   PHP / Swift / Scala / Shell / Zig / Solidity / OCaml / ReScript / TLA+ / SystemRDL / Emacs Lisp / Elixir
