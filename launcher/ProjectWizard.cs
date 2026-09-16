@@ -356,7 +356,7 @@ namespace CodeAtlas
                 _systems[i].Color = Colors[(cur + 1 + Colors.Length) % Colors.Length];
                 RefreshList(i);
             };
-            p.Controls.AddRange(new Control[] { label, _list, _draftInfo, _intoProject, _redraft, _rename, _recolor });
+            p.Controls.AddRange(new Control[] { label, _list, _draftInfo, _intoProject, _redraft, _rename, _recolor, _byNs });
             p.Resize += (s, e) => LayoutStep3(p, label);
             _body.Controls.Add(p);
             _p3 = p;
