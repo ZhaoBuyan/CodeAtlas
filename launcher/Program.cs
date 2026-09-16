@@ -288,10 +288,13 @@ namespace CodeAtlas
             return new Config();
         }
 
+        /// <summary>上次保存配置失败的原因（读不了/写不进去都要能说出来——静默失败会让人以为"设置自己没了"）</summary>
+        public static string ConfigSaveError { get; set; }
+
         public static void SaveConfig(Config c)
         {
             try { File.WriteAllText(ConfigPath, JsonSerializer.Serialize(c, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8); }
-            catch { }
+            catch (Exception ex) { ConfigSaveError = ex.Message; }
         }
 
         /// <summary>开发模式：exe 所在目录（或上级）里就有 src/cli.mjs（源码就在手边）</summary>
@@ -610,7 +613,12 @@ namespace CodeAtlas
             _inc.Checked = _cfg.Incremental;
             _inc.ForeColor = Fg;
             _inc.AutoSize = true;
-            _inc.Click += (s, e) => { _cfg.Incremental = _inc.Checked; Engine.SaveConfig(_cfg); Log(_inc.Checked ? "增量扫描：开（只重解析改过的文件）" : "增量扫描：关（每次全量）"); };
+            _inc.Click += (s, e) => { _cfg.Incremental = _inc.Checked; Engine.SaveConfig(_cfg);
+            if (Engine.ConfigSaveError != null)
+            {
+                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Engine.ConfigSaveError = null;
+            } Log(_inc.Checked ? "增量扫描：开（只重解析改过的文件）" : "增量扫描：关（每次全量）"); };
             tips.SetToolTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。");
 
             _run.Text = "开跑";
@@ -707,7 +715,12 @@ namespace CodeAtlas
             FormClosing += (s, e) =>
             {
                 Stop();
-                try { _cfg.WindowWidth = (int)(ClientSize.Width / K); _cfg.WindowHeight = (int)(ClientSize.Height / K); Engine.SaveConfig(_cfg); } catch { }
+                try { _cfg.WindowWidth = (int)(ClientSize.Width / K); _cfg.WindowHeight = (int)(ClientSize.Height / K); Engine.SaveConfig(_cfg);
+            if (Engine.ConfigSaveError != null)
+            {
+                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Engine.ConfigSaveError = null;
+            } } catch { }
             };
         }
 
@@ -929,6 +942,11 @@ namespace CodeAtlas
             rec.Langs = wiz.Langs;
             rec.Facets = wiz.FacetsPath;
             Engine.SaveConfig(_cfg);
+            if (Engine.ConfigSaveError != null)
+            {
+                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Engine.ConfigSaveError = null;
+            }
             _langs.Text = LangsButtonText();
             ApplyLayout();
             Log("项目设置已保存：语言 " + LangsSummary());
@@ -950,6 +968,11 @@ namespace CodeAtlas
             if (d.ShowDialog(this) != DialogResult.OK) return;
             _cfg.Langs = d.Result;
             Engine.SaveConfig(_cfg);
+            if (Engine.ConfigSaveError != null)
+            {
+                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Engine.ConfigSaveError = null;
+            }
             _langs.Text = LangsButtonText();
             ApplyLayout(); // 文字变了按钮宽度也变，重排一下免得压到旁边的按钮
             Log("语言：" + LangsSummary());
@@ -999,6 +1022,11 @@ namespace CodeAtlas
 
             _cfg.LastPath = target;
             Engine.SaveConfig(_cfg);
+            if (Engine.ConfigSaveError != null)
+            {
+                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Engine.ConfigSaveError = null;
+            }
             _url = null;
             SetBtn(_browser, false);
             SetBtn(_toggle, false);
@@ -1013,6 +1041,11 @@ namespace CodeAtlas
             if (!_cfg.Projects.TryGetValue(target, out var projRec)) { projRec = new ProjectRecord(); _cfg.Projects[target] = projRec; }
             projRec.LastRun = DateTime.Now.ToString("s");
             Engine.SaveConfig(_cfg);
+            if (Engine.ConfigSaveError != null)
+            {
+                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Engine.ConfigSaveError = null;
+            }
 
             try
             {

@@ -506,6 +506,24 @@ namespace CodeAtlas
                 : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodeAtlas", "configs", name + ".facets.json");
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
             var cfg = new DraftConfig { _comment = _comment, Exclude = _exclude.Count > 0 ? _exclude : null, Systems = keep };
+            if (_intoProject.Checked)
+            {
+                // 先探一下写不写得进去（只读目录 / 网络盘 / 需要管理员），别等抛异常再解释
+                string probeDir = Directory.Exists(Target) ? Target : (Path.GetDirectoryName(Target) ?? Target);
+                try
+                {
+                    string probe = Path.Combine(probeDir, ".codeatlas-write-test");
+                    File.WriteAllText(probe, "x");
+                    File.Delete(probe);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "这个目录写不进去：\n" + probeDir + "\n\n" + ex.Message +
+                        "\n\n建议取消勾选「写进项目目录」——规则会存到你自己的用户目录里，效果一样。",
+                        "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return "";
+                }
+            }
             File.WriteAllText(path, JsonSerializer.Serialize(cfg, FacetJson.Options), new UTF8Encoding(false));
             return path;
         }
