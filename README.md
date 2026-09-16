@@ -134,7 +134,7 @@ node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
 
 ## 给 AI 用：MCP 查询层
 
-> **接入步骤（哪个按钮、各客户端粘在哪、8 个工具分别什么时候用、排错）单独写了一份：[docs/ai-mcp.md](docs/ai-mcp.md)。**
+> **接入步骤（哪个按钮、各客户端粘在哪、8 个工具分别什么时候用、排错）见 [使用说明.md](使用说明.md) 第五节。**
 > 懒人版：启动器里扫一次 → 点工具栏「MCP 配置」→ 粘进 AI 客户端即可。
 
 扫完之后，AI 不需要把源码/bundle 塞进上下文，而是**按需问一小块**：
