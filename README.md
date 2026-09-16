@@ -134,6 +134,9 @@ node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
 
 ## 给 AI 用：MCP 查询层
 
+> **接入步骤（哪个按钮、各客户端粘在哪、8 个工具分别什么时候用、排错）单独写了一份：[docs/ai-mcp.md](docs/ai-mcp.md)。**
+> 懒人版：启动器里扫一次 → 点工具栏「MCP 配置」→ 粘进 AI 客户端即可。
+
 扫完之后，AI 不需要把源码/bundle 塞进上下文，而是**按需问一小块**：
 
 ```bash
@@ -293,6 +296,7 @@ MIT（见 [LICENSE](LICENSE)）。
 | TLA+ | `.tla` | ✅ fixtures（module + operator / variable） |
 | SystemRDL | `.rdl` | ✅ fixtures（addrmap / reg / field；内联匿名组件显示为 `(anonymous)`） |
 | Emacs Lisp | `.el` | ✅ fixtures（无类型概念 → 顶层函数/变量挂在合成的 module 节点上） |
+| Elixir | `.ex` `.exs` | ✅ fixtures（module / function / struct；注：`defmodule`/`def` 在语法树里是 call 节点，靠专属钩子识别；`alias` 会计入导入，但暂不连成依赖边） |
 
 **目前用不了的**（我们的运行时锁在 tree-sitter 0.20.8，它们的语法包要求更新的 ABI）：`Dart`、`Ruby`、`Elm`、`QL`。
 `Vue` 单文件组件、`Objective-C`（`.m` 与 MATLAB 扩名冲突）、`Elixir`（语法全部用 call 表达，通用提取器不好区分）暂未支持，原因已记录。

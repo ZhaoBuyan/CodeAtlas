@@ -531,7 +531,77 @@ const DRAFT_EXCLUDE_HINTS = new Set(['vendor', 'third_party', 'thirdparty', 'thi
  * @param {{roots: string|string[], lang?: string, maxKb?: number}} opts
  * @returns {{config: object, notes: string[], preview: {name: string, files: number}[], files: number}}
  */
+/**
+ * 按命名空间草拟系统规则。
+ * 适合"所有文件堆在一个目录"的项目——那种情况下按目录草拟等于没分，而命名空间是代码作者自己划的模块边界。
+ * 需要先扫过一遍（要用 bundle 里的类型全名）。
+ */
+export function draftFacetsByNamespace(opts) {
+  const bundlePath = path.join(path.resolve(opts.bundle || opts.outDir || 'dist'), 'bundle.json');
+  const b = JSON.parse(fs.readFileSync(bundlePath, 'utf8'));
+  const types = b.types || [];
+  const rows = [];
+  for (const t of types) {
+    const fqn = String(t.fqn || t.name || '');
+    const segs = fqn.split('.');
+    if (segs.length < 2) continue;                 // 没有命名空间（C/JS/Go 这类）
+    rows.push({ t, ns: segs.slice(0, -1).join('.'), segs });
+  }
+  if (!rows.length || rows.length < types.length * 0.5) {
+    return {
+      config: null, files: b.totals?.files || 0, preview: [],
+      notes: ['这个项目的类型大多没有命名空间（C / JS / Go 这类语言没有），按命名空间草拟用不上——用默认的"按目录"吧。'],
+    };
+  }
+  // 公共根（MuSync.Players / MuSync.Utils → MuSync），按出现最多的第一段算
+  const rootCount = new Map();
+  for (const r of rows) rootCount.set(r.segs[0], (rootCount.get(r.segs[0]) || 0) + 1);
+  const root = [...rootCount.entries()].sort((x, y) => y[1] - x[1])[0][0];
+  // 按"根之后的下一段"分组
+  const groups = new Map();
+  for (const r of rows) {
+    const nsSegs = r.segs.slice(0, -1);
+    const key = nsSegs.length > 1 ? nsSegs[1] : '';   // 空 = 直接住在根命名空间下
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const topLevel = groups.get('') || [];
+  groups.delete('');
+  const big = [...groups.entries()].filter(([, v]) => v.length >= 3).sort((x, y) => y[1].length - x[1].length).slice(0, 8);
+  const small = [...groups.entries()].filter(([, v]) => v.length < 3);
+  const systems = [];
+  big.forEach(([key, v], i) => {
+    systems.push({ name: key, color: DRAFT_COLORS[i % DRAFT_COLORS.length], namespaces: [`${root}.${key}*`], _files: v.length });
+  });
+  const rest = [...small.flatMap(([, v]) => v), ...topLevel];
+  if (rest.length) {
+    systems.push({ name: topLevel.length && !small.length ? '顶层' : '其他', color: DRAFT_GREY, namespaces: [...new Set(rest.map((r) => r.ns))], _files: rest.length });
+  }
+  // 顺手建议排除"一看就是第三方的"目录（用 bundle 里的文件路径看；否则别人的命名空间根会全跑到"未分类"）
+  const hintDirs = new Set();
+  for (const f of b.files || []) {
+    for (const seg of String(f.path || '').split('/')) {
+      if ([...DRAFT_EXCLUDE_HINTS].some((h) => seg.toLowerCase().startsWith(h))) hintDirs.add(seg);
+    }
+  }
+  const notes = [`按命名空间草拟（公共根：${root}${systems.length ? '' : '——但这个项目分不出系统'}）`];
+  if (hintDirs.size) notes.push(`已建议排除：${[...hintDirs].join('、')}（一看就是第三方/参考代码的目录名）`);
+  if (systems.length < 3) notes.push('分出来的系统少于 3 个，可能这个项目的命名空间层级太平（都挤在同一个命名空间里）');
+  return {
+    config: {
+      _comment: '系统分组规则：按命名空间草拟（可随意改）。规则按顺序匹配、第一条命中生效。',
+      exclude: hintDirs.size ? [...hintDirs] : null,
+      systems: systems.map(({ name, color, namespaces }) => ({ name, color, namespaces })),
+    },
+    files: b.totals?.files || 0,
+    by: 'namespace',
+    preview: systems.map((s) => ({ name: s.name, files: s._files, unit: '个类型' })),
+    notes,
+  };
+}
+
 export function draftFacets(opts) {
+  if (opts.by === 'namespace') return draftFacetsByNamespace(opts);
   const roots = Array.isArray(opts.roots) ? opts.roots : [opts.roots];
   const languages = resolveLanguages(opts.lang || 'auto');
   const { files } = collectFiles(roots, { languages, maxKb: Number(opts.maxKb || 1024), excludes: [] });
