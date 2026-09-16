@@ -60,7 +60,7 @@ namespace CodeAtlas
         private static readonly string[] Colors = { "#58a6ff", "#f778ba", "#3fb950", "#d29922", "#bc8cff", "#39c5cf", "#f0883e", "#8b949e" };
 
         private readonly LangInfo[] _langs;
-        private readonly Func<string, string, DraftResult> _draft;
+        private readonly Func<string, string, bool, DraftResult> _draft;
 
         /// <summary>向导结果（ShowDialog 之后读）</summary>
         public string Target { get; private set; } = "";
@@ -90,16 +90,22 @@ namespace CodeAtlas
         private readonly Button _redraft = new Button();
         private readonly Button _rename = new Button();
         private readonly Button _recolor = new Button();
+        private readonly Button _byNs = new Button();
+        /// <summary>有没有可用的 bundle（没扫过就用不了命名空间草拟）</summary>
+        private readonly bool _hasBundle;
+        /// <summary>当前草案是按哪种视角来的（「重新草拟」沿用同一个视角）</summary>
+        private bool _draftByNs;
         // 底部
         private readonly Button _prev = new Button();
         private readonly Button _next = new Button();
         private readonly Button _cancel = new Button();
 
         public ProjectWizard(LangInfo[] langs, string target, string langsSpec, string facetsPath,
-            Func<string, string, DraftResult> draft)
+            Func<string, string, bool, DraftResult> draft, bool hasBundle)
         {
             _langs = langs ?? Array.Empty<LangInfo>();
             _draft = draft;
+            _hasBundle = hasBundle;
             Target = target ?? "";
             Langs = langsSpec ?? "";
             FacetsPath = facetsPath ?? "";
@@ -171,6 +177,7 @@ namespace CodeAtlas
             int bx = _draftInfo.Right;
             _recolor.Location = new Point(bx - _recolor.PreferredSize.Width, (int)(20 * k));
             _rename.Location = new Point(_recolor.Left - _rename.PreferredSize.Width - (int)(8 * k), (int)(20 * k));
+            _byNs.Location = new Point(_redraft.Left - _byNs.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
             _redraft.Location = new Point(_rename.Left - _redraft.PreferredSize.Width - (int)(8 * k), (int)(20 * k));
             // 第一/二步
             _path.SetBounds(pad, (int)(70 * k), w - (int)(200 * k), (int)(30 * k));
@@ -317,8 +324,21 @@ namespace CodeAtlas
             _redraft.Text = "重新草拟";
             _rename.Text = "改名";
             _recolor.Text = "换色";
-            foreach (var b in new[] { _redraft, _rename, _recolor }) Launcher.Style(b);
-            _redraft.Click += (s, e) => { _draftedFor = null; DraftNow(); };
+            foreach (var b in new[] { _redraft, _rename, _recolor, _byNs }) Launcher.Style(b);
+            _byNs.Text = "用命名空间重新草拟";
+            _byNs.ForeColor = _hasBundle ? Palette.Fg : Palette.DimInactive;
+            _byNs.Cursor = _hasBundle ? Cursors.Hand : Cursors.Default;
+            _byNs.Click += (s, e) =>
+            {
+                if (!_hasBundle)
+                {
+                    _draftInfo.Text = "这个项目还没扫过 —— 先点一次「保存并开跑」，再回来用命名空间重新草拟。";
+                    return;
+                }
+                _draftedFor = null;
+                DraftNow(true);
+            };
+            _redraft.Click += (s, e) => { _draftedFor = null; DraftNow(_draftByNs); };
             _rename.Click += (s, e) =>
             {
                 int i = _list.SelectedIndex;
@@ -354,6 +374,7 @@ namespace CodeAtlas
             _intoProject.Location = new Point(pad, _draftInfo.Bottom + (int)(6 * k));
             _recolor.Location = new Point(p.ClientSize.Width - pad - _recolor.PreferredSize.Width, (int)(16 * k));
             _rename.Location = new Point(_recolor.Left - _rename.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
+            _byNs.Location = new Point(_redraft.Left - _byNs.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
             _redraft.Location = new Point(_rename.Left - _redraft.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
         }
 
@@ -395,16 +416,24 @@ namespace CodeAtlas
         }
 
         /// <summary>草拟（target 或语言变了才重算；失败就把原因写在界面上，不假装成功）</summary>
-        private void DraftNow()
+        private void DraftNow(bool byNs = false)
         {
             string t = _path.Text.Trim().Trim('"');
             if (t.Length == 0) { _draftInfo.Text = "先在上一步选个目标。"; _list.Items.Clear(); _systems = new List<DraftSystem>(); return; }
             if (!Directory.Exists(t) && !File.Exists(t)) { _draftInfo.Text = "这个路径不存在：" + t; _list.Items.Clear(); _systems = new List<DraftSystem>(); return; }
-            string key = t + "|" + Langs;
+            string key = t + "|" + Langs + (byNs ? "|ns" : "");
             if (_draftedFor == key && _list.Items.Count > 0) return;
             try
             {
-                var res = _draft(t, Langs);
+                var res = _draft(t, Langs, byNs);
+                if (res.Config == null)
+                {
+                    // 这个项目用不上（没有命名空间）——把原因说清楚，但别把现有草案毁掉
+                    _draftInfo.Text = res.Notes != null && res.Notes.Count > 0 ? string.Join("　·　", res.Notes) : "按命名空间草拟用不上。";
+                    _draftedFor = null;
+                    return;
+                }
+                _draftByNs = byNs;
                 _comment = res.Config._comment ?? "";
                 _exclude = res.Config.Exclude ?? new List<string>();
                 _systems = res.Config.Systems ?? new List<DraftSystem>();

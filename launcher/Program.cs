@@ -404,7 +404,7 @@ namespace CodeAtlas
         }
 
         /// <summary>草拟分组规则：调引擎的 draft-facets --json（只看目录结构，秒回）</summary>
-        public static DraftResult DraftFacets(Config cfg, string target, string langs)
+        public static DraftResult DraftFacets(Config cfg, string target, string langs, bool byNamespace = false, string bundleDir = null)
         {
             string root = Resolve(null);
             if (root == null) throw new InvalidOperationException("找不到引擎，没法草拟分组规则。");
@@ -413,6 +413,11 @@ namespace CodeAtlas
             var args = new StringBuilder();
             args.Append('"').Append(script).Append('"');
             args.Append(" draft-facets \"").Append(target).Append("\" --json");
+            if (byNamespace)
+            {
+                args.Append(" --by namespace");
+                if (!string.IsNullOrWhiteSpace(bundleDir)) args.Append(" --bundle \"").Append(bundleDir).Append('"');
+            }
             if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
             var psi = new ProcessStartInfo(node, args.ToString())
             {
@@ -895,8 +900,10 @@ namespace CodeAtlas
                 MessageBox.Show(this, "读不到语言表：" + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            string outAbs = Path.IsPathRooted(_cfg.Out) ? _cfg.Out : Path.Combine(Engine.WorkDir(), _cfg.Out);
+            bool hasBundle = File.Exists(Path.Combine(outAbs, "bundle.json"));
             using var wiz = new ProjectWizard(langs, target, TargetLangs(target), TargetFacets(target),
-                (t, lg) => Engine.DraftFacets(_cfg, t, lg));
+                (t, lg, byNs) => Engine.DraftFacets(_cfg, t, lg, byNs, outAbs), hasBundle);
             if (wiz.ShowDialog(this) != DialogResult.OK) return;
 
             _path.Text = wiz.Target;
