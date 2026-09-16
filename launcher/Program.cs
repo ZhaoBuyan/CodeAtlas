@@ -255,6 +255,10 @@ namespace CodeAtlas
     {
         public static string ConfigPath => Path.Combine(AppContext.BaseDirectory, "launcher.config.json");
 
+        /// <summary>配置读失败时的原因（给界面提示用）。
+        /// 读不了一定要说出来：静默回落默认值会让用户觉得"我的设置自己没了"。</summary>
+        public static string ConfigError { get; private set; }
+
         public static Config LoadConfig()
         {
             try
@@ -262,7 +266,7 @@ namespace CodeAtlas
                 if (File.Exists(ConfigPath))
                     return JsonSerializer.Deserialize<Config>(File.ReadAllText(ConfigPath)) ?? new Config();
             }
-            catch { /* 配置坏了就用默认值 */ }
+            catch (Exception ex) { ConfigError = ex.Message; }
             return new Config();
         }
 
@@ -285,6 +289,32 @@ namespace CodeAtlas
 
         /// <summary>用哪份引擎：优先 exe 旁边的源码（开发），否则用内嵌的（首次会释放）</summary>
         public static string Resolve(Action<string> log) => FindDevRoot() ?? Payload.Ensure(log);
+
+        /// <summary>引擎进程的工作目录：开发模式是仓库（行为不变）；发行版是 exe 旁边，
+        /// 这样 dist/ 和 ingest/ 落在 exe 旁边（引擎目录只当缓存，不往里写用户数据）</summary>
+        public static string WorkDir() => FindDevRoot() ?? AppContext.BaseDirectory;
+
+        /// <summary>MCP 客户端配置（JSON 文本，路径均为绝对路径）——“一键复制 MCP 配置”用</summary>
+        public static string McpConfigJson(Config cfg, string outAbs)
+        {
+            string root = Resolve(null);
+            if (root == null) throw new InvalidOperationException("找不到引擎，拿不到 MCP 配置。");
+            string script = Path.Combine(root, "src", "cli.mjs");
+            var psi = new ProcessStartInfo(PickNode(cfg, root), $"\"{script}\" mcp --out \"{outAbs}\" --config-json")
+            {
+                WorkingDirectory = WorkDir(),
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+            };
+            using var p = Process.Start(psi);
+            string outp = p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch { } throw new InvalidOperationException("引擎 30 秒没响应"); }
+            if (outp.Trim().Length == 0) throw new InvalidOperationException("引擎没吐出配置（node 跑不起来？）");
+            return outp.Trim();
+        }
 
         /// <summary>带 node 的解析：返回（引擎目录, node 路径）；都找不到就返回 (null, null)</summary>
         public static (string root, string node) ResolveAll(Config cfg, Action<string> log)
@@ -436,7 +466,7 @@ namespace CodeAtlas
             {
                 // 工作目录：开发模式还是仓库（行为不变）；完全/精简版用 exe 所在目录，
                 // 这样 dist/ 和 ingest/ 落在 exe 旁边（引擎目录是缓存，不该往里写用户数据）
-                WorkingDirectory = dev ?? AppContext.BaseDirectory,
+                WorkingDirectory = WorkDir(),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -473,6 +503,7 @@ namespace CodeAtlas
         private readonly Button _pickFile = new Button();
         private readonly Button _langs = new Button();
         private readonly Button _wiz = new Button();
+        private readonly Button _mcp = new Button();
         private readonly Label _status = new Label();
         private readonly Label _hint = new Label();
         private readonly Label _targetLabel = new Label();
@@ -580,7 +611,14 @@ namespace CodeAtlas
             _wiz.Click += (s, e) => { if (IsOn(_wiz)) OpenWizard(_path.Text.Trim().Trim('"')); };
             tips.SetToolTip(_wiz, "首次配置一个项目：选目标 → 选语言 → 自动草拟一套\"系统分组规则\"（可改名/换色/取消） → 存下来并开跑");
 
-            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _hint, _run, _stop, _toggle, _browser, _langs, _wiz });
+            // 一键复制 MCP 配置（让 AI 客户端读这个项目）
+            _mcp.Text = "MCP 配置";
+            Style(_mcp);
+            SetBtn(_mcp, true);
+            _mcp.Click += (s, e) => { if (IsOn(_mcp)) CopyMcpConfig(); };
+            tips.SetToolTip(_mcp, "把「让 AI 读这个项目」的 MCP 配置复制到剪贴板。\r\n粘进 Chatbox / Claude Desktop 等客户端的 mcpServers 里即可；指向当前扫描的输出目录。");
+
+            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _hint, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
             _targetLabel = targetLabel;
             _bar.Resize += (s, e) => ApplyLayout();
 
@@ -616,6 +654,8 @@ namespace CodeAtlas
 
             if (!string.IsNullOrWhiteSpace(_cfg.LastPath)) _path.Text = _cfg.LastPath;
             Log("启动器 " + AppVer + "（" + Engine.EditionName + " · 内嵌地图）");
+            if (!string.IsNullOrWhiteSpace(Engine.ConfigError))
+                Log("⚠ launcher.config.json 读不了，已用默认值（设置看着像「被重置」就是这个原因）：" + Engine.ConfigError);
             Log("引擎：" + Engine.DescribeEngine());
             Log($"node：{_cfg.NodePath}（值为 node 时优先用内置的，没有内置就按 PATH 找）   输出目录：{_cfg.Out}   端口：{_cfg.Port}");
             Log("语言：" + LangsSummary());
@@ -667,7 +707,7 @@ namespace CodeAtlas
             _autoSwitch.Location = new Point(pad, rowB + (btnH - _autoSwitch.PreferredSize.Height) / 2);
 
             int x = w - pad;
-            foreach (var b in new[] { _browser, _toggle, _stop, _langs, _wiz, _run })
+            foreach (var b in new[] { _mcp, _browser, _toggle, _stop, _langs, _wiz, _run })
             {
                 b.Location = new Point(x - b.PreferredSize.Width, rowB);
                 x = b.Left - gap;
@@ -812,6 +852,23 @@ namespace CodeAtlas
         {
             if (!string.IsNullOrWhiteSpace(target) && _cfg.Projects.TryGetValue(target, out var r)) return r.Facets;
             return null;
+        }
+
+        /// <summary>一键复制 MCP 配置：让 AI 客户端读这个项目（用当前输出目录的绝对路径）</summary>
+        private void CopyMcpConfig()
+        {
+            try
+            {
+                string outAbs = Path.IsPathRooted(_cfg.Out) ? _cfg.Out : Path.Combine(Engine.WorkDir(), _cfg.Out);
+                string json = Engine.McpConfigJson(_cfg, outAbs);
+                Clipboard.SetText(json);
+                Log("✓ 已复制 MCP 配置到剪贴板 —— 粘进 MCP 客户端的 mcpServers 里就能让 AI 读这个项目");
+                Log("  指向的输出目录：" + outAbs + "（先扫一次，AI 才读得到）");
+            }
+            catch (Exception ex)
+            {
+                Log("✗ 复制 MCP 配置失败：" + ex.Message);
+            }
         }
 
         /// <summary>项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（可一并开跑）</summary>

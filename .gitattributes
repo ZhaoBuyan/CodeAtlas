@@ -1,0 +1,12 @@
+# 统一按 LF 存/取：避免 Windows 上 core.autocrlf=true 造成的
+# 「LF will be replaced by CRLF」警告，以及工作区行尾来回漂移（会让 diff 无故变大）。
+* text=auto eol=lf
+
+# 二进制文件别当文本处理
+*.wasm binary
+*.png binary
+*.jpg binary
+*.exe binary
+*.dll binary
+*.zip binary
+*.ico binary

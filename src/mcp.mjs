@@ -9,6 +9,8 @@
  *   symbol(id 或名字)        一个类型的全部细节（说明 / 成员 / 基类 / 依赖数）
  *   refs(名字, in|out|both)  谁引用它 / 它引用谁
  *   subgraph(名字, 深度)     依赖子图（改动的波及面）
+ *   map(token 预算)          按预算导出的骨架地图（系统 → 关键类型 → 关键成员）
+ *   impact(名字, 层数)        影响面分析（谁引用我，多跳）
  *   file(路径片段)           一个文件的类型、导入、行数
  *
  * 输出是紧凑文本而非 JSON —— 省 token，也更直接。
@@ -98,6 +100,28 @@ const TOOLS = [
       },
       required: ['name'],
       additionalProperties: false,
+    },
+  },
+  {
+    name: 'map',
+    description: '按 token 预算导出一份"骨架地图"：系统 → 关键类型 → 关键成员，重要的排前面。用处：让 AI 在有限上下文里先拿到全局，而不是一问一答地探索。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        budget: { type: 'number', description: 'token 预算（估算值），默认 4000' },
+      },
+    },
+  },
+  {
+    name: 'impact',
+    description: '影响面分析：改这个类型会影响谁——沿"谁引用它"多跳展开（默认 2 层），并明说哪些看不到（静态名匹配看不到动态调用/反射）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '类型名 / 限定名 / id' },
+        depth: { type: 'number', description: '展开几层，1~4，默认 2' },
+      },
+      required: ['name'],
     },
   },
   {
@@ -284,7 +308,121 @@ function toolFile(idx, a) {
   return lines.join('\n');
 }
 
-const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, refs: toolRefs, subgraph: toolSubgraph, file: toolFile };
+/**
+ * map(budget)：按 token 预算导出一份骨架地图。
+ * 估 token 用 4 字符 ≈ 1 token（本项目标识符为主，这个精度够用）。
+ */
+function toolMap(idx, a) {
+  const b = idx.b;
+  const budget = Math.max(300, Math.min(Number(a.budget) || 4000, 200000));
+  const est = (s) => Math.ceil(s.length / 4) + 1;
+  const out = [];
+  let used = 0;
+  const push = (s) => { const t = est(s); if (used + t > budget) return false; out.push(s); used += t; return true; };
+  const pth = (t) => idx.files.get(t.file)?.path || '';
+  const score = (t) => t.fanIn + (t.memberList?.length || 0) / 10;
+
+  push(`# ${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`);
+  push(`${fmt(b.files.length)} 文件 / ${fmt(b.totals.types)} 类型 / ${fmt(b.totals.edges)} 依赖边 / ${fmt(b.totals.code)} 行代码`);
+  push('');
+
+  const systems = b.facets?.systems || [];
+  if (systems.length) {
+    push(`## 系统（${systems.length} 个，按体量排序）`);
+    for (const s of [...systems].sort((x, y) => y.types - x.types)) {
+      if (!push(`[${s.name}] ${s.types} 类型 / ${s.files} 文件`)) break;
+      for (const t of b.types.filter((x) => x.system === s.name).sort((x, y) => score(y) - score(x)).slice(0, 5)) {
+        if (!push(`  - ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`)) break;
+      }
+      if (used >= budget * 0.6) break;
+    }
+    push('');
+  }
+
+  if (used < budget) {
+    push('## 关键类型（被引用最多 = 改动的波及面最大）');
+    for (const t of [...b.types].sort((x, y) => y.fanIn - x.fanIn).slice(0, 25)) {
+      if (!push(`  ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`)) break;
+    }
+    push('');
+  }
+
+  if (used < budget * 0.8) {
+    push('## 关键成员（挑最重要的几个类型）');
+    for (const t of [...b.types].sort((x, y) => score(y) - score(x)).slice(0, 6)) {
+      const ms = (t.memberList || []).slice(0, 6);
+      if (!ms.length) continue;
+      if (!push(`  ${t.name}: ${ms.map((m) => m.n).join(', ')}`)) break;
+    }
+    push('');
+  }
+
+  const warn = [];
+  if (b.unresolved?.unknown) warn.push(`名字没匹配上的引用 ${fmt(b.unresolved.unknown)} 处（这些依赖看不到）`);
+  if (b.unresolved?.ambiguous) warn.push(`匹配到多个目标的引用 ${fmt(b.unresolved.ambiguous)} 处（只取了一个，可能不准）`);
+  if (warn.length) push(`⚠ ${warn.join('；')}`);
+  push(`（预算 ~${budget} token，实际约 ${used}；要细节：symbol(id) / refs(名字) / impact(名字)）`);
+  return out.join('\n');
+}
+
+/**
+ * impact(name, depth)：影响面分析——“改它会影响谁”。
+ * 沿**被引用**方向多跳展开，按层给，并明说看不见的部分（诚实优先）。
+ */
+function toolImpact(idx, a) {
+  const r = resolve(idx, a.name);
+  if (!r.type) return r.error;
+  const t0 = r.type;
+  const depth = Math.max(1, Math.min(Number(a.depth) || 2, 4));
+  const b = idx.b;
+  const seen = new Set([t0.id]);
+  let frontier = [t0.id];
+  const layers = [];
+  for (let d = 1; d <= depth && frontier.length; d++) {
+    const next = new Map();
+    for (const id of frontier) {
+      for (const e of idx.ins.get(id) || []) {
+        if (seen.has(e.from)) continue;
+        const t = idx.byId.get(e.from);
+        if (!t || seen.has(t.id)) continue;
+        const cur = next.get(t.id) || { t, kinds: new Set(), w: 0 };
+        cur.kinds.add(e.kind || 'ref');
+        cur.w += e.w || 1;
+        next.set(t.id, cur);
+      }
+    }
+    const list = [...next.values()].sort((x, y) => (y.w + y.t.fanIn) - (x.w + x.t.fanIn));
+    if (!list.length) break;
+    layers.push({ d, list });
+    for (const x of list) seen.add(x.t.id);
+    frontier = list.map((x) => x.t.id);
+  }
+
+  const KIND = { inherit: '继承', call: '调用', type: '类型引用', import: '导入', ref: '引用' };
+  const out = [`影响面：${t0.fqn} [${t0.kind}]（${idx.files.get(t0.file)?.path}:${t0.line}）`];
+  out.push(`沿“谁引用它”展开 ${depth} 层：`);
+  if (!layers.length) {
+    out.push('  （没有已知的引用者：可能是入口/孤立类型，或者引用它的地方没被识别出来）');
+  }
+  for (const L of layers) {
+    out.push('');
+    out.push(`第 ${L.d} 层（${L.list.length} 个）：`);
+    for (const x of L.list.slice(0, 25)) {
+      const kinds = [...x.kinds].map((k) => KIND[k] || k).join('/');
+      out.push(`  ${x.t.fqn} [${x.t.kind}] ${kinds} ×${x.w} · ${idx.files.get(x.t.file)?.path}`);
+    }
+    if (L.list.length > 25) out.push(`  …（还有 ${L.list.length - 25} 个）`);
+  }
+  out.push('');
+  out.push('要注意的：');
+  out.push('  · 这是**静态名字匹配**的结果：动态调用 / 反射 / 字符串拼出来的名字看不见；');
+  if (b.unresolved?.unknown) out.push(`  · 本项目有 ${fmt(b.unresolved.unknown)} 处引用没匹配上任何类型（这些边不在图里）；`);
+  if (b.unresolved?.ambiguous) out.push(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标，只取了一个；`);
+  out.push('  · 想看更宽：depth 加大（最多 4）；某个方向：refs(名字, in|out)。');
+  return out.join('\n');
+}
+
+const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, refs: toolRefs, subgraph: toolSubgraph, file: toolFile, map: toolMap, impact: toolImpact };
 
 function callTool(idx, name, args) {
   const fn = IMPL[name];

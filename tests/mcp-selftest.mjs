@@ -100,6 +100,14 @@ if (owner) {
   check(true, 'search（按成员名）', '这个 bundle 里没有带名字的成员，跳过');
 }
 
+const map600 = await call('map', { budget: 600 });
+check(map600.length > 80 && map600.length / 4 < 600 * 1.4, 'map（token 预算）', `约 ${Math.ceil(map600.length / 4)} token / 预算 600`);
+
+const impact = await call('impact', { name: hottest.name, depth: 2 });
+check(impact.includes('影响面') && /第 1 层|没有已知的引用者/.test(impact), 'impact（影响面）', impact.split('\n')[0].slice(0, 70));
+const impactMiss = await call('impact', { name: 'zzz-this-does-not-exist' });
+check(/找不到/.test(impactMiss), 'impact（找不到时给提示）', impactMiss.split('\n')[0].slice(0, 50));
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;

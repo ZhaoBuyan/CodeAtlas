@@ -347,6 +347,13 @@ function cmdMcp(argv) {
     console.log('\n接入客户端：command=node，args=[<绝对路径>/src/cli.mjs, mcp, --out, <绝对路径>/dist]\n');
     return;
   }
+  if (opts['config-json'] !== undefined) {
+    // 只吐 JSON（给启动器的"一键复制 MCP 配置"用，不用去正则里抠）
+    const cli = path.resolve(fileURLToPath(import.meta.url));
+    const out = path.resolve(opts.out || 'dist');
+    console.log(JSON.stringify({ mcpServers: { 'code-atlas': { command: 'node', args: [cli, 'mcp', '--out', out] } } }, null, 2));
+    return;
+  }
   if (opts['print-config'] !== undefined) {
     const cli = path.resolve(fileURLToPath(import.meta.url));
     const out = path.resolve(opts.out || 'dist');
