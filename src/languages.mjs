@@ -23,6 +23,58 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const WASM_DIR = path.join(HERE, '..', 'node_modules', 'tree-sitter-wasms', 'out');
 
 /** const foo = () => {} / const bar = function () {} —— 是不是"函数赋值" */
+// ---------- Elixir 专用：defmodule / def / alias 在语法树里全是 call 节点，只能按“调用的名字”判断 ----------
+function elixirCallee(node) {
+  if (!node || node.type !== 'call') return null;
+  const target = node.childForFieldName('target') || node.namedChildren[0];
+  return target && target.type === 'identifier' ? target.text : null;
+}
+function elixirName(node) {
+  const callee = elixirCallee(node);
+  if (!callee) return null;
+  const args = node.namedChildren.find((c) => c.type === 'arguments');
+  const first = args && args.namedChildren[0];
+  if (!first) return null;
+  if (callee === 'defmodule') {
+    // 取最后一段当名字（Shape.Utils → Utils）：解析器是按名字/全名匹配的，带前缀会匹配不上
+    if (first.type !== 'alias') return null;
+    const t = first.text;
+    const dot = t.lastIndexOf('.');
+    return dot >= 0 ? t.slice(dot + 1) : t;
+  }
+  if (callee.startsWith('def')) {
+    if (first.type === 'identifier') return first.text;
+    if (first.type === 'call') return elixirCallee(first);   // def area(x) → 名字在里层的 call 上
+    return null;
+  }
+  return null;
+}
+const elixirKind = (node) => (elixirCallee(node) === 'defmodule' ? 'module' : null);
+function elixirMemberKind(node) {
+  const c = elixirCallee(node);
+  if (!c) return null;
+  if (['def', 'defp', 'defmacro', 'defmacrop', 'defdelegate'].includes(c)) return 'function';
+  if (c === 'defstruct') return 'struct';
+  if (c === 'defprotocol' || c === 'defimpl') return 'protocol';
+  return null;
+}
+const elixirImportKind = (node) => (['alias', 'import', 'use', 'require'].includes(elixirCallee(node)) ? 'import' : null);
+/** 导入名要剥掉关键字：alias Shape.Utils → Shape.Utils（否则解析器拿着 "alias Shape.Utils" 匹配不上） */
+const elixirImportText = (node) => {
+  const args = node.namedChildren.find((c) => c.type === 'arguments');
+  const first = args && args.namedChildren[0];
+  if (!first) return '';
+  // 只取最后一段（Shape.Utils → Utils）：跟类型名字保持一致，解析器才匹配得上
+  const t = first.text;
+  const dot = t.lastIndexOf('.');
+  return dot >= 0 ? t.slice(dot + 1) : t;
+};
+const elixirIsDecision = (node) => {
+  const c = elixirCallee(node);
+  if (!c || !/^[a-z]/.test(c)) return false;   // 模块属性等（@doc）不要算进来
+  return ['if', 'unless', 'case', 'cond', 'with', 'for', 'try', 'receive'].includes(c);
+};
+
 function isFunctionAssignment(node) {
   const decl = node.namedChildren.find((c) => c.type === 'variable_declarator');
   if (!decl) return false;
@@ -617,6 +669,29 @@ export const LANGUAGES = {
   // （旧的 zig / bash 占位配置已删：节点名是猜的，且重复键会覆盖前面的真配置）
 
   // -------- 文件级格式：默不开，--lang json,yaml 或 --lang auto,json 才扫 --------
+  // Elixir：全靠上面那组 elixir* 钩子（节点类型在这里没用）
+  elixir: {
+    id: 'elixir',
+    label: 'Elixir',
+    status: 'ok',
+    exts: ['.ex', '.exs'],
+    wasm: 'tree-sitter-elixir.wasm',
+    namespaces: {},
+    types: {},
+    members: {},
+    imports: {},
+    baseFields: [],
+    baseNodes: [],
+    nameOf: elixirName,
+    kindOf: elixirKind,
+    memberKindOf: elixirMemberKind,
+    importKindOf: elixirImportKind,
+    importTextOf: elixirImportText,
+    isDecision: elixirIsDecision,
+    decisions: ['call'],
+    decisionOps: [],
+  },
+
   json: {
     id: 'json',
     label: 'JSON',

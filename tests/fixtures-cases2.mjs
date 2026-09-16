@@ -87,6 +87,18 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    dir: 'elixir',
+    lang: 'elixir',
+    // Elixir 全靠 profile 里的钩子（defmodule/def 在语法树里都是 call 节点）
+    types: 2,
+    names: ['Shape', 'Utils'],
+    kinds: { module: 2 },
+    importsMin: 1,
+    docs: 0,
+    membersMin: 4,
+    errorsMax: 0,
+  },
+  {
     dir: 'systemrdl',
     lang: 'systemrdl',
     // 内联的 reg/field 本来就是匿名的，显示为 (anonymous)（类型名不参与 names 校验）

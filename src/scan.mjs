@@ -129,6 +129,8 @@ function markRows(mask, startRow, endRow) {
 const ID_TYPES = ['type_identifier', 'simple_identifier', 'scoped_identifier', 'identifier', 'dotted_name', 'qualified_name', 'name', 'value_name', 'constructor_name', 'module_name', 'type_constructor', 'value_identifier', 'module_identifier', 'symbol', 'id'];
 function nameOf(node, lang) {
   // Rust impl 块：名字取它实现的类型（field 'type'），让方法挂到同名节点上
+  if (lang && lang.nameOf) return lang.nameOf(node);   // 有专用取名钩子的语言（例如 Elixir），以它为准（返回 null 就是真没名字）
+  // Rust impl 块：名字取它实现的类型（field 'type'）；有 nameFromField 的语言按字段取（如 C# 的 namespace_declaration）
   const namedField = lang && lang.nameFromField && lang.nameFromField[node.type];
   if (namedField) {
     const f = node.childForFieldName(namedField);
@@ -352,8 +354,9 @@ function extractFile(source, tree, lang) {
       return;
     }
 
-    if (lang.imports[type]) {
-      const target = parseImport(node.text);
+    const impKind = lang.importKindOf ? lang.importKindOf(node) : lang.imports[type];
+    if (impKind) {
+      const target = parseImport(lang.importTextOf ? lang.importTextOf(node) : node.text);
       if (target) imports.push(target);
       sweepComments(node);
       return;
@@ -376,7 +379,7 @@ function extractFile(source, tree, lang) {
       }
     }
 
-    const kind = lang.types[type];
+    const kind = lang.kindOf ? lang.kindOf(node) : lang.types[type];
     // typedef struct X{} X; 这类写法会让内外两层都命中，内层就不再重复记（但仍会进去收成员）
     const skipParents = lang.typeSkipParent && lang.typeSkipParent[type];
     const parentType = node.parent ? node.parent.type : null;
@@ -430,7 +433,7 @@ function extractFile(source, tree, lang) {
       return;
     }
 
-    const memberKind = lang.members[type];
+    const memberKind = lang.memberKindOf ? lang.memberKindOf(node) : lang.members[type];
     if (memberKind) {
       const name = nameOf(node, lang);
       const mdoc = docFor(comments, node.startPosition.row, lines) || (lang.docstring ? docstringOf(node) : null);
@@ -442,7 +445,9 @@ function extractFile(source, tree, lang) {
     if (lang.decisions.includes(type)) {
       const t = currentType();
       const target = t || fileScope;
-      if (type === 'binary_expression') {
+      if (lang.isDecision) {
+        if (lang.isDecision(node)) target.complexity++;
+      } else if (type === 'binary_expression') {
         const op = node.childForFieldName('operator');
         if (op && (lang.decisionOps || []).includes(op.text)) target.complexity++;
       } else {
@@ -896,6 +901,50 @@ export async function workerExtract({ work, lang, emit }) {
     .map((f) => ({ abs: f.abs, rel: f.rel, root: f.root, bytes: f.bytes, mtime: f.mtime, lang: profile }));
   const parts = await extractFiles(files);
   fs.writeFileSync(emit, JSON.stringify(parts));
+}
+
+// ---------- Elixir 专用：语法树里 defmodule / def / alias 全是 call 节点，只能按“调用的名字”判断 ----------
+/** 取这个 call 的“调用名”；普通调用如 IO.puts 的 target 是 dot，返回 null */
+function elixirCallee(node) {
+  if (!node || node.type !== 'call') return null;
+  const target = node.childForFieldName('target') || node.namedChildren[0];
+  return target && target.type === 'identifier' ? target.text : null;
+}
+function elixirFirstArg(node) {
+  const args = node.namedChildren.find((c) => c.type === 'arguments');
+  return (args && args.namedChildren[0]) || null;
+}
+function elixirName(node) {
+  const callee = elixirCallee(node);
+  if (!callee) return null;
+  const first = elixirFirstArg(node);
+  if (!first) return null;
+  if (callee === 'defmodule') return first.type === 'alias' ? first.text : null;
+  if (callee.startsWith('def')) {
+    if (first.type === 'identifier') return first.text;
+    if (first.type === 'call') return elixirCallee(first);   // def area(x) → 名字在里层的 call 上
+    return null;
+  }
+  return null;
+}
+function elixirKind(node) {
+  return elixirCallee(node) === 'defmodule' ? 'module' : null;
+}
+function elixirMemberKind(node) {
+  const c = elixirCallee(node);
+  if (!c) return null;
+  if (['def', 'defp', 'defmacro', 'defmacrop', 'defdelegate'].includes(c)) return 'function';
+  if (c === 'defstruct') return 'struct';
+  if (c === 'defprotocol' || c === 'defimpl') return 'protocol';
+  return null;
+}
+function elixirImportKind(node) {
+  const c = elixirCallee(node);
+  return ['alias', 'import', 'use', 'require'].includes(c) ? 'import' : null;
+}
+function elixirIsDecision(node) {
+  const c = elixirCallee(node);
+  return ['if', 'unless', 'case', 'cond', 'with', 'for', 'try', 'receive'].includes(c);
 }
 
 export async function scan(opts) {
