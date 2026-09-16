@@ -183,7 +183,12 @@ namespace CodeAtlas
             _path.BackColor = Palette.Panel;
             _path.ForeColor = Palette.Fg;
             _path.BorderStyle = BorderStyle.FixedSingle;
+            // TextBox 默认 AutoSize=true，它的“首选宽度”会按文本长度算 —— 放进 TableLayoutPanel 会把列撑爆
+            //（实测：一行控件会超出面板右边界 50 多像素）。关掉，宽度交给布局。
+            _path.AutoSize = false;
             _path.Text = Target;
+            _path.SelectionStart = 0;   // 长路径默认从头显示（不然会滚到末尾，看不清是哪个盘）
+            _path.SelectionLength = 0;
             var pickDir = new Button { Text = "选择文件夹…" };
             var pickFile = new Button { Text = "选择文件…" };
             Launcher.Style(pickDir);
@@ -191,6 +196,26 @@ namespace CodeAtlas
             pickDir.Click += (s, e) => { using var d = new FolderBrowserDialog { Description = "选一个要分析的文件夹（源码目录，或放着 .dll / .exe / .jar 的目录）" }; if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.SelectedPath; };
             pickFile.Click += (s, e) => { using var d = new OpenFileDialog { Title = "选一个要分析的文件", Filter = "程序集 / 压缩包 (*.dll;*.exe;*.jar)|*.dll;*.exe;*.jar|所有文件 (*.*)|*.*" }; if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.FileName; };
             var label = new Label { Text = "要分析什么？", ForeColor = Palette.Fg, AutoSize = true };
+            // 一行三个：输入框 + 两个按钮。用 TableLayoutPanel + Anchor 排——
+            // 这是 WinForms 自己的布局引擎：Anchor=Left|Right 的控件会在单元格里**垂直居中**，
+            // 宽度自己撑满，不需要我们算任何像素（手算坐标会跟框架的缩放叠在一起，踩过三次）。
+            var row = new TableLayoutPanel
+            {
+                Name = "row", BackColor = Palette.Bg, ColumnCount = 3, RowCount = 1,
+                // 注意：不能开 AutoSize——AutoSize + 百分比列会互相打架（面板为了装下内容自动变宽，于是整行溢出右边界）
+                AutoSize = false,
+            };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _path.Dock = DockStyle.None;
+            _path.Anchor = AnchorStyles.Left | AnchorStyles.Right;   // 水平撑满 + 垂直居中
+            _path.Margin = new Padding(0, 0, 8, 0);
+            foreach (var b in new[] { pickDir, pickFile }) { b.Dock = DockStyle.None; b.Anchor = AnchorStyles.None; b.Margin = new Padding(0, 0, 8, 0); }
+            pickFile.Margin = new Padding(0);
+            row.Controls.Add(_path, 0, 0);
+            row.Controls.Add(pickDir, 1, 0);
+            row.Controls.Add(pickFile, 2, 0);
             var note = new Label
             {
                 Text = "源码目录直接扫；.dll / .exe（含单文件发行版）/ .jar 会先反编译再扫。\n这一页就是主窗口那个「目标」，在这里选完，后面两页会用到它。",
@@ -198,22 +223,23 @@ namespace CodeAtlas
                 AutoSize = false,
             };
             note.Name = "note";
-            p.Controls.AddRange(new Control[] { label, _path, pickDir, pickFile, note });
-            p.Resize += (s, e) => LayoutStep1(p, label, pickDir, pickFile, note);
+            p.Controls.AddRange(new Control[] { label, row, note });
+            p.Resize += (s, e) => LayoutStep1(p, label, row, note);
             _body.Controls.Add(p);
             _p1 = p;
         }
         private Panel _p1;
 
-        private void LayoutStep1(Panel p, Label label, Button pickDir, Button pickFile, Label note)
+        private void LayoutStep1(Panel p, Label label, TableLayoutPanel row, Label note)
         {
             float k = DeviceDpi / 96f;
             int pad = (int)(18 * k);
+            int w = Math.Max(80, p.ClientSize.Width - pad * 2);
             label.Location = new Point(pad, (int)(24 * k));
-            _path.SetBounds(pad, (int)(50 * k), Math.Max(160, p.ClientSize.Width - pad * 2 - (int)(200 * k)), (int)(30 * k));
-            pickFile.Location = new Point(p.ClientSize.Width - pad - pickFile.PreferredSize.Width, (int)(50 * k));
-            pickDir.Location = new Point(pickFile.Left - pickDir.PreferredSize.Width - (int)(8 * k), (int)(50 * k));
-            note.SetBounds(pad, (int)(92 * k), p.ClientSize.Width - pad * 2, (int)(60 * k));
+            // 行高取按钮的自然高度（同一尺度，不用 k 自己算）
+            int rowH = row.Controls.OfType<Button>().Select((b) => b.PreferredSize.Height).DefaultIfEmpty((int)(32 * k)).Max();
+            row.SetBounds(pad, (int)(50 * k), w, rowH);
+            note.SetBounds(pad, row.Bottom + (int)(12 * k), w, (int)(60 * k));
         }
 
         private void BuildStep2()
@@ -232,6 +258,22 @@ namespace CodeAtlas
                 _draftedFor = null;   // 语言变了，规则草案要重算
                 RefreshLangs();
             };
+            var row2 = new TableLayoutPanel
+            {
+                Name = "row", BackColor = Palette.Bg, ColumnCount = 2, RowCount = 1,
+                AutoSize = false,   // 同上：AutoSize + 百分比列会打架
+            };
+            row2.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            row2.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _langInfo.Dock = DockStyle.None;
+            _langInfo.Anchor = AnchorStyles.Left | AnchorStyles.Right;   // 水平撑满 + 垂直居中
+            _langInfo.TextAlign = ContentAlignment.MiddleLeft;
+            _langInfo.Margin = new Padding(0, 0, 8, 0);
+            _pickLangs.Dock = DockStyle.None;
+            _pickLangs.Anchor = AnchorStyles.None;
+            _pickLangs.Margin = new Padding(0);
+            row2.Controls.Add(_langInfo, 0, 0);
+            row2.Controls.Add(_pickLangs, 1, 0);
             var note = new Label
             {
                 Text = "默认「自动」= 所有代码语言都扫、配置文件格式（JSON/YAML…）不扫。\n只扫这个项目真正用的语言能明显提速，也能让地图干净。",
@@ -239,21 +281,22 @@ namespace CodeAtlas
                 AutoSize = false,
             };
             note.Name = "note";
-            p.Controls.AddRange(new Control[] { label, _langInfo, _pickLangs, note });
-            p.Resize += (s, e) => LayoutStep2(p, label, note);
+            p.Controls.AddRange(new Control[] { label, row2, note });
+            p.Resize += (s, e) => LayoutStep2(p, label, row2, note);
             _body.Controls.Add(p);
             _p2 = p;
         }
         private Panel _p2;
 
-        private void LayoutStep2(Panel p, Label label, Label note)
+        private void LayoutStep2(Panel p, Label label, TableLayoutPanel row, Label note)
         {
             float k = DeviceDpi / 96f;
             int pad = (int)(18 * k);
+            int w = Math.Max(80, p.ClientSize.Width - pad * 2);
             label.Location = new Point(pad, (int)(24 * k));
-            _langInfo.SetBounds(pad, (int)(50 * k), p.ClientSize.Width - pad * 2 - _pickLangs.PreferredSize.Width - (int)(12 * k), (int)(30 * k));
-            _pickLangs.Location = new Point(p.ClientSize.Width - pad - _pickLangs.PreferredSize.Width, (int)(48 * k));
-            note.SetBounds(pad, (int)(92 * k), p.ClientSize.Width - pad * 2, (int)(60 * k));
+            int rowH = Math.Max(_pickLangs.PreferredSize.Height, (int)(32 * k));
+            row.SetBounds(pad, (int)(50 * k), w, rowH);
+            note.SetBounds(pad, row.Bottom + (int)(12 * k), w, (int)(60 * k));
         }
 
         private void BuildStep3()
