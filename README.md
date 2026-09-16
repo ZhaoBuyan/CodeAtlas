@@ -60,6 +60,8 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
   CLI 等价物：`node src/cli.mjs draft-facets <目录> [--out 文件]`——只看目录结构、不解析代码，秒出。
 - **不会再弹防火墙**：本地服务只绑 `127.0.0.1`（回环流量不走 Windows 防火墙），所以"是否允许 Node.js 通信"那个系统弹窗不会出现。
   想让局域网 / 手机也能看：`atlas serve --host 0.0.0.0`（那种情况下 Windows 正常问你一次，允许即可）。
+- **两个顺手的开关**：工具栏「**增量**」勾选框（默认关＝每次全量；勾上只重新解析改过的文件）、
+  「**MCP 配置**」按钮（一键把"让 AI 读这个项目"的配置复制到剪贴板——粘进客户端即可，见 [使用说明.md](使用说明.md) 第五节）。
   语言表由引擎提供（`node src/cli.mjs langs`），启动器不自己维护一份——加语言只要改 `languages.mjs`。
   选的语言写进 `launcher.config.json` 的 `Langs`（逗号分隔；空 = 自动）。注意这是**全局设置**，不跟项目走。
 - 需要装了 **Node.js**（引擎是 Node 写的）；不需要 .NET SDK（但需要 .NET 9 运行时，.NET 9 SDK 自带）。
@@ -74,8 +76,8 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
 
 | 版本 | 构建产物 | 体积 | 机器上要先有什么 |
 | --- | --- | --- | --- |
-| **完全版** | `publish-sc/CodeAtlas.exe` | 82 MB | 什么都不用装（内置 Node 24 + 引擎） |
-| **精简版** | `publish-lite/CodeAtlas-lite.exe` | 4.5 MB | .NET 9 桌面运行时 + Node.js |
+| **完全版** | `publish-sc/CodeAtlas.exe` | 82.8 MB | 什么都不用装（内置 Node 24 + 引擎） |
+| **精简版** | `publish-lite/CodeAtlas-lite.exe` | 5.1 MB | .NET 9 桌面运行时 + Node.js |
 
 ```bash
 npm run publish        # 两个版本都出（= publish:sc + publish:lite）
@@ -83,7 +85,7 @@ npm run publish:sc     # 只出完全版
 npm run publish:lite   # 只出精简版
 ```
 
-原理一句话：引擎（`src` / `web` / `configs` / 28 个语法包 wasm / d3）先由 `tools/build-payload.mjs`
+原理一句话：引擎（`src` / `web` / `configs` / 29 个语法包 wasm / d3）先由 `tools/build-payload.mjs`
 打成 zip，构建时作为 `<EmbeddedResource>` 整个嵌进 exe；**首次运行**解到
 `%LocalAppData%\CodeAtlas\engine\<版本-包大小>\`，之后直接用，不再重复解。
 完全版比精简版多出来的就是包里的 `node.exe`（88 MB）。
@@ -92,7 +94,7 @@ npm run publish:lite   # 只出精简版
   超过 7 天没动过的旧解包目录会在下次启动时顺手清掉，免得换个版本就多留 120 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本/包大小不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 28 门语言**的 wasm（tree-sitter-wasms 里其他 8 个不进去，省约 12 MB）。
+- 打包只带**我们支持的 24 门代码语言 + 5 种文件级格式**的 wasm（tree-sitter-wasms 里用不到的那几个不进去）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - 反编译工具（`ilspycmd` / `sfextract` / `cfr.jar`）**不打进包**，用到时按提示装。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -153,6 +155,8 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 | `refs(name, in/out)` | 谁引用它 / 它引用谁（改代码前的影响面） |
 | `subgraph(name, depth)` | 依赖子图（“改这里会牵连什么”） |
 | `file(path)` | 一个文件的类型、导入、行数、解析异常 |
+| `map(budget)` | 按 token 预算导出**骨架**（系统 → 关键类型 → 关键成员）——让 AI 先拿到全局，省 token |
+| `impact(name, depth)` | **影响面分析**：沿“谁引用它”多跳展开，并说明哪些看不见（动态调用/反射） |
 
 接入客户端（以 Chatbox / Claude Desktop 这类配置为例，路径用绝对路径）：
 
@@ -177,7 +181,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（23 门，各自独立进程）
+npm test                                          # 语言 fixtures 回归（24 门，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
 node tests/probe-abi.mjs                           # 审计哪些语法包能用 / 用不了
@@ -269,7 +273,7 @@ MIT（见 [LICENSE](LICENSE)）。
 
 文字说明：启动器里拖文件夹进来，或者把 `.dll / .exe / .jar` 拖进来都行，**不用告诉它这是哪种**。
 
-### 认识的语言（23 门代码语言）
+### 认识的语言（24 门代码语言）
 
 | 语言 | 后缀 | 状态 |
 | --- | --- | --- |
@@ -355,10 +359,11 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：23 门代码语言 + 5 种文件级格式
+- [x] 语言覆盖：24 门代码语言 + 5 种文件级格式
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤
 - [x] 打包：完全版（内置 Node）/ 精简版（要求系统 Node）两个单文件 exe，不做安装器
 - [x] 首次运行向导（选项目 → 草拟分组规则 → 勾语言 → 保存并开跑；配过的项目再打开=零操作）
-- [ ] 增量扫描 · AI 接口补强（MCP 配置一键复制 / token 预算导出 / 影响面分析）
+- [x] 增量扫描（`--incremental`，只重解析改过的文件；启动器有「增量」勾选框）
+- [x] AI 接口补强：一键复制 MCP 配置 · `map(budget)` 骨架导出 · `impact` 影响面（多跳 + 诚实说明）
