@@ -161,7 +161,7 @@ const MIME = {
   '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
 };
 
-function startServer({ outDir, port = DEFAULT_PORT, open = true }) {
+function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0.1' }) {
   const bundlePath = path.join(path.resolve(outDir), 'bundle.json');
   if (!fs.existsSync(bundlePath)) throw new Error(`找不到 ${bundlePath}，先扫描一次`);
 
@@ -188,7 +188,13 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true }) {
       if (err.code === 'EADDRINUSE' && tryPort < port + 10) { tryPort++; attempt(); return; }
       console.error(`起服务失败：${err.message}`);
     });
-    server.listen(tryPort, () => {
+    // 只绑回环地址（而不是 0.0.0.0）：
+    // ① 更安全：地图只给本机看，不会暴露到局域网；
+    // ② **不给 Windows 防火墙弹窗的机会**——监听所有网卡时 Windows 必须问一次
+    //    “是否允许 Node.js 通信”，而我们的 node.exe 在 %LocalAppData% 里、每换一次引擎包
+    //    路径就变（包指纹），于是“每次开跑都要同意一次”。回环监听不需要任何防火墙规则。
+    // 想让局域网也能看（手机、另一台电脑）再加 --host 0.0.0.0。
+    server.listen(tryPort, host, () => {
       const url = `http://localhost:${tryPort}`;
       if (open) {
         console.log(`\n  ✔ 已启动并打开浏览器：${url}`);
@@ -226,7 +232,7 @@ async function cmdAuto(argv) {
   });
   printIngestReport(res);
   // --no-open 的意思是不弹系统浏览器，服务照起（启动器靠这个 URL 把地图嵌进窗口）
-  startServer({ outDir, port: Number(opts.port || DEFAULT_PORT), open: opts['no-open'] === undefined });
+  startServer({ outDir, port: Number(opts.port || DEFAULT_PORT), open: opts['no-open'] === undefined, host: opts.host });
 }
 
 async function cmdScan(argv) {
@@ -242,7 +248,7 @@ async function cmdScan(argv) {
   });
   printScanReport(result.bundle, result.out);
   if (opts.open !== undefined) {
-    startServer({ outDir: result.outDir, port: Number(opts.port || DEFAULT_PORT), open: true });
+    startServer({ outDir: result.outDir, port: Number(opts.port || DEFAULT_PORT), open: true, host: opts.host });
   }
 }
 
@@ -265,7 +271,7 @@ async function cmdIngest(argv) {
   });
   printIngestReport(res);
   if (opts.open !== undefined) {
-    startServer({ outDir: res.outDir, port: Number(opts.port || DEFAULT_PORT), open: true });
+    startServer({ outDir: res.outDir, port: Number(opts.port || DEFAULT_PORT), open: true, host: opts.host });
   }
 }
 
@@ -359,6 +365,7 @@ function cmdServe(argv) {
     outDir: opts.out || 'dist',
     port: Number(opts.port || DEFAULT_PORT),
     open: opts['no-open'] === undefined,
+    host: opts.host,
   });
 }
 
@@ -374,6 +381,8 @@ const HELP = `Code Atlas v${VERSION}
   atlas scan   <目录...>            只扫描源码目录
   atlas ingest <目录|.dll|.exe|.jar> 没有源码的目标先反编译再扫
   atlas serve                       起本地服务（不重新扫描）
+                                      默认只绑 127.0.0.1（不弹防火墙、也不暴露到局域网）；
+                                      想让局域网/手机看：--host 0.0.0.0
   atlas langs                       看支持哪些语言（加 --json 给程序读）
   atlas draft-facets <目录>          按目录结构草拟一份分组规则（--out 写文件）
 

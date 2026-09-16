@@ -116,6 +116,9 @@
 - **改完 `src/` 或 `web/` 必须重新 `npm run publish`**：引擎是构建时快照进 exe 的，不重打的话 exe 里还是旧引擎（发布目录里的 exe 不会自动跟着源码变）。
 - **把发行版 exe 放进仓库里跑，走的是“仓库模式”**（优先用旁边的源码，而不是内置引擎）—— 要验证内置引擎就把 exe 拷到仓库外再跑。
 - **`atlas scan` 退出码**：以前用 `process.kill(pid,'SIGKILL')` 硬退，Windows 上会把“成功”变成 1；现在解析在子进程里、父进程很干净，`flushAndExit` 用 `process.reallyExit(code)` 就够。子进程自己降完结果就硬退（不看它的退出码）。
+- **Windows 防火墙弹窗（已修）**：以前服务用 `server.listen(port)` 绑的是**所有网卡**，Windows 对非回环监听**必须**问一次“是否允许 Node.js 通信”；又因为完全版的 `node.exe` 在 `%LocalAppData%\CodeAtlas\engine\<版本-包指纹>\` 里，**每换一次引擎包路径就变**，于是“每次开跑都要同意”。
+  修法：`server.listen(port, '127.0.0.1')`——回环流量根本不进防火墙，一个规则都不用建（实测：起服务前后规则数 6 → 6）；要给局域网/手机看再 `--host 0.0.0.0`。
+  （用户机上当时已积了 3 条指向旧引擎路径的 node.exe 规则，无害；要清理就在“防火墙→允许应用通过防火墙”里删，需要管理员。）
 - **git 会报一堆 LF→CRLF 警告**（`core.autocrlf=true`）：无害，只是噪。要消掉就加 `.gitattributes`（`* text=auto eol=lf`）——尚未做，等用户拍板。
 - **本沙箱里的 `node` 不是真 node**：PowerShell 里 `node` 是个包装函数，实际跑 `Chatbox.exe`，里面是 **Electron 35 / Node 22 内核**（`process.execPath` 也指向 Chatbox.exe）。要真 node 就用全路径：`& 'C:\Program Files\nodejs\node.exe'`（v24.18.0）。
 - **多语法包崩溃：已修（2026-09-17，改法=按语言分子进程）**：以前同进程装 12 门以上就会在退出阶段必崩（`Fatal process out of memory: Zone`）、19 门扫不完；根因是每门语法包常驻 ~150–180 MB 且 0.20.8 放不掉。现在父进程不装 wasm、解析都在子进程里，19 门一次扫 **exit=0 + bundle 正常**。诊断工具：`npm run probe:mem`。

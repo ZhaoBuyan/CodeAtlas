@@ -39,7 +39,7 @@ node src/cli.mjs "C:/path/to/App.dll"
 ```bash
 node src/cli.mjs scan   <目录...> [--out dist] [--lang auto] [--maxkb 1024] [--exclude a,b] [--facets 规则.json] [--open]
 node src/cli.mjs ingest <目录|.dll|.exe|.jar> [--out dist] [--work ingest/<名>] [--dll "App*.dll"] [--decompiler cfr.jar] [--open]
-node src/cli.mjs serve  [--out dist] [--port 5173]
+node src/cli.mjs serve  [--out dist] [--port 5173] [--host 0.0.0.0]   # 默认只绑 127.0.0.1
 node src/cli.mjs langs                      # 看支持哪些语言（--json 给程序读）
 node src/cli.mjs draft-facets <目录> [--out 规则.json]   # 按目录结构草拟一份系统分组规则
 node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服务
@@ -58,6 +58,8 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
   规则默认写到 `%LocalAppData%\CodeAtlas\configs\<项目名>.facets.json`（**私有**，不进你的项目）；勾上「写进项目目录」就写 `<项目>/atlas.facets.json`（跟项目走、能共享）。
   配过的项目会记住（语言 + 规则），**下次打开不再弹向导、也不用重配**（再打开 = 零操作）。
   CLI 等价物：`node src/cli.mjs draft-facets <目录> [--out 文件]`——只看目录结构、不解析代码，秒出。
+- **不会再弹防火墙**：本地服务只绑 `127.0.0.1`（回环流量不走 Windows 防火墙），所以"是否允许 Node.js 通信"那个系统弹窗不会出现。
+  想让局域网 / 手机也能看：`atlas serve --host 0.0.0.0`（那种情况下 Windows 正常问你一次，允许即可）。
   语言表由引擎提供（`node src/cli.mjs langs`），启动器不自己维护一份——加语言只要改 `languages.mjs`。
   选的语言写进 `launcher.config.json` 的 `Langs`（逗号分隔；空 = 自动）。注意这是**全局设置**，不跟项目走。
 - 需要装了 **Node.js**（引擎是 Node 写的）；不需要 .NET SDK（但需要 .NET 9 运行时，.NET 9 SDK 自带）。
