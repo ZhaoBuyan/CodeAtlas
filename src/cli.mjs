@@ -229,6 +229,7 @@ async function cmdAuto(argv) {
     decompiler: opts.decompiler,
     facets: opts.facets || null,
     maxKb: Number(opts.maxkb || 1024),
+    incremental: opts.incremental !== undefined,
   });
   printIngestReport(res);
   // --no-open 的意思是不弹系统浏览器，服务照起（启动器靠这个 URL 把地图嵌进窗口）
@@ -245,6 +246,8 @@ async function cmdScan(argv) {
     maxKb: Number(opts.maxkb || 1024),
     excludes: opts.exclude ? String(opts.exclude).split(',').map((s) => s.trim()).filter(Boolean) : [],
     facets: opts.facets || null,
+    // 增量：默认关（全量）；加 --incremental 才按文件复用上次的解析结果
+    incremental: opts.incremental !== undefined,
   });
   printScanReport(result.bundle, result.out);
   if (opts.open !== undefined) {
@@ -268,6 +271,7 @@ async function cmdIngest(argv) {
     decompiler: opts.decompiler,
     facets: opts.facets || null,
     maxKb: Number(opts.maxkb || 1024),
+    incremental: opts.incremental !== undefined,
   });
   printIngestReport(res);
   if (opts.open !== undefined) {
@@ -385,7 +389,7 @@ const HELP = `Code Atlas v${VERSION}
   atlas "C:/path/to/game.jar"        反编译 jar + 扫描
 
 细分命令：
-  atlas scan   <目录...>            只扫描源码目录
+  atlas scan   <目录...>            只扫描源码目录（可加 --incremental：只重解析改过的文件）
   atlas ingest <目录|.dll|.exe|.jar> 没有源码的目标先反编译再扫
   atlas serve                       起本地服务（不重新扫描）
                                       默认只绑 127.0.0.1（不弹防火墙、也不暴露到局域网）；

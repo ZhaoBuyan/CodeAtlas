@@ -685,11 +685,8 @@ async function extractFiles(files) {
     return p;
   };
 
-  // 解析 + 提取
-  const fileRecs = [];
-  const allTypes = [];
-  const allRefs = [];
-  const fileNamespaces = [];
+  // 按文件收集（父进程负责拼全局 id；也是增量缓存的基本单位）
+  const parts = [];
   const failures = [];
 
   // 进度：让"跑的过程"也能看见（大仓库才有感，小项目就两行）
@@ -707,13 +704,16 @@ async function extractFiles(files) {
     } catch (err) {
       failures.push({ path: f.rel, error: String(err.message || err) });
       continue;
-    }    const parser = await getParser(f.lang);
+    }
+    // 本文件的结果：id 都是**文件内局部**的，父进程合并时统一平移到全局
+    const part = { rel: f.rel, lang: f.lang.id, ns: null, types: [], refs: [], file: null };
+    const parser = await getParser(f.lang);
     const source = f.lang.preprocess ? preprocess(rawSource, f.lang.preprocess) : rawSource;
     const tree = parser.parse(source);
     const facts = extractFile(source, tree, f.lang);
     tree.delete?.();
 
-    const fileId = fileRecs.length;
+    const fileId = 0;   // 文件内局部（父进程合并时换成全局 file id）
     const lineCount = facts.lines.length;
     let blank = 0, comment = 0;
     for (let i = 0; i < lineCount; i++) {
@@ -731,9 +731,9 @@ async function extractFiles(files) {
         if ((facts.lines[r] ?? '').trim() === '') tb++;
         else if (facts.mask[r]) tc++;
       }
-      const id = allTypes.length;
+      const id = part.types.length;
       typeIds.push(id);
-      allTypes.push({
+      part.types.push({
         id,
         name: t.name,
         kind: t.kind,
@@ -760,7 +760,7 @@ async function extractFiles(files) {
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
       });
       for (const r of facts.refs) {
-        if (r.owner === t.index) allRefs.push({ owner: id, name: r.name });
+        if (r.owner === t.index) part.refs.push({ t: id, name: r.name });
       }
     }
 
@@ -772,9 +772,9 @@ async function extractFiles(files) {
     if ((!typeIds.length && facts.lines.length >= 4) || fmLines.length) {
       const mStart = fmLines.length ? Math.max(1, Math.min(...fmLines)) : 1;
       const mEnd = fmLines.length ? Math.max(...fmLines) : facts.lines.length;
-      const id = allTypes.length;
+      const id = part.types.length;
       typeIds.push(id);
-      allTypes.push({
+      part.types.push({
         id,
         name: f.rel.replace(/\.[^.]+$/, '').split('/').pop(),
         kind: 'module',
@@ -800,7 +800,7 @@ async function extractFiles(files) {
         system: null,
         systemRule: null,
       });
-      for (const r of facts.fileScope.refs) allRefs.push({ owner: id, name: r.name });
+      for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name });
     }
 
     // 进度提示：文件多的时候每 150 个或每 2.5 秒报一次（小项目只有开始那一行）
@@ -810,8 +810,7 @@ async function extractFiles(files) {
       console.log(`  解析中… ${parsedFiles}/${totalFiles} 文件（${((Date.now() - startedAt) / 1000).toFixed(1)}s）`);
     }
 
-    fileRecs.push({
-      id: fileId,
+    part.file = {
       path: f.rel,
       lang: f.lang.id,
       loc, code, comment, blank,
@@ -821,29 +820,68 @@ async function extractFiles(files) {
       namespaces: facts.namespaces,
       imports: facts.imports,
       types: typeIds,
-    });
-    fileNamespaces.push(facts.namespaces);
+    };
+    part.ns = facts.namespaces;
+    parts.push(part);
   }
-  return { fileRecs, allTypes, allRefs, fileNamespaces, failures };
+  return { files: parts, failures };
 }
 
-/** 合并各子进程的产出：把局部 id 平移到全局 id（文件/类型都要，类型的 parent 和 refs 的 owner 跟着移） */
+/** 合并各子进程/缓存的产出：把局部 id 平移到全局 id（文件、类型、parent、refs.owner 都要移） */
 function mergeParts(parts) {
   const out = { fileRecs: [], allTypes: [], allRefs: [], fileNamespaces: [], failures: [] };
   for (const p of parts || []) {
-    const fOff = out.fileRecs.length;
-    const tOff = out.allTypes.length;
-    for (const f of p.fileRecs || []) {
-      out.fileRecs.push({ ...f, id: f.id + fOff, types: (f.types || []).map((t) => t + tOff) });
+    for (const pf of p.files || []) {
+      if (!pf) continue;
+      const fileId = out.fileRecs.length;
+      const tOff = out.allTypes.length;
+      if (pf.file) out.fileRecs.push({ ...pf.file, id: fileId, types: (pf.file.types || []).map((t) => t + tOff) });
+      for (const t of pf.types || []) {
+        out.allTypes.push({ ...t, id: t.id + tOff, file: fileId, parent: t.parent == null ? null : t.parent + tOff });
+      }
+      for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name });
+      out.fileNamespaces.push(pf.ns || {});
     }
-    for (const t of p.allTypes || []) {
-      out.allTypes.push({ ...t, id: t.id + tOff, file: t.file + fOff, parent: t.parent == null ? null : t.parent + tOff });
-    }
-    for (const r of p.allRefs || []) out.allRefs.push({ owner: r.owner + tOff, name: r.name });
-    out.fileNamespaces.push(...(p.fileNamespaces || []));
     out.failures.push(...(p.failures || []));
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 增量扫描缓存：按文件存上一次的解析结果，没变的文件就不再解析
+// ---------------------------------------------------------------------------
+
+const CACHE_NAME = '.scan-cache.json';
+
+/** 引擎指纹：代码/语言表/预处理改了，缓存就不能再用（不然会拿旧规则的结果） */
+function engineStamp() {
+  const files = ['scan.mjs', 'languages.mjs', 'preprocess.mjs'];
+  const stamps = files.map((n) => {
+    try { return String(Math.round(fs.statSync(path.join(PROJECT_ROOT, 'src', n)).mtimeMs)); } catch { return '0'; }
+  });
+  return [VERSION, ...stamps].join('-');
+}
+
+function readScanCache(cacheFile, langSpec, maxKb) {
+  try {
+    const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    if (c.schema !== 1) return null;
+    if (c.engine !== engineStamp()) return null;
+    if (c.lang !== langSpec) return null;
+    if (c.maxKb !== maxKb) return null;
+    return c;
+  } catch { return null; }
+}
+
+function writeScanCache(cacheFile, langSpec, maxKb, files, byRel) {
+  const out = { schema: 1, engine: engineStamp(), lang: langSpec, maxKb, at: new Date().toISOString(), files: {} };
+  for (const f of files) {
+    const pf = byRel.get(f.rel);
+    if (!pf) continue;                        // 读失败之类的，不缓存（下次重试）
+    out.files[f.rel] = { mtime: Math.round(f.mtime), bytes: f.bytes, lang: f.lang.id, part: pf };
+  }
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  fs.writeFileSync(cacheFile, JSON.stringify(out));
 }
 
 /**
@@ -891,14 +929,30 @@ export async function scan(opts) {
   // 同进程装 24 门峰值能到 4 GB 以上：扫描中途会 OOM，退出阶段（V8 析构）必崩。
   // 分进程之后：每个子进程只装一门（峰值就一门），父进程不装 wasm → 退出干净、退出码正确；
   // 某个子进程就算崩了，也只是"那一门没进地图"，其余照常，并且会明说。
-  const parts = [];
-  if (files.length) {
-    const langsWithFiles = [...byLang.keys()];
-    console.log(`  开始解析：${files.length} 个文件（${langsWithFiles.join(', ')}）`);
+  // ---------- 增量：先看缓存，没变的文件直接复用上次的解析结果 ----------
+  const cacheFile = path.join(outDir, CACHE_NAME);
+  const langSpec = opts.lang || 'auto';
+  const cache = opts.incremental ? readScanCache(cacheFile, langSpec, maxKb) : null;
+  const reused = new Map();          // rel -> 上次的解析结果
+  const freshFiles = [];             // 需要重新解析的
+  for (const f of files) {
+    const hit = cache && cache.files[f.rel];
+    if (hit && hit.mtime === Math.round(f.mtime) && hit.bytes === f.bytes && hit.lang === f.lang.id && hit.part) {
+      reused.set(f.rel, hit.part);
+    } else freshFiles.push(f);
+  }
+  if (opts.incremental) {
+    console.log(`  增量扫描：复用 ${reused.size} 个没变的文件，重新解析 ${freshFiles.length} 个` + (cache ? '' : '（没有可用缓存，本次算全量）'));
+  }
+
+  const freshParts = [];
+  if (freshFiles.length) {
+    const langsWithFiles = [...new Set(freshFiles.map((f) => f.lang.id))];
+    console.log(`  开始解析：${freshFiles.length} 个文件（${langsWithFiles.join(', ')}）`);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'code-atlas-'));
     const work = path.join(tmp, 'files.json');
     fs.writeFileSync(work, JSON.stringify({
-      files: files.map((f) => ({ abs: f.abs, rel: f.rel, root: f.root, bytes: f.bytes, mtime: f.mtime, lang: f.lang.id })),
+      files: freshFiles.map((f) => ({ abs: f.abs, rel: f.rel, root: f.root, bytes: f.bytes, mtime: f.mtime, lang: f.lang.id })),
     }));
     const NODE = process.env.NODE_BIN || process.execPath;   // 一般就是 node.exe；特殊情况可用 NODE_BIN 指定
     let n = 0;
@@ -911,7 +965,7 @@ export async function scan(opts) {
       });
       let ok = false;
       if (fs.existsSync(emit)) {
-        try { parts.push(JSON.parse(fs.readFileSync(emit, 'utf8'))); ok = true; } catch (e) { console.log(`  ⚠ ${langId} 的结果读不出来：${e.message}`); }
+        try { freshParts.push(JSON.parse(fs.readFileSync(emit, 'utf8'))); ok = true; } catch (e) { console.log(`  ⚠ ${langId} 的结果读不出来：${e.message}`); }
       }
       if (!ok) {
         const tail = String(r.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
@@ -922,7 +976,10 @@ export async function scan(opts) {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { }
   }
 
-  const { fileRecs, allTypes, allRefs, fileNamespaces, failures } = mergeParts(parts);
+  // 按 collectFiles 的顺序合并（缓存命中的 + 新解析的）：顺序稳定，只改几个文件时 id 不会乱跳
+  const byRel = new Map(reused);
+  for (const p of freshParts) for (const pf of p.files || []) byRel.set(pf.rel, pf);
+  const { fileRecs, allTypes, allRefs, fileNamespaces, failures } = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
 
   // ---- 建索引：符号表 ----
   const bySimpleName = new Map();
@@ -1077,7 +1134,11 @@ export async function scan(opts) {
       newestMtime: newestMtime ? new Date(newestMtime).toISOString() : null,
       git,
       scanMs: 0,
-      scanOptions: { lang: opts.lang || 'auto', maxKb, excludes, facets: facets.configPath },
+      scanOptions: {
+        lang: opts.lang || 'auto', maxKb, excludes, facets: facets.configPath,
+        // 增量：这次用了没、复用了多少（写进 bundle，报告和界面都能看出来）
+        incremental: opts.incremental ? { reused: reused.size, reparsed: freshFiles.length } : null,
+      },
       skipped,
       failures,
       ingest: opts.ingest || null,
@@ -1110,6 +1171,11 @@ export async function scan(opts) {
   };
 
   // （原来这里有个"释放解析器"的循环：解析已经挪到子进程里，父进程不再持有解析器，所以删掉了）
+
+  // 写回增量缓存（下次没变的文件就不用再解析了）
+  if (freshFiles.length || reused.size) {
+    try { writeScanCache(cacheFile, langSpec, maxKb, files, byRel); } catch (e) { console.log(`  （增量缓存没写成功：${e.message}；不影响这次扫描）`); }
+  }
 
   return { bundle, outDir, files, skipped, roots };
 }

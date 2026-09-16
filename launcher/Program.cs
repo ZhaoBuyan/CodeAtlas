@@ -53,6 +53,8 @@ namespace CodeAtlas
         public int WindowHeight { get; set; } = 900;
         /// <summary>要扫描的语言（逗号分隔的语言 id）；空串 = 自动（所有代码语言，配置文件不扫）</summary>
         public string Langs { get; set; } = "";
+        /// <summary>增量扫描：只重新解析改过的文件（默认关 = 每次全量）</summary>
+        public bool Incremental { get; set; }
         /// <summary>每个项目记一份（语言 / 规则文件 / 上次跑的时间）——再打开就不用重新配</summary>
         public Dictionary<string, ProjectRecord> Projects { get; set; } = new Dictionary<string, ProjectRecord>();
     }
@@ -458,6 +460,7 @@ namespace CodeAtlas
             args.Append(" --port ").Append(cfg.Port);
             // 语言：空串 = 引擎默认（auto）。显式选过就原样传过去。
             if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
+            if (cfg.Incremental) args.Append(" --incremental");   // 只重解析改过的文件
             // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
             if (!string.IsNullOrWhiteSpace(facets)) args.Append(" --facets \"").Append(facets.Trim()).Append('"');
             if (!open) args.Append(" --no-open");
@@ -509,6 +512,7 @@ namespace CodeAtlas
         private readonly Label _targetLabel = new Label();
         private Panel _bar;
         private readonly CheckBox _autoSwitch = new CheckBox();
+        private readonly CheckBox _inc = new CheckBox();
         private Process _proc;
         private string _url;
         private bool _webReady;
@@ -580,6 +584,14 @@ namespace CodeAtlas
             _autoSwitch.AutoSize = true;
             _autoSwitch.Click += (s, e) => { if (_autoSwitch.Checked && _url != null) ShowMap(); };
 
+            // 增量扫描（默认关）：只重新解析改过的文件；跨文件索引仍会整体重算
+            _inc.Text = "增量";
+            _inc.Checked = _cfg.Incremental;
+            _inc.ForeColor = Fg;
+            _inc.AutoSize = true;
+            _inc.Click += (s, e) => { _cfg.Incremental = _inc.Checked; Engine.SaveConfig(_cfg); Log(_inc.Checked ? "增量扫描：开（只重解析改过的文件）" : "增量扫描：关（每次全量）"); };
+            tips.SetToolTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。");
+
             _run.Text = "开跑";
             Style(_run, true);
             SetBtn(_run, true, true); // 必须让它处于"可用"状态（点击处理里会查 IsOn，漏了这行就会点了没反应）
@@ -618,7 +630,7 @@ namespace CodeAtlas
             _mcp.Click += (s, e) => { if (IsOn(_mcp)) CopyMcpConfig(); };
             tips.SetToolTip(_mcp, "把「让 AI 读这个项目」的 MCP 配置复制到剪贴板。\r\n粘进 Chatbox / Claude Desktop 等客户端的 mcpServers 里即可；指向当前扫描的输出目录。");
 
-            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _hint, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
+            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _inc, _hint, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
             _targetLabel = targetLabel;
             _bar.Resize += (s, e) => ApplyLayout();
 
@@ -704,7 +716,9 @@ namespace CodeAtlas
             int pathLeft = _targetLabel.Right + gap;
             _path.SetBounds(pathLeft, rowA, Math.Max(160, right - pathLeft), hCtrl);
 
-            _autoSwitch.Location = new Point(pad, rowB + (btnH - _autoSwitch.PreferredSize.Height) / 2);
+            int rowBCenter = rowB + btnH / 2;
+            _autoSwitch.Location = new Point(pad, rowBCenter - _autoSwitch.Height / 2);
+            _inc.Location = new Point(_autoSwitch.Right + (int)(14 * k), rowBCenter - _inc.Height / 2);
 
             int x = w - pad;
             foreach (var b in new[] { _mcp, _browser, _toggle, _stop, _langs, _wiz, _run })
@@ -712,7 +726,7 @@ namespace CodeAtlas
                 b.Location = new Point(x - b.PreferredSize.Width, rowB);
                 x = b.Left - gap;
             }
-            int hintLeft = _autoSwitch.Right + (int)(16 * k);
+            int hintLeft = _inc.Right + (int)(16 * k);
             _hint.SetBounds(hintLeft, rowB, Math.Max(60, x - gap - hintLeft), btnH + (int)(4 * k));
 
             _bar.Height = rowB + btnH + (int)(16 * k);
