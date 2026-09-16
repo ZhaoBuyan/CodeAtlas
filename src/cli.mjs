@@ -14,7 +14,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { scanToDisk, workerExtract, VERSION } from './scan.mjs';
+import { scanToDisk, workerExtract, draftFacets, VERSION } from './scan.mjs';
 import { LANGUAGES } from './languages.mjs';
 import { ingest } from './ingest.mjs';
 import { startMcp, listToolsText } from './mcp.mjs';
@@ -304,6 +304,34 @@ async function cmdExtractWorker(argv) {
   process.exit(0);
 }
 
+/**
+ * draft-facets：按目录结构草拟一份系统分组规则（不解析代码，秒出）。
+ *   atlas draft-facets <目录>              人看的预览 + 草案 JSON
+ *   atlas draft-facets <目录> --out 文件     写文件（首次运行向导走的就是这条）
+ *   atlas draft-facets <目录> --json        只输出 JSON（给程序读）
+ */
+function cmdDraftFacets(argv) {
+  const opts = parseArgs(argv);
+  const target = opts._[0];
+  if (!target) {
+    console.error('用法：atlas draft-facets <目录> [--out 文件] [--json] [--lang auto] [--maxkb 1024]');
+    process.exit(1);
+  }
+  const res = draftFacets({ roots: [target], lang: opts.lang, maxKb: opts.maxkb });
+  const json = JSON.stringify(res.config, null, 2) + '\n';
+  if (opts.out) {
+    const abs = path.resolve(opts.out);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, json);
+  }
+  if (opts.json !== undefined) { process.stdout.write(JSON.stringify(res, null, 2) + '\n'); return; }   // 给程序读：连预览和提示一起给
+  console.log(`\n按目录结构草拟了 ${res.preview.length} 个系统（共 ${res.files} 个文件）：\n`);
+  for (const p of res.preview) console.log(`  ${p.name.padEnd(18)} ${String(p.files).padStart(5)} 个文件`);
+  for (const n of res.notes) console.log(`  · ${n}`);
+  console.log(`\n${json}`);
+  console.log(opts.out ? `已写入：${path.resolve(opts.out)}\n` : '（加 --out <文件> 就能写出来）\n');
+}
+
 /** mcp：把 bundle 变成 AI 能查的接口（stdio JSON-RPC —— stdout 只能走协议，日志走 stderr） */
 function cmdMcp(argv) {
   const opts = parseArgs(argv);
@@ -347,6 +375,7 @@ const HELP = `Code Atlas v${VERSION}
   atlas ingest <目录|.dll|.exe|.jar> 没有源码的目标先反编译再扫
   atlas serve                       起本地服务（不重新扫描）
   atlas langs                       看支持哪些语言（加 --json 给程序读）
+  atlas draft-facets <目录>          按目录结构草拟一份分组规则（--out 写文件）
 
 常用选项：
   --out <目录>     输出目录（默认 dist）
@@ -378,7 +407,7 @@ function flushAndExit(code = 0) {
   else process.stdout.once('drain', done);
 }
 
-const COMMANDS = { scan: cmdScan, serve: cmdServe, ingest: cmdIngest, mcp: cmdMcp, langs: cmdLangs, __extract: cmdExtractWorker };
+const COMMANDS = { scan: cmdScan, serve: cmdServe, ingest: cmdIngest, mcp: cmdMcp, langs: cmdLangs, 'draft-facets': cmdDraftFacets, __extract: cmdExtractWorker };
 const [first, ...rest] = process.argv.slice(2);
 
 let run;

@@ -53,6 +53,62 @@ namespace CodeAtlas
         public int WindowHeight { get; set; } = 900;
         /// <summary>要扫描的语言（逗号分隔的语言 id）；空串 = 自动（所有代码语言，配置文件不扫）</summary>
         public string Langs { get; set; } = "";
+        /// <summary>每个项目记一份（语言 / 规则文件 / 上次跑的时间）——再打开就不用重新配</summary>
+        public Dictionary<string, ProjectRecord> Projects { get; set; } = new Dictionary<string, ProjectRecord>();
+    }
+
+    /// <summary>一个项目被记住的状态（键 = 目标路径）</summary>
+    internal sealed class ProjectRecord
+    {
+        public string Langs { get; set; } = "";
+        public string Facets { get; set; } = "";
+        public string LastRun { get; set; } = "";
+    }
+
+    /// <summary>草拟结果（引擎 draft-facets --json 的返回）</summary>
+    internal sealed class DraftResult
+    {
+        public DraftConfig Config { get; set; }
+        public List<string> Notes { get; set; } = new List<string>();
+        public List<DraftPreview> Preview { get; set; } = new List<DraftPreview>();
+        public int Files { get; set; }
+    }
+
+    internal sealed class DraftConfig
+    {
+        public string _comment { get; set; }
+        public List<string> Exclude { get; set; }
+        public List<DraftSystem> Systems { get; set; } = new List<DraftSystem>();
+    }
+
+    internal sealed class DraftPreview
+    {
+        public string Name { get; set; }
+        public int Files { get; set; }
+    }
+
+    /// <summary>一条系统规则（写进 facets 文件的就是它）</summary>
+    internal sealed class DraftSystem
+    {
+        public string Name { get; set; } = "";
+        public string Color { get; set; } = "#8b949e";
+        public List<string> Paths { get; set; }
+        public List<string> Files { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore] public int FileCount { get; set; }
+    }
+
+    /// <summary>写 facets 文件时的 JSON 风格（缩进、camelCase、不要 null 字段）</summary>
+    internal static class FacetJson
+    {
+        public static readonly JsonSerializerOptions Options = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            // 必须是 camelCase：引擎读的是 systems/paths/files/exclude（写 PascalCase 会静默失效，实际踩过）
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
+        public static readonly JsonSerializerOptions Read = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
     }
 
     /// <summary>一门语言在界面上的样子（来自引擎的 langs --json，启动器不自己维护语言表）</summary>
@@ -315,7 +371,43 @@ namespace CodeAtlas
             return JsonSerializer.Deserialize<LangInfo[]>(text, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? Array.Empty<LangInfo>();
         }
 
-        public static Process Start(string target, Config cfg, bool open, Action<string> onLine, Action<int> onExit)
+        /// <summary>草拟分组规则：调引擎的 draft-facets --json（只看目录结构，秒回）</summary>
+        public static DraftResult DraftFacets(Config cfg, string target, string langs)
+        {
+            string root = Resolve(null);
+            if (root == null) throw new InvalidOperationException("找不到引擎，没法草拟分组规则。");
+            string script = Path.Combine(root, "src", "cli.mjs");
+            string node = PickNode(cfg, root);
+            var args = new StringBuilder();
+            args.Append('"').Append(script).Append('"');
+            args.Append(" draft-facets \"").Append(target).Append("\" --json");
+            if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
+            var psi = new ProcessStartInfo(node, args.ToString())
+            {
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            };
+            var err = new StringBuilder();
+            var proc = new Process { StartInfo = psi };
+            proc.ErrorDataReceived += (s, e) => { if (e.Data != null) err.AppendLine(e.Data); };
+            proc.Start();
+            proc.BeginErrorReadLine();
+            string text = proc.StandardOutput.ReadToEnd();
+            if (!proc.WaitForExit(60000)) { try { proc.Kill(true); } catch { } throw new InvalidOperationException("草拟超时（60 秒）。"); }
+            if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("草拟没有返回结果。" + (err.Length > 0 ? "\n" + err.ToString().Trim() : ""));
+            var res = JsonSerializer.Deserialize<DraftResult>(text, FacetJson.Read);
+            if (res?.Config == null) throw new InvalidOperationException("草拟结果读不出来。");
+            // 把预览里的文件数贴到各系统上（向导要显示）
+            for (int i = 0; i < res.Config.Systems.Count && i < res.Preview.Count; i++) res.Config.Systems[i].FileCount = res.Preview[i].Files;
+            return res;
+        }
+
+        public static Process Start(string target, Config cfg, string langs, string facets, bool open, Action<string> onLine, Action<int> onExit)
         {
             string dev = FindDevRoot();
             string root = dev ?? Payload.Ensure(null);
@@ -335,7 +427,9 @@ namespace CodeAtlas
             args.Append(" --out \"").Append(cfg.Out).Append('"');
             args.Append(" --port ").Append(cfg.Port);
             // 语言：空串 = 引擎默认（auto）。显式选过就原样传过去。
-            if (!string.IsNullOrWhiteSpace(cfg.Langs)) args.Append(" --lang \"").Append(cfg.Langs.Trim()).Append('"');
+            if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
+            // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
+            if (!string.IsNullOrWhiteSpace(facets)) args.Append(" --facets \"").Append(facets.Trim()).Append('"');
             if (!open) args.Append(" --no-open");
 
             var psi = new ProcessStartInfo(node, args.ToString())
@@ -378,6 +472,7 @@ namespace CodeAtlas
         private readonly Button _pickDir = new Button();
         private readonly Button _pickFile = new Button();
         private readonly Button _langs = new Button();
+        private readonly Button _wiz = new Button();
         private readonly Label _status = new Label();
         private readonly Label _hint = new Label();
         private readonly Label _targetLabel = new Label();
@@ -476,9 +571,16 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"开跑"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            tips.SetToolTip(_langs, "选择要扫描的语言（默认自动：19 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。");
+            tips.SetToolTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。");
 
-            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _hint, _run, _stop, _toggle, _browser, _langs });
+            // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
+            _wiz.Text = "项目设置…";
+            Style(_wiz);
+            SetBtn(_wiz, true);
+            _wiz.Click += (s, e) => { if (IsOn(_wiz)) OpenWizard(_path.Text.Trim().Trim('"')); };
+            tips.SetToolTip(_wiz, "首次配置一个项目：选目标 → 选语言 → 自动草拟一套\"系统分组规则\"（可改名/换色/取消） → 存下来并开跑");
+
+            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _hint, _run, _stop, _toggle, _browser, _langs, _wiz });
             _targetLabel = targetLabel;
             _bar.Resize += (s, e) => ApplyLayout();
 
@@ -565,7 +667,7 @@ namespace CodeAtlas
             _autoSwitch.Location = new Point(pad, rowB + (btnH - _autoSwitch.PreferredSize.Height) / 2);
 
             int x = w - pad;
-            foreach (var b in new[] { _browser, _toggle, _stop, _langs, _run })
+            foreach (var b in new[] { _browser, _toggle, _stop, _langs, _wiz, _run })
             {
                 b.Location = new Point(x - b.PreferredSize.Width, rowB);
                 x = b.Left - gap;
@@ -609,6 +711,12 @@ namespace CodeAtlas
                     string dir = Payload.Ensure(Log);
                     Ui(() => _status.Text = dir != null ? "内置引擎就绪，点「开跑」开始" : "就绪");
                 });
+            }
+            // 第一次碰到这个项目（没有记录）才引导；已经有记录的就不打扰（再打开=零操作）
+            string curTarget = _path.Text.Trim().Trim('"');
+            if (curTarget.Length == 0 || !_cfg.Projects.ContainsKey(curTarget))
+            {
+                BeginInvoke(new Action(() => { if (!IsDisposed) OpenWizard(_path.Text.Trim().Trim('"')); }));
             }
             // 内嵌地图用 WebView2；没装运行时就退回系统浏览器（功能不受影响）
             try
@@ -691,6 +799,49 @@ namespace CodeAtlas
             if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.FileName;
         }
 
+        // ---------- 项目记录：记住每个项目的语言 / 规则文件 ----------
+        /// <summary>这个项目用哪套语言：项目记录优先，其次工具栏上的全局默认</summary>
+        private string TargetLangs(string target)
+        {
+            if (!string.IsNullOrWhiteSpace(target) && _cfg.Projects.TryGetValue(target, out var r) && !string.IsNullOrWhiteSpace(r.Langs)) return r.Langs;
+            return _cfg.Langs;
+        }
+
+        /// <summary>这个项目的分组规则文件（没配过就空 = 让引擎自己找）</summary>
+        private string TargetFacets(string target)
+        {
+            if (!string.IsNullOrWhiteSpace(target) && _cfg.Projects.TryGetValue(target, out var r)) return r.Facets;
+            return null;
+        }
+
+        /// <summary>项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（可一并开跑）</summary>
+        private void OpenWizard(string target)
+        {
+            LangInfo[] langs;
+            try { langs = Engine.ListLangs(_cfg); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "读不到语言表：" + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            using var wiz = new ProjectWizard(langs, target, TargetLangs(target), TargetFacets(target),
+                (t, lg) => Engine.DraftFacets(_cfg, t, lg));
+            if (wiz.ShowDialog(this) != DialogResult.OK) return;
+
+            _path.Text = wiz.Target;
+            _cfg.LastPath = wiz.Target;
+            _cfg.Langs = wiz.Langs;                    // 工具栏那个按钮管的是"默认值"，向导里选了就以它为准
+            if (!_cfg.Projects.TryGetValue(wiz.Target, out var rec)) { rec = new ProjectRecord(); _cfg.Projects[wiz.Target] = rec; }
+            rec.Langs = wiz.Langs;
+            rec.Facets = wiz.FacetsPath;
+            Engine.SaveConfig(_cfg);
+            _langs.Text = LangsButtonText();
+            ApplyLayout();
+            Log("项目设置已保存：语言 " + LangsSummary());
+            Log("  分组规则：" + (string.IsNullOrWhiteSpace(wiz.FacetsPath) ? "（这次没生成）" : wiz.FacetsPath));
+            if (wiz.StartNow) Run();
+        }
+
         /// <summary>选语言：列表来自引擎（langs --json），选完存进 launcher.config.json</summary>
         private void PickLangs()
         {
@@ -764,13 +915,20 @@ namespace CodeAtlas
             _log.Clear();
             ShowLog();
             Log($"> 开始：{target}");
+            // 记下"这个项目跑过"（下次打开就不弹向导了）
+            if (!_cfg.Projects.TryGetValue(target, out var projRec)) { projRec = new ProjectRecord(); _cfg.Projects[target] = projRec; }
+            projRec.LastRun = DateTime.Now.ToString("s");
+            Engine.SaveConfig(_cfg);
 
             try
             {
                 // 先把引擎落实（内置的话首次会释放，日志里能看到进度），再交给引擎跑
                 var (engRoot, engNode) = Engine.ResolveAll(_cfg, Log);
                 if (engRoot != null) Log("> 引擎：" + engRoot + Environment.NewLine + "> node：" + engNode);
-                _proc = Engine.Start(target, _cfg, false, OnLine, code =>
+                string effLangs = TargetLangs(target);
+                string effFacets = TargetFacets(target);
+                if (!string.IsNullOrWhiteSpace(effFacets)) Log("> 分组规则：" + effFacets);
+                _proc = Engine.Start(target, _cfg, effLangs, effFacets, false, OnLine, code =>
                 {
                     Ui(() =>
                     {
@@ -1016,7 +1174,7 @@ namespace CodeAtlas
         public static void Run(string[] args)
         {
             string target = null, outDir = "dist", logPath = "launcher.log";
-            string langs = null;
+            string langs = null, facets = null, draftTarget = null, draftOut = null;
             bool listLangs = false, extractOnly = false;
             int port = 5173;
             bool open = false;
@@ -1029,6 +1187,9 @@ namespace CodeAtlas
                     case "--port": port = int.Parse(args[++i]); break;
                     case "--log": logPath = args[++i]; break;
                     case "--lang": langs = args[++i]; break;
+                    case "--facets": facets = args[++i]; break;
+                    case "--draft-facets": draftTarget = args[++i]; break;
+                    case "--draft-out": draftOut = args[++i]; break;
                     case "--list-langs": listLangs = true; break;
                     case "--extract": extractOnly = true; break;
                     case "--open": open = true; break;
@@ -1061,8 +1222,23 @@ namespace CodeAtlas
                     File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
                     return;
                 }
+                // --draft-facets：只验证"草拟分组规则"这条链路（可选把草案写出来）
+                if (draftTarget != null)
+                {
+                    var res = Engine.DraftFacets(cfg, draftTarget, cfg.Langs);
+                    Log("草拟：文件 " + res.Files + " · 系统 " + res.Config.Systems.Count);
+                    foreach (var pv in res.Preview) Log($"  {pv.Name}  {pv.Files} 个文件");
+                    foreach (var n in res.Notes) Log("  提示：" + n);
+                    if (draftOut != null)
+                    {
+                        File.WriteAllText(draftOut, JsonSerializer.Serialize(res.Config, FacetJson.Options), Encoding.UTF8);
+                        Log("已写出：" + draftOut);
+                    }
+                    File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
+                    return;
+                }
                 if (target == null) throw new InvalidOperationException("缺 --path");
-                var p = Engine.Start(target, cfg, open, Log, code => Log("exit = " + code));
+                var p = Engine.Start(target, cfg, langs ?? cfg.Langs, facets, open, Log, code => Log("exit = " + code));
                 p.WaitForExit(600000);
                 if (!p.HasExited) { p.Kill(true); Log("超时，已结束"); }
             }

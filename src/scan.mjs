@@ -513,6 +513,88 @@ function globToRe(pattern) {
   return new RegExp(`^${esc}$`, 'i');
 }
 
+/** 草拟分组规则时用的颜色列（和示例文件同一套） */
+const DRAFT_COLORS = ['#58a6ff', '#f778ba', '#3fb950', '#d29922', '#bc8cff', '#39c5cf', '#f0883e', '#d29922'];
+const DRAFT_GREY = '#8b949e';
+/** 这些目录名一看就是人家拿来的代码/依赖，草拟时直接建议排除 */
+const DRAFT_EXCLUDE_HINTS = new Set(['vendor', 'third_party', 'thirdparty', 'third-party', 'external', 'reference', 'references', 'deps', 'submodules']);
+
+/**
+ * 草拟分组规则：**只看目录结构，不解析代码**，所以是秒出。
+ * 给"首次运行向导"和 `atlas draft-facets` 命令用。
+ *
+ * @param {{roots: string|string[], lang?: string, maxKb?: number}} opts
+ * @returns {{config: object, notes: string[], preview: {name: string, files: number}[], files: number}}
+ */
+export function draftFacets(opts) {
+  const roots = Array.isArray(opts.roots) ? opts.roots : [opts.roots];
+  const languages = resolveLanguages(opts.lang || 'auto');
+  const { files } = collectFiles(roots, { languages, maxKb: Number(opts.maxKb || 1024), excludes: [] });
+  const notes = [];
+
+  /** 文件在第 level 层归到哪个 key（直接躺在这一层的文件归到上一层） */
+  const keyOf = (rel, level) => {
+    const segs = rel.split('/');
+    if (segs.length <= level) return level <= 1 ? '(根目录)' : keyOf(rel, level - 1);
+    return segs.slice(0, level).join('/');
+  };
+  const groupAt = (level) => {
+    const m = new Map();
+    for (const f of files) {
+      const k = keyOf(f.rel, level);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(f);
+    }
+    return m;
+  };
+
+  let level = 1;
+  let groups = groupAt(1);
+  const bigAt = (m) => [...m.entries()].filter(([k, fs]) => k !== '(根目录)' && fs.length >= 3);
+  if (bigAt(groups).length < 3) {
+    const g2 = groupAt(2);
+    if (bigAt(g2).length > bigAt(groups).length) {
+      groups = g2;
+      level = 2;
+      notes.push('顶层目录太集中（大目录不够 3 个），改按第 2 层目录草拟');
+    }
+  }
+
+  const excluded = [];
+  const systems = [];
+  const small = [];
+  const rootFiles = [];
+  for (const [key, fs] of [...groups.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    if (key === '(根目录)') { rootFiles.push(...fs); continue; }
+    const dirName = key.split('/').pop();
+    // 目录名以这些词开头就算“拿来的代码”（reference-yySync / vendor_js / third_party…）
+    if ([...DRAFT_EXCLUDE_HINTS].some((h) => dirName.toLowerCase().startsWith(h))) { excluded.push(dirName); continue; }
+    if (fs.length >= 3 && systems.length < 8) systems.push({ key, name: dirName, files: fs.length });
+    else small.push({ key, files: fs.length });
+  }
+
+  const out = [];
+  systems.forEach((s, i) => out.push({ name: s.name, color: DRAFT_COLORS[i % DRAFT_COLORS.length], paths: [`${s.key}/**`], _files: s.files }));
+  if (small.length) out.push({ name: '其他', color: DRAFT_GREY, paths: small.map((s) => `${s.key}/**`), _files: small.reduce((a, s) => a + s.files, 0) });
+  // 根目录放最后：`files: ["*"]` 会按“文件名”命中，所以只能当兜底规则（规则是第一条命中生效）
+  if (rootFiles.length) out.push({ name: '根目录', color: DRAFT_GREY, files: ['*'], _files: rootFiles.length });
+
+  if (excluded.length) notes.push(`建议排除：${excluded.join(', ')}（一看就是第三方/参考代码的目录名）`);
+  if (!systems.length) notes.push('没找到够大的目录（>=3 个文件）——草案可能不好用，建议手动写规则');
+
+  const config = {
+    _comment: 'Code Atlas 系统分组规则（由首次运行向导按目录结构草拟，可直接改）。规则按顺序匹配，第一条命中生效；匹配对象 = 文件相对路径 / 文件名 / 命名空间 / 完整限定名（glob，** 表示任意层级）。exclude 是额外忽略的目录名。',
+    ...(excluded.length ? { exclude: excluded } : {}),
+    systems: out.map(({ name, color, paths, files }) => ({ name, color, ...(paths ? { paths } : {}), ...(files ? { files } : {}) })),
+  };
+  return {
+    config,
+    notes,
+    files: files.length,
+    preview: out.map((s) => ({ name: s.name, files: s._files })),
+  };
+}
+
 /** 找分组配置：--facets 指定 > 扫描根下的 atlas.facets.json > 项目 configs/<目录名>.facets.json */
 function loadFacets(opts, roots) {
   const tries = [];

@@ -40,6 +40,9 @@ node src/cli.mjs "C:/path/to/App.dll"
 node src/cli.mjs scan   <目录...> [--out dist] [--lang auto] [--maxkb 1024] [--exclude a,b] [--facets 规则.json] [--open]
 node src/cli.mjs ingest <目录|.dll|.exe|.jar> [--out dist] [--work ingest/<名>] [--dll "App*.dll"] [--decompiler cfr.jar] [--open]
 node src/cli.mjs serve  [--out dist] [--port 5173]
+node src/cli.mjs langs                      # 看支持哪些语言（--json 给程序读）
+node src/cli.mjs draft-facets <目录> [--out 规则.json]   # 按目录结构草拟一份系统分组规则
+node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服务
 ```
 
 - `--no-open` 不自动开浏览器；`--port` 端口被占用会自动往后找
@@ -50,7 +53,11 @@ node src/cli.mjs serve  [--out dist] [--port 5173]
 ## 启动器（`CodeAtlas.exe`）
 
 - 是个 .NET 9 WinForms 小外壳：只负责找到引擎（`node` + `src/cli.mjs`）、把路径递过去、把日志和网址给你。
-- **勾选要扫的语言**：工具栏上的「语言：自动」按钮 → 弹窗勾选（23 门代码语言 + 5 种文件级格式），选完记住。默认「自动」= 所有代码语言、配置文件格式不扫。
+- **首次配置一个项目（项目设置向导）**：工具栏「项目设置…」→ 三步走完就行：
+  ① 选目标（目录 / `.dll` / `.exe` / `.jar`） ② 选语言 ③ **按目录结构自动草拟一套「系统分组规则」**（可取消勾选、改名、换色）→ 保存并开跑。
+  规则默认写到 `%LocalAppData%\CodeAtlas\configs\<项目名>.facets.json`（**私有**，不进你的项目）；勾上「写进项目目录」就写 `<项目>/atlas.facets.json`（跟项目走、能共享）。
+  配过的项目会记住（语言 + 规则），**下次打开不再弹向导、也不用重配**（再打开 = 零操作）。
+  CLI 等价物：`node src/cli.mjs draft-facets <目录> [--out 文件]`——只看目录结构、不解析代码，秒出。
   语言表由引擎提供（`node src/cli.mjs langs`），启动器不自己维护一份——加语言只要改 `languages.mjs`。
   选的语言写进 `launcher.config.json` 的 `Langs`（逗号分隔；空 = 自动）。注意这是**全局设置**，不跟项目走。
 - 需要装了 **Node.js**（引擎是 Node 写的）；不需要 .NET SDK（但需要 .NET 9 运行时，.NET 9 SDK 自带）。
@@ -201,6 +208,9 @@ node src/cli.mjs langs [--json]                    # 看支持哪些语言（--j
 2. `<扫描根>/atlas.facets.json`
 3. 本项目 `configs/<扫描目录名>.facets.json`
 
+懒得手写？**让工具草拟一份**：启动器「项目设置…」向导的第三步，或者
+`node src/cli.mjs draft-facets <目录> --out 输出.json`（只看目录结构、不解析代码，秒出；结果里有 `_comment` 说明格式，直接改就行）。
+
 ```json
 {
   "exclude": ["third_party"],
@@ -344,4 +354,5 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤
 - [x] 打包：完全版（内置 Node）/ 精简版（要求系统 Node）两个单文件 exe，不做安装器
-- [ ] 首次运行向导 · 增量扫描 · AI 接口补强（MCP 配置一键复制 / token 预算导出 / 影响面分析）
+- [x] 首次运行向导（选项目 → 草拟分组规则 → 勾语言 → 保存并开跑；配过的项目再打开=零操作）
+- [ ] 增量扫描 · AI 接口补强（MCP 配置一键复制 / token 预算导出 / 影响面分析）

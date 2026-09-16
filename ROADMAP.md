@@ -1,7 +1,7 @@
 # Code Atlas — 进展与后续（工作交接文件）
 
 > 这份文件是"从对话里搬出来"的项目状态：任何新会话（哪怕上下文被压缩过）先读它，就能接着干。
-> 最后更新：2026-09-17（第 2 部分 ✅；打包发行 ✅；**多语法包崩溃已修**（按语言分进程）；下一步：补语言）
+> 最后更新：2026-09-17（第 2 部分 ✅；打包 ✅；多语法包崩溃 ✅；语言 23 门 ✅；**首次运行向导 ✅**）
 
 ## 这是什么
 
@@ -87,7 +87,12 @@
 4. [x] **补语言（第 1 批）**：新增 **ReScript / TLA+ / SystemRDL / Emacs Lisp**（节点名均从 `tests/probe-nodes.mjs` 实测）——引擎里现有的 24 门变 28 个 profile，回归 **23/23 绿**。
    顺带改了 `nameOf`：wrapper 分支支持 `pattern` 字段与 ID 兜底（ReScript 的 let / SystemRDL 的 id），副作用是 OCaml 顶层 `let` 从此也有名字→多一个合成 module 节点（已更新期望值，跟 Go/C/Rust 一致）。
    剩下（ABI 审计：36 个里 32 个能加载）：“能加载但缺 profile”只剩 `embedded_template`（模板，价值低）；难的三门：`objc`（.m 跟 MATLAB 撞）、`elixir`（全 call 节点）、`vue`（要内嵌 JS）；4 个加载即坏的：`dart` `/`elm` `ql` `ruby`（运行时锁在 0.20.8）。
-5. **首次运行向导**（选项目 → **自动草拟系统分组规则** → 勾语言 → 开跑；再打开=零操作）
+5. [x] **首次运行向导（项目设置）**：启动器工具栏「项目设置…」→ 三步：① 选目标 ② 选语言（复用 LangPicker）③ **按目录草拟分组规则**（可取消勾选 / 改名 / 换色）→ 保存并开跑。
+   - 草拟在引擎里：新命令 `atlas draft-facets <目录> [--out 文件] [--json]`（只看目录结构、不解析代码，秒出；目录太集中会自动退到第 2 层；`vendor/third_party/reference*` 这类目录名自动建议排除；顶层散文件归到最后一条「根目录」规则）。
+   - 规则默认写 `%LocalAppData%\CodeAtlas\configs\<项目名>.facets.json`（私有），另给「写进项目目录 atlas.facets.json」勾选；启动器把路径记进 `launcher.config.json` 的 `Projects`，并用 `--facets` 显式传下去。
+   - 「再打开=零操作」：`Projects` 里已有记录的项目不弹向导；没记录才弹（不做自动开跑）。
+   - 已验：无头 `--draft-facets` 可用；从零跟向导点到底 → 写出规则文件（**camelCase，引擎认得**）→ 开跑后地图按 6 个系统分组；第二次启动只看到主窗、不再弹向导。
+   - 待办：草拟目前**只看目录**，按命名空间/类型再细化留作后续（扫完一遍后做更准）。
 6. **增量扫描**（做成**可选**：默认全量；解析可增量，跨文件索引仍需整体重算）
 7. **AI 接口补强**：
    - 启动器里"一键复制 MCP 配置"
@@ -136,6 +141,8 @@ tools/build-payload.mjs  打包引擎：src/web/configs/28 个 wasm/d3 → zip�
 THIRD-PARTY-NOTICES.md   第三方组件与许可证（原文照拄，也在解包目录里）
 publish-sc/ publish-lite/ 两个发行版构建产物（exe 单文件，不入库；npm run publish 重新生成）
 launcher/          .NET WinForms 启动器（构建成根目录 CodeAtlas.exe）
+    ├ Program.cs        主窗/语言勾选/引擎接线/项目记录（Projects）
+    └ ProjectWizard.cs  首次运行向导（三步）+ 输入小弹窗
 configs/           各项目的系统分组规则 <项目名>.facets.json
 tests/             语言回归 + MCP 自检 + 三个探针
 ```

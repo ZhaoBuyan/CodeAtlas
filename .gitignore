@@ -29,3 +29,4 @@ launcher/payload*.zip.stamp
 # 各项目自己的分组规则（跟具体项目绑，不进仓库；要演示格式就看 example.facets.json）
 configs/*.facets.json
 !configs/example.facets.json
+atlas.facets.json
