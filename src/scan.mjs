@@ -247,13 +247,24 @@ function parseImport(text) {
 /** 分节线这类装饰性注释（===== Win32 =====），不是“说明”，也不能并进说明里 */
 const DECORATION_RE = /[=\-*_~#]{4,}/;
 
+/** 结尾是中日韩文字或全角标点：这种地方断行不该补空格 */
+const CJK_TAIL_RE = /[\u3000-\u303F\u4E00-\u9FFF\uFF01-\uFF65]$/;
+
 /** 从注释里抽出人能读的“说明”（C# 的 /// summary、Java/TS 的块注释都吃） */
 function cleanDoc(text) {
-  let t = text
+  const parts = text
     .replace(/^\/\*\*?/, '').replace(/\*\/$/, '')
     .split(/\r?\n/)
     .map((l) => l.replace(/^\s*\/\/\/?/, '').replace(/^\s*\*\/?/, '').trim())
-    .join(' ')
+    .filter((l) => l !== '');
+  // 行间怎么接：中文 / 全角标点结尾处不插空格（“…推送。” + “显示优先级…” → “推送。显示优先级”），
+  // 其余照旧一个空格 —— 中文说明里 “。 显示” 这种空档很扎眼
+  let t = '';
+  for (const l of parts) {
+    if (t !== '' && !CJK_TAIL_RE.test(t)) t += ' ';
+    t += l;
+  }
+  t = t
     .replace(/<summary>([\s\S]*?)<\/summary>/i, '$1')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
