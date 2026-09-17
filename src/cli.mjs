@@ -24,6 +24,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, '..', 'web');
 const DEFAULT_PORT = 5173;
 
+/** 把 URL 路径拼到目录里，并确认结果没跑出这个目录（挡 ../ 穿越）；越界返回 null */
+function insideDir(dir, rel) {
+  const base = path.resolve(dir);
+  const p = path.resolve(base, rel);
+  return p === base || p.startsWith(base + path.sep) ? p : null;
+}
+
 function parseArgs(argv) {
   const opts = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -182,7 +189,16 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
   if (!fs.existsSync(bundlePath)) throw new Error(t(`找不到 ${bundlePath}，先扫描一次`, `cannot find ${bundlePath} — run a scan first`));
 
   const server = http.createServer((req, res) => {
-    const url = decodeURIComponent((req.url || '/').split('?')[0]);
+    let url;
+    try {
+      url = decodeURIComponent((req.url || '/').split('?')[0]);
+    } catch {
+      // 非法百分号编码（如 /%zz）：浏览器不会发，但扫描器 / 插件 / 手敲会。
+      // 不接住的话 URIError 会停掉整个进程（实测），地图就“突然打不开”了 —— 回 400 就好。
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('400 bad request');
+      return;
+    }
     let file;
     if (url === '/' || url === '/index.html') {
       // 把语言注入页面：前端靠 window.CODEATLAS_LANG 决定显示哪一套文案
@@ -195,9 +211,10 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
     }
     else if (url === '/data/bundle.json') file = bundlePath;
     else if (url === '/vendor/d3.js') file = path.join(HERE, '..', 'node_modules', 'd3', 'dist', 'd3.min.js');
-    else if (url.startsWith('/web/')) file = path.join(WEB_DIR, url.slice(5));
-    else file = path.join(WEB_DIR, url.replace(/^\/+/, ''));
-    if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    else if (url.startsWith('/web/')) file = insideDir(WEB_DIR, url.slice(5));
+    else file = insideDir(WEB_DIR, url.replace(/^\/+/, ''));
+    // file 可能是 null（想往外爬，比如 /../package.json）→ 当成“不存在”处理
+    if (!file || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(`404 ${url}`);
       return;

@@ -1235,6 +1235,9 @@ export async function scan(opts) {
       seen.add(ns);
       ensureNs(ns).files.push(f.id);
     }
+    // 没有命名空间的文件（JS / TS / Shell 这类）也要挂到它类型所在的那个合成节点上，
+    // 否则 root / (global) 的 allFiles 会少算（实测：114 个文件 → 0）
+    if (!f.namespaces.length) ensureNs('(global)').files.push(f.id);
   }
   for (const t of allTypes) {
     const node = ensureNs(t.ns || '(global)');

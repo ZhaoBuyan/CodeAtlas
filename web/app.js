@@ -265,10 +265,10 @@ function renderTopList() {
 // ---------------------------------------------------------------------------
 function metricOf(t) {
   switch (state.metric) {
-    case 'loc': return t.loc;
-    case 'complexity': return t.complexity;
-    case 'members': return Object.values(t.members).reduce((a, b) => a + b, 0);
-    case 'fanIn': return t.fanIn + 1;
+    case 'loc': return t.loc || 1;
+    case 'complexity': return t.complexity || 1;
+    case 'members': return Object.values(t.members || {}).reduce((a, b) => a + b, 0) || 1;
+    case 'fanIn': return (t.fanIn || 0) + 1;
     default: return t.code || 1;
   }
 }
@@ -452,7 +452,13 @@ function draw() {
   const chart = $('#chart');
   const w = Math.max(chart.clientWidth, 0), h = Math.max(chart.clientHeight, 0);
   const full = buildTree();
-  const target = full ? (state.focus ? findGroup(full, state.focus) : full) : null;
+  // 聚焦路径可能来自老链接 / 手改的 hash：树里找不到就当没聚焦 ——
+  // 否则 target 为 null，页面整片空白还配一句误导的“没有符合筛选的类型”
+  let target = full;
+  if (full && state.focus) {
+    target = findGroup(full, state.focus) || null;
+    if (!target) state.focus = '';
+  }
   let shown = 0;
   chart.innerHTML = '';
   renderCrumbs();
@@ -795,15 +801,22 @@ function select(id) {
   draw();
 }
 
+// 永久链接的参数只认这些值：老链接 / 手改的 hash 不能让页面进入非法状态（比如 by=bogus → 空白）
+const HASH_BY = ['system', 'dir', 'ns', 'file', 'flat'];
+const HASH_VIEW = ['treemap', 'tree', 'graph', 'matrix'];
+const HASH_COLOR = ['file', 'group', 'kind'];
+
 function readHash() {
   const p = new URLSearchParams(location.hash.replace(/^#/, ''));
-  if (p.get('by')) state.groupBy = p.get('by');
-  if (p.get('d')) state.groupDepth = Number(p.get('d'));
-  if (p.get('v')) state.view = p.get('v');
+  const pick = (k, allow) => (allow.includes(p.get(k)) ? p.get(k) : null);
+  const by = pick('by', HASH_BY); if (by) state.groupBy = by;
+  const view = pick('v', HASH_VIEW); if (view) state.view = view;
+  const color = pick('c', HASH_COLOR); if (color) state.colorMode = color;
+  const depth = Number(p.get('d'));
+  if (Number.isInteger(depth) && depth >= 0 && depth <= 4) state.groupDepth = depth;
   if (p.get('g')) state.focus = p.get('g');
   if (p.get('t')) state.selected = Number(p.get('t'));
   if (p.get('m') && METRICS[p.get('m')]) state.metric = p.get('m');
-  if (p.get('c')) state.colorMode = p.get('c');
   if (p.get('dep') === '1') state.depFocus = true;
   if (p.get('nogen') === '1') state.hideGenerated = true;
   if (p.get('q')) state.q = p.get('q').toLowerCase();
