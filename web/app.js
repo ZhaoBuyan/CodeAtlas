@@ -787,7 +787,7 @@ function showTip(ev, d) {
   tip.classList.remove('hidden');
   tip.innerHTML = `<b>${esc(t.name)}</b> <span class="muted">${esc(t.kind)}${t.system ? ' · ' + esc(sysLabel(t.system)) : ''}</span>
 ${esc(f.path)}:${t.line}
-${T(`代码 ${fmt(t.code)} 行`, `${fmt(t.code)} lines of code`)}${T(' · 复杂度 ', ' · complexity ')}${t.complexity} · fanIn ${t.fanIn} / fanOut ${t.fanOut}${t.doc ? `\n\n${esc(t.doc)}` : ''}`;
+${T(`代码 ${fmt(t.code)} 行（类型区间）`, `${fmt(t.code)} lines of code (type range)`)}${T(' · 复杂度 ', ' · complexity ')}${t.complexity} · fanIn ${t.fanIn} / fanOut ${t.fanOut}${t.doc ? `\n\n${esc(t.doc)}` : ''}`;
   tip.style.left = Math.min(ev.clientX + 14, innerWidth - 400) + 'px';
   tip.style.top = Math.min(ev.clientY + 14, innerHeight - 90) + 'px';
 }
@@ -1056,7 +1056,7 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
     <div class="kv">
       <dt>${T('文件', 'File')}</dt><dd>${esc(f.path)}:${t.line}
         <button class="mini" id="copyPath">${T('复制', 'Copy')}</button></dd>
-      <dt>${T('行数', 'Lines')}</dt><dd>${fmt(t.loc)}${T('（代码 ', ' (code ')}${fmt(t.code)}${T(' / 注释 ', ' / comment ')}${fmt(t.comment)}${T('）', ')')}</dd>
+      <dt>${T('行数（类型区间）', 'Lines (type range)')}</dt><dd>${fmt(t.loc)}${T('（代码 ', ' (code ')}${fmt(t.code)}${T(' / 注释 ', ' / comment ')}${fmt(t.comment)}${T('）', ')')}</dd>
       <dt>${T('复杂度', 'Complexity')}</dt><dd>${t.complexity} <span class="muted">${T('估算', 'estimated')}</span></dd>
       <dt>${T('成员', 'Members')}</dt><dd>${memberRows.length ? memberRows.map(([k, v]) => `${esc(k)} ${v}`).join(' · ') : '—'}</dd>
       <dt>${T('依赖', 'Dependencies')}</dt><dd>fanIn ${t.fanIn} · fanOut ${t.fanOut}</dd>

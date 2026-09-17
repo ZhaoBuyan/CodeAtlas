@@ -271,7 +271,7 @@ function toolSymbol(idx, a) {
   const lines = [];
   lines.push(`${t.fqn}  [${t.kind}]${t.tags?.length ? `  (${t.tags.join(', ')})` : ''}`);
   lines.push(T(`文件：${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   系统：${t.system ? sysLabel(t.system) : '（未分组）'}${t.systemRule ? `（规则 ${t.systemRule}）` : ''}`, `File: ${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   System: ${t.system ? sysLabel(t.system) : '(ungrouped)'}${t.systemRule ? ` (rule ${t.systemRule})` : ''}`));
-  lines.push(T(`规模：${t.code} 行代码 · 复杂度≈${t.complexity} · 成员 ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`, `Size: ${t.code} lines of code · complexity≈${t.complexity} · members ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none'}`));
+  lines.push(T(`规模：${t.code} 行代码（该类型区间）· 复杂度≈${t.complexity} · 成员 ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`, `Size: ${t.code} lines of code (this type's range) · complexity≈${t.complexity} · members ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none'}`));
   lines.push(T(`依赖：被 ${t.fanIn} 处引用 · 引用了 ${t.fanOut} 个`, `Dependencies: referenced by ${t.fanIn} · references ${t.fanOut}`));
   if (t.bases?.length) lines.push(T(`基类/接口：${t.bases.join(', ')}`, `Base types / interfaces: ${t.bases.join(', ')}`));
   if (f?.errors) lines.push(T(`注意：该文件有 ${f.errors} 处解析异常，数据可能不全`, `Note: this file has ${f.errors} parse errors — its data may be incomplete`));
@@ -337,7 +337,7 @@ function toolFile(idx, a) {
   if (!f) return T(`没有匹配 "${a.path}" 的文件。用 search 可以按文件名片段搜符号。`, `No file matches "${a.path}". Use search to find symbols by file-name fragment.`);
   const types = idx.b.types.filter((t) => t.file === f.id);
   const lines = [
-    T(`${f.path}  [${f.lang}]  ${f.loc} 行（代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines (code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
+    T(`${f.path}  [${f.lang}]  ${f.loc} 行（整文件：代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines (whole file: code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
   ];
   if (f.errors) lines.push(T(`注意：${f.errors} 处解析异常`, `Note: ${f.errors} parse errors`));
   lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.name}[${t.kind}]`).join('  '));

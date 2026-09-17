@@ -292,8 +292,8 @@ node src/cli.mjs langs [--json]                    # 看支持哪些语言（--j
 | --- | --- |
 | `source` | 扫描根、文件数、**版本戳**（git commit + 是否有未提交改动；非 git 时用时间戳）、扫描耗时 |
 | `languages` | 每种语言的文件数 / 行数 |
-| `files[]` | 路径、语言、LOC / 代码 / 注释 / 空行、导入列表、所属命名空间 |
-| `types[]` | 名称、`fqn`、类别、命名空间、`dir`、`system` + `systemRule`（命中的分组规则）、**`doc`**（源码注释里的说明）、文件 + 行号、LOC、成员统计与列表、基类、复杂度、fanIn / fanOut |
+| `files[]` | 路径、语言、LOC（整文件）/ 代码 / 注释 / 空行、导入列表、所属命名空间 |
+| `types[]` | 名称、`fqn`、类别、命名空间、`dir`、`system` + `systemRule`（命中的分组规则）、**`doc`**（源码注释里的说明）、文件 + 行号、LOC（该类型的区间）、成员统计与列表、基类、复杂度、fanIn / fanOut |
 | `namespaces` | 包树（含自底向上的汇总：行数 / 类型数） |
 | `edges[]` | 类型级依赖边：`ref`（引用）/ `inherit`（继承）+ 权重 |
 | `nsEdges[]` | 命名空间级依赖边（给包依赖图用） |

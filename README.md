@@ -362,8 +362,8 @@ the output contains a `_comment` explaining the format — edit away).
 | --- | --- |
 | `source` | scan roots, file count, **version stamp** (git commit + whether the tree was dirty; a timestamp when not a git repo), scan duration |
 | `languages` | file count / line count per language |
-| `files[]` | path, language, LOC / code / comment / blank lines, import list, namespace |
-| `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), file + line, LOC, member stats and list, base types, complexity, fanIn / fanOut |
+| `files[]` | path, language, LOC (whole file) / code / comment / blank lines, import list, namespace |
+| `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), file + line, LOC (this type's range), member stats and list, base types, complexity, fanIn / fanOut |
 | `namespaces` | package tree (with bottom-up totals: lines / type counts) |
 | `edges[]` | type-level dependency edges: `ref` (reference) / `inherit` (inheritance), plus weight |
 | `nsEdges[]` | namespace-level edges (used by the package dependency view) |

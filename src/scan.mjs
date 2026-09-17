@@ -17,7 +17,7 @@ import { t } from './i18n.mjs';
 import { preprocess } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
-export const VERSION = '1.1.1';
+export const VERSION = '1.1.2';
 
 /**
  * 没归到任何系统规则的哨兵值：**中性固定值**，不带任何语言。
@@ -247,8 +247,8 @@ function parseImport(text) {
 /** 分节线这类装饰性注释（===== Win32 =====），不是“说明”，也不能并进说明里 */
 const DECORATION_RE = /[=\-*_~#]{4,}/;
 
-/** 结尾是中日韩文字或全角标点：这种地方断行不该补空格 */
-const CJK_TAIL_RE = /[\u3000-\u303F\u4E00-\u9FFF\uFF01-\uFF65]$/;
+/** 结尾是中日韩文字或全角/中文标点（含破折号、省略号、间隔号）：这种地方断行不该补空格 */
+const CJK_TAIL_RE = /[\u00B7\u2013\u2014\u2018-\u201D\u2026\u3000-\u303F\u4E00-\u9FFF\uFF01-\uFF65]$/;
 
 /** 从注释里抽出人能读的“说明”（C# 的 /// summary、Java/TS 的块注释都吃） */
 function cleanDoc(text) {

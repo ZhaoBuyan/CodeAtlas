@@ -110,7 +110,7 @@ function printScanReport(b, out) {
   if (b.stats.namespaces > 1) {
     const bigNs = all.sort((a, c) => c.allLoc - a.allLoc).slice(0, 5);
     if (bigNs.length) {
-      console.log(t('\n  最大的命名空间（含子包）', '\n  Largest namespaces (incl. subpackages)'));
+      console.log(t('\n  最大的命名空间（含子包；行数 = 类型区间合计）', '\n  Largest namespaces (incl. subpackages; lines = type ranges)'));
       for (const n of bigNs) console.log(t(`    ${nf(n.allLoc).padStart(7)} 行  ${n.path}  (${n.allTypes} 类型)`, `    ${nf(n.allLoc).padStart(7)} lines  ${n.path}  (${n.allTypes} types)`));
     }
   } else {
@@ -122,7 +122,7 @@ function printScanReport(b, out) {
     }
     const top = Object.entries(dirs).sort((a, c) => c[1] - a[1]).slice(0, 5);
     if (top.length) {
-      console.log(t('\n  最大的顶层目录', '\n  Largest top-level directories'));
+      console.log(t('\n  最大的顶层目录（行数 = 整文件）', '\n  Largest top-level directories (whole files)'));
       for (const [d, loc] of top) console.log(t(`    ${nf(loc).padStart(7)} 行  ${d}`, `    ${nf(loc).padStart(7)} lines  ${d}`));
     }
   }
@@ -139,7 +139,7 @@ function printSystems(b) {
     console.log(t('  系统分组  没有规则（可选：在 configs/<目录名>.facets.json 里按目录/命名空间定义自己的系统）', '  Systems     no rules (optional: define your own in configs/<dir>.facets.json by directory / namespace)'));
     return;
   }
-  console.log(t(`  系统分组  ${b.facets.configFile}（${systems.length} 个）`, `  Systems     ${b.facets.configFile} (${systems.length})`));
+  console.log(t(`  系统分组  ${b.facets.configFile}（${systems.length} 个；行数 = 各类型区间合计）`, `  Systems     ${b.facets.configFile} (${systems.length}; lines = sum of type ranges)`));
   for (const s of systems) {
     console.log(t(`      ${String(s.loc).padStart(7)} 行  ${String(s.types).padStart(4)} 类型  ${sysLabel(s.name)}`, `      ${String(s.loc).padStart(7)} lines  ${String(s.types).padStart(4)} types  ${sysLabel(s.name)}`));
   }

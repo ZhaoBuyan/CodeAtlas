@@ -50,7 +50,7 @@ const CASES = [
     docs: 3,
     // 回归：多行 /// 块必须整块进来（tree-sitter 把 /// 的每行各算一个 comment 节点，
     // 只取最近那行时，以 </summary> 收尾的块会变成空壳 —— MuSync 上实测丢过 25 个类型的说明）
-    docContains: { MultiLineDoc: ['第一段在这里', '第二段也要在', '在这里。第二段也要在'] },
+    docContains: { MultiLineDoc: ['第一段在这里', '第二段也要在', '在这里。第二段也要在', '空格——就像'] },
     membersMin: 7,
     errorsMax: 0, // 主构造函数 / file 修饰符 / 原始字符串都要能被预处理掉
   },
