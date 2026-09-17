@@ -123,7 +123,9 @@ function printScanReport(b, out) {
 
 function printSystems(b) {
   const systems = b.facets?.systems || [];
-  if (!systems.length || !systems.some((s) => s.name !== t('(未分类)', '(ungrouped)'))) return;
+  // 注意：这里比较的是**数据值**（bundle 里系统名是扫描时就写死的），不能用翻译后的字符串去比，
+  // 否则英文模式下永远判不出“只有未分类”→ 报告里会多打一段没意义的系统分组。
+  if (!systems.length || !systems.some((s) => s.name !== '(未分类)')) return;
   if (!b.facets.configFile) {
     console.log(t('  系统分组  没有规则（可选：在 configs/<目录名>.facets.json 里按目录/命名空间定义自己的系统）', '  Systems     no rules (optional: define your own in configs/<dir>.facets.json by directory / namespace)'));
     return;
