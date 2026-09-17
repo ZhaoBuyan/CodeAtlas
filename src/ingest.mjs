@@ -62,12 +62,14 @@ function findJava() {
   return null;
 }
 
-/** 找 Java 反编译器（cfr / vineflower）：自带 > 显式指定 > 环境变量 > 家目录 */
+/** 找 Java 反编译器（cfr / vineflower）：**显式指定 > 自带 > 环境变量 > 家目录** */
 function findJarDecompiler(explicit) {
   const bundled = path.join(PROJECT_ROOT, 'vendor', 'cfr.jar');
   const cands = [
-    fs.existsSync(bundled) ? bundled : null,
+    // 显式指定优先：`--decompiler` 是用户明说的，自带那份只兵底
+    //（原来写成自带优先，结果是“传了 --decompiler 也没用” —— 实测过）
     explicit,
+    fs.existsSync(bundled) ? bundled : null,
     process.env.CFR_JAR,
     process.env.VINEFLOWER_JAR,
     path.join(os.homedir(), '.code-atlas', 'cfr.jar'),
