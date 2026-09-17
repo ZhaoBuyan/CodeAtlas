@@ -42,12 +42,15 @@ const CASES = [
   {
     dir: 'csharp',
     lang: 'csharp',
-    types: 9,
-    names: ['Animal', 'Dog', 'IWalker', 'Mood', 'Point', 'Nested', 'Size', 'FileOnlyHelper', 'WithPrimaryCtor'],
-    kinds: { class: 5, interface: 1, enum: 1, record: 2 },
+    types: 10,
+    names: ['Animal', 'Dog', 'IWalker', 'Mood', 'Point', 'Nested', 'Size', 'FileOnlyHelper', 'WithPrimaryCtor', 'MultiLineDoc'],
+    kinds: { class: 6, interface: 1, enum: 1, record: 2 },
     extends: ['Dog -> Animal', 'WithPrimaryCtor -> Animal'],
     importsMin: 2,
-    docs: 2,
+    docs: 3,
+    // 回归：多行 /// 块必须整块进来（tree-sitter 把 /// 的每行各算一个 comment 节点，
+    // 只取最近那行时，以 </summary> 收尾的块会变成空壳 —— MuSync 上实测丢过 25 个类型的说明）
+    docContains: { MultiLineDoc: ['第一段在这里', '第二段也要在'] },
     membersMin: 7,
     errorsMax: 0, // 主构造函数 / file 修饰符 / 原始字符串都要能被预处理掉
   },
@@ -165,6 +168,16 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
   if (c.docs != null) {
     const n = b.types.filter((t) => t.doc).length + b.types.reduce((a, t) => a + (t.memberList || []).filter((m) => m.d).length, 0);
     push(n >= c.docs, `说明条数 ${n}（期望 ≥ ${c.docs}）`);
+  }
+  if (c.docContains) {
+    for (const [name, parts] of Object.entries(c.docContains)) {
+      const t = b.types.find((x) => x.name === name);
+      const doc = (t && t.doc) || '';
+      const missing = parts.filter((p) => !doc.includes(p));
+      push(missing.length === 0, missing.length
+        ? `${name} 的说明缺内容：${missing.join(' / ')}（实际 ${JSON.stringify(doc.slice(0, 60))}）`
+        : `${name} 多行说明整块提取（${parts.length} 段都在）`);
+    }
   }
   if (c.membersMin != null) {
     const n = b.types.reduce((a, t) => a + Object.values(t.members).reduce((x, y) => x + y, 0), 0);

@@ -244,6 +244,9 @@ function parseImport(text) {
   return t.split(',')[0].trim().replace(/\s+as\s+\S+$/i, '');
 }
 
+/** 分节线这类装饰性注释（===== Win32 =====），不是“说明”，也不能并进说明里 */
+const DECORATION_RE = /[=\-*_~#]{4,}/;
+
 /** 从注释里抽出人能读的“说明”（C# 的 /// summary、Java/TS 的块注释都吃） */
 function cleanDoc(text) {
   let t = text
@@ -258,7 +261,7 @@ function cleanDoc(text) {
     .trim();
   if (!t) return null;
   // 排除分节线这类装饰性注释（===== Win32 =====），它们不是“说明”
-  if (/[=\-*_~#]{4,}/.test(t)) return null;
+  if (DECORATION_RE.test(t)) return null;
   return t.length > 300 ? `${t.slice(0, 297)}…` : t;
 }
 
@@ -311,7 +314,21 @@ function docFor(comments, startRow, lines) {
   for (let r = best.endRow + 1; r < startRow; r++) {
     if ((lines[r] ?? '').trim() !== '') return null;
   }
-  return cleanDoc(best.text);
+  // 多行文档块必须整块拿：tree-sitter 把 /// 的每一行（C#/Rust）——以及 // / # 的每一行——各算一个
+  // 独立 comment 节点，只取离声明最近的那行时，以 </summary> 收尾的块就只剩空壳（实测 MuSync：
+  // 106 个类型里 25 个因此丢了说明），末行有文字的块还会被静默截成“只剩最后一行”。
+  // 所以从最近那行**向上合并连续注释行**；碰见分节线就停，累计过 1000 字也停（显示上限本来只有 300 字）。
+  const byStart = new Map();
+  for (const c of comments) byStart.set(c.startRow, c);
+  let text = best.text;
+  let top = best;
+  while (text.length < 1000) {
+    const prev = byStart.get(top.startRow - 1);
+    if (!prev || DECORATION_RE.test(prev.text)) break;
+    text = `${prev.text}\n${text}`;
+    top = prev;
+  }
+  return cleanDoc(text);
 }
 
 /**

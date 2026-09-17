@@ -35,6 +35,16 @@ namespace Fixture.Sample
         Sad,
     }
 
+    /// <summary>
+    /// 多行说明块：第一段在这里。
+    /// 第二段也要在——回归用（tree-sitter 把 /// 的每一行各算一个 comment 节点，
+    /// 只取最近那行的话，这种以 </summary> 收尾的块会变成空壳）。
+    /// </summary>
+    public class MultiLineDoc
+    {
+        public int Value { get; set; }
+    }
+
     public record Point(int X, int Y);
 
     public record struct Size(int W, int H);
