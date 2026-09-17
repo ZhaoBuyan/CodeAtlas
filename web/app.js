@@ -29,6 +29,15 @@ const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const truncate = (s, n) => (s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s);
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+// 数据里的哨兵值 → 网页显示文案（映射表的源头在 src/i18n.mjs；网页目前只有中文，这里先做显示兜底）：
+// bundle 里存的是中性值 '(unclassified)'，老 bundle 里是 '(未分类)'，两种都认。
+const SENTINELS = {
+  '(unclassified)': '(未分类)', '(未分类)': '(未分类)',
+  '(root)': '(根目录)', '(根目录)': '(根目录)',
+  'Other': '其他', '其他': '其他', 'Top level': '顶层', '顶层': '顶层',
+  'root': '根目录', '根目录': '根目录',
+};
+const sysLabel = (n) => SENTINELS[n] || n;
 
 fetch('/data/bundle.json')
   .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
@@ -301,7 +310,7 @@ function groupPath(t) {
       const f = state.fileById.get(t.file);
       return [f.path];
     }
-    case 'system': return [t.system || '(未分类)'];
+    case 'system': return [sysLabel(t.system || '(unclassified)')];
     default: return [];
   }
 }
@@ -751,7 +760,7 @@ function showTip(ev, d) {
   const f = state.fileById.get(t.file);
   const tip = $('#tooltip');
   tip.classList.remove('hidden');
-  tip.innerHTML = `<b>${esc(t.name)}</b> <span class="muted">${esc(t.kind)}${t.system ? ' · ' + esc(t.system) : ''}</span>
+  tip.innerHTML = `<b>${esc(t.name)}</b> <span class="muted">${esc(t.kind)}${t.system ? ' · ' + esc(sysLabel(t.system)) : ''}</span>
 ${esc(f.path)}:${t.line}
 代码 ${fmt(t.code)} 行 · 复杂度 ${t.complexity} · fanIn ${t.fanIn} / fanOut ${t.fanOut}${t.doc ? `\n\n${esc(t.doc)}` : ''}`;
   tip.style.left = Math.min(ev.clientX + 14, innerWidth - 400) + 'px';
@@ -1008,7 +1017,7 @@ function renderInspector() {
     <div class="insp-title">${esc(t.name)}</div>
     <div class="insp-sub">${esc(t.fqn)}
       <span class="badge" style="border-color:${KIND_COLOR[t.kind] || '#8b949e'};color:${KIND_COLOR[t.kind] || '#8b949e'}">${esc(t.kind)}</span>
-      ${t.system ? `<span class="badge" title="分组规则：${esc(t.systemRule || '—')}">${esc(t.system)}</span>` : ''}
+      ${t.system ? `<span class="badge" title="分组规则：${esc(t.systemRule || '—')}">${esc(sysLabel(t.system))}</span>` : ''}
       ${isGenerated(t) ? '<span class="badge" style="border-color:#6e7681;color:#8b949e">编译器生成物</span>' : ''}</div>
     ${t.doc ? `<div class="doc">${esc(t.doc)}</div>` : '<div class="doc muted">（源码里没有注释说明）</div>'}
     ${f.errors ? `<div class="doc warn-doc">这个文件有 ${f.errors} 处语法树解析异常，此类型的数据可能不全。</div>` : ''}

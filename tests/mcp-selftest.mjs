@@ -66,20 +66,20 @@ const groupName = bundle.facets?.systems?.[0]?.name || biggestFile.path.split('/
 
 const overview = await call('overview', {});
 check(/类型|types/.test(overview) && overview.length > 60, 'overview', overview.split('\n')[0].slice(0, 60));
-check(/扫描根/.test(overview), 'overview 给扫描根（AI 才能拼绝对路径去读源文件）', (overview.split('\n').find((l) => l.startsWith('扫描根')) || '').slice(0, 60));
-check(/名字匹配/.test(overview), 'overview 交代可信度前提（依赖边是名字匹配）');
-check(/数据快照/.test(overview), 'overview 给数据时效（生成时间/语言/上限）');
+check(/扫描根|Scan root/.test(overview), 'overview 给扫描根（AI 才能拼绝对路径去读源文件）', (overview.split('\n').find((l) => /扫描根|Scan root/.test(l)) || '').slice(0, 60));
+check(/名字匹配|name match/i.test(overview), 'overview 交代可信度前提（依赖边是名字匹配）');
+check(/数据快照|Snapshot/.test(overview), 'overview 给数据时效（生成时间/语言/上限）');
 
 const search = await call('search', { query: hottest.fqn.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))) });
 check(search.includes(hottest.name), 'search', `找到 ${hottest.name}`);
 
 const sym = await call('symbol', { name: String(hottest.id) });   // 用 id：多语言 bundle 里同名同全名的类型可能有好几个（C# 和 TS 的 Animal）
-check(sym.includes(hottest.name) && /文件|file/.test(sym), 'symbol', sym.split('\n')[0].slice(0, 70));
+check(sym.includes(hottest.name) && /文件|[Ff]ile/.test(sym), 'symbol', sym.split('\n')[0].slice(0, 70));
 
 const refs = await call('refs', { name: hottest.fqn, direction: 'in' });
 check(refs.length > 10, 'refs', refs.split('\n')[0].slice(0, 70));
 const refsTrunc = await call('refs', { name: hottest.fqn, direction: 'in', limit: 1 });
-check(hottest.fanIn <= 1 || /还有 .*条没显示|无/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
+check(hottest.fanIn <= 1 || /还有 .*条没显示|more not shown|无|none/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
 
 const sub = await call('subgraph', { name: hottest.fqn, depth: 2 });
 check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));
@@ -88,7 +88,7 @@ const fileOut = await call('file', { path: biggestFile.path.slice(0, Math.max(4,
 check(fileOut.includes('行') || fileOut.includes('line'), 'file', fileOut.split('\n')[0].slice(0, 70));
 
 const miss = await call('symbol', { name: 'zzz-this-does-not-exist' });
-check(/没有|找不到|not found/i.test(miss), '找不到时给提示', miss.split('\n')[0].slice(0, 60));
+check(/没有|找不到|No symbol|not found/i.test(miss), '找不到时给提示', miss.split('\n')[0].slice(0, 60));
 
 const byKind = await call('search', { query: hottest.fqn.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))), kind: hottest.kind });
 check(byKind.length > 0, 'search（带类别过滤）', byKind.split('\n')[0].slice(0, 60));
@@ -101,7 +101,7 @@ if (owner) {
   const msearch = await call('search', { query: frag, scope: 'member' });
   check(msearch.includes(member.n), 'search（按成员名）', `找 ${owner.name}.${member.n}`);
   const noMember = await call('search', { query: frag, scope: 'type' });
-  check(!noMember.includes('（定义在 '), 'search（scope=type 不搜成员）', noMember.split('\n')[0].slice(0, 60));
+  check(!/（定义在 |\(defined in /.test(noMember), 'search（scope=type 不搜成员）', noMember.split('\n')[0].slice(0, 60));
 } else {
   check(true, 'search（按成员名）', '这个 bundle 里没有带名字的成员，跳过');
 }
@@ -110,9 +110,9 @@ const map600 = await call('map', { budget: 600 });
 check(map600.length > 80 && map600.length / 4 < 600 * 1.4, 'map（token 预算）', `约 ${Math.ceil(map600.length / 4)} token / 预算 600`);
 
 const impact = await call('impact', { name: String(hottest.id), depth: 2 });
-check(impact.includes('影响面') && /第 1 层|没有已知的引用者/.test(impact), 'impact（影响面）', impact.split('\n')[0].slice(0, 70));
+check(/影响面|Impact/.test(impact) && /第 1 层|没有已知的引用者|Level 1|no known referrers/.test(impact), 'impact（影响面）', impact.split('\n')[0].slice(0, 70));
 const impactMiss = await call('impact', { name: 'zzz-this-does-not-exist' });
-check(/找不到/.test(impactMiss), 'impact（找不到时给提示）', impactMiss.split('\n')[0].slice(0, 50));
+check(/找不到|No symbol|not found/i.test(impactMiss), 'impact（找不到时给提示）', impactMiss.split('\n')[0].slice(0, 50));
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');

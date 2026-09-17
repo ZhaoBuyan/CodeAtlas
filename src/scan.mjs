@@ -19,6 +19,13 @@ import { preprocess } from './preprocess.mjs';
 export const SCHEMA = 'code-atlas/1';
 export const VERSION = '1.1.0';
 
+/**
+ * 没归到任何系统规则的哨兵值：**中性固定值**，不带任何语言。
+ * 显示层用 i18n.mjs 的 sysLabel() 映射成当前语言（bundle 中英共用、切语言不用重扫）。
+ * 旧 bundle 里写的是「(未分类)」，那也一并认（见 isUnclassified）。
+ */
+export const UNCLASSIFIED = '(unclassified)';
+
 const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** 起子进程时用它调回自己（__extract 内部命令） */
 const CLI_PATH = path.join(PROJECT_ROOT, 'src', 'cli.mjs');
@@ -740,7 +747,7 @@ function applyFacets(facetsDoc, allTypes, fileRecs) {
       .map((p) => ({ re: globToRe(p), src: p })),
   }));
   if (!rules.length) {
-    // 没有规则文件：不算分组，让前端退回按目录看（别拿一个"(未分类)"分组占着位）
+    // 没有规则文件：不算分组，让前端退回按目录看（别拿一个 UNCLASSIFIED 分组占着位）
     for (const t of allTypes) { t.system = null; t.systemRule = null; }
     return { configFile: null, configPath: null, systems: [], unclassified: { types: allTypes.length, loc: allTypes.reduce((a, t) => a + t.loc, 0) } };
   }
@@ -756,12 +763,12 @@ function applyFacets(facetsDoc, allTypes, fileRecs) {
     }
     t.system = hit ? hit.name : null;
     t.systemRule = rule;
-    const key = hit ? hit.name : '(未分类)';
+    const key = hit ? hit.name : UNCLASSIFIED;
     const g = groups.get(key) || { name: key, color: (hit && hit.color) || '#6e7681', types: 0, loc: 0, files: new Set() };
     g.types++; g.loc += t.loc; g.files.add(t.file);
     groups.set(key, g);
   }
-  const order = [...rules.map((r) => r.name), '(未分类)'];
+  const order = [...rules.map((r) => r.name), UNCLASSIFIED];
   const systems = [...groups.values()]
     .map((g) => ({ name: g.name, color: g.color, types: g.types, files: g.files.size, loc: g.loc }))
     .sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
@@ -769,7 +776,7 @@ function applyFacets(facetsDoc, allTypes, fileRecs) {
     configFile: facetsDoc ? path.basename(facetsDoc.file) : null,
     configPath: facetsDoc ? facetsDoc.file : null,
     systems,
-    unclassified: groups.get('(未分类)') ? { types: groups.get('(未分类)').types, loc: groups.get('(未分类)').loc } : { types: 0, loc: 0 },
+    unclassified: groups.get(UNCLASSIFIED) ? { types: groups.get(UNCLASSIFIED).types, loc: groups.get(UNCLASSIFIED).loc } : { types: 0, loc: 0 },
   };
 }
 

@@ -14,7 +14,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { t } from './i18n.mjs';
+import { t, sysLabel, isUnclassified } from './i18n.mjs';
 import { scanToDisk, workerExtract, draftFacets, VERSION } from './scan.mjs';
 import { LANGUAGES } from './languages.mjs';
 import { ingest } from './ingest.mjs';
@@ -123,16 +123,17 @@ function printScanReport(b, out) {
 
 function printSystems(b) {
   const systems = b.facets?.systems || [];
-  // 注意：这里比较的是**数据值**（bundle 里系统名是扫描时就写死的），不能用翻译后的字符串去比，
+  // 注意：这里比较的是**数据值**（bundle 里系统名是扫描时就定下的中性值，或老 bundle 里的中文），
+  // 不能用翻译后的字符串去比 —— 比较只认 isUnclassified（中英两种写法都认）。
   // 否则英文模式下永远判不出“只有未分类”→ 报告里会多打一段没意义的系统分组。
-  if (!systems.length || !systems.some((s) => s.name !== '(未分类)')) return;
+  if (!systems.length || !systems.some((s) => !isUnclassified(s.name))) return;
   if (!b.facets.configFile) {
     console.log(t('  系统分组  没有规则（可选：在 configs/<目录名>.facets.json 里按目录/命名空间定义自己的系统）', '  Systems     no rules (optional: define your own in configs/<dir>.facets.json by directory / namespace)'));
     return;
   }
   console.log(t(`  系统分组  ${b.facets.configFile}（${systems.length} 个）`, `  Systems     ${b.facets.configFile} (${systems.length})`));
   for (const s of systems) {
-    console.log(t(`      ${String(s.loc).padStart(7)} 行  ${String(s.types).padStart(4)} 类型  ${s.name}`, `      ${String(s.loc).padStart(7)} lines  ${String(s.types).padStart(4)} types  ${s.name}`));
+    console.log(t(`      ${String(s.loc).padStart(7)} 行  ${String(s.types).padStart(4)} 类型  ${sysLabel(s.name)}`, `      ${String(s.loc).padStart(7)} lines  ${String(s.types).padStart(4)} types  ${sysLabel(s.name)}`));
   }
 }
 

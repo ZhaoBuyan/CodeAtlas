@@ -18,6 +18,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+// 本文件用 T(...) 而不是 t(...)：mcp.mjs 里到处是「类型对象」的局部名 t（箭头参数、const t = r.type …），
+// 导入的 t 会被它们遮住（这种错是静默的），所以这里显式取别名。
+import { t as T, sysLabel } from './i18n.mjs';
 
 export function listToolsText() {
   return TOOLS.map((t) => {
@@ -179,9 +182,9 @@ function resolve(idx, key) {
   if (exact.length === 1) return { type: exact[0] };
   const hits = idx.b.types.filter((t) => t.name.toLowerCase().includes(low) || t.fqn.toLowerCase().includes(low));
   if (hits.length === 1) return { type: hits[0] };
-  if (!hits.length) return { error: `找不到匹配 "${s}" 的符号。用 search 先找找。` };
+  if (!hits.length) return { error: T(`找不到匹配 "${s}" 的符号。用 search 先找找。`, `No symbol matches "${s}". Try search first.`) };
   return {
-    error: `"${s}" 匹配到 ${hits.length} 个，请用更精确的名字或 id：\n` +
+    error: T(`"${s}" 匹配到 ${hits.length} 个，请用更精确的名字或 id：\n`, `"${s}" matched ${hits.length} symbols — use a more precise name or id:\n`) +
       hits.slice(0, 12).map((t) => `  ${t.id}  ${t.fqn}  [${t.kind}]  ${idx.files.get(t.file)?.path}`).join('\n'),
   };
 }
@@ -191,24 +194,24 @@ function toolOverview(idx) {
   const topIn = b.types.slice().sort((a, c) => c.fanIn - a.fanIn).slice(0, 8);
   const bigFiles = b.files.slice().sort((a, c) => c.code - a.code).slice(0, 6);
   const lines = [];
-  lines.push(`项目：${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`);
+  lines.push(T(`项目：${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`, `Project: ${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`));
   const roots = (b.source.roots || []).join('  ');
-  if (roots) lines.push(`扫描根：${roots}（输出里的路径都相对于它）`);
+  if (roots) lines.push(T(`扫描根：${roots}（输出里的路径都相对于它）`, `Scan root: ${roots} (paths in the output are relative to it)`));
   const so = b.source.scanOptions || {};
   const when = String(b.generated || '').replace('T', ' ').slice(0, 19);
-  lines.push(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`);
-  lines.push(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`);
-  if (b.totals.parseErrors) lines.push(`注意：${b.totals.parseErrors} 处语法树解析异常（这些文件数据可能不全）`);
-  if (b.totals.compilerGenerated) lines.push(`注意：${b.totals.compilerGenerated} 个编译器生成/反编译生成类型（非手写代码）`);
+  lines.push(T(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`, `Snapshot: ${when} · scan took ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · languages ${so.lang || 'auto'} · max file ${so.maxKb || 1024}KB · ${so.incremental ? 'incremental' : 'full'}`));
+  lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
+  if (b.totals.parseErrors) lines.push(T(`注意：${b.totals.parseErrors} 处语法树解析异常（这些文件数据可能不全）`, `Note: ${b.totals.parseErrors} parse errors (data in those files may be incomplete)`));
+  if (b.totals.compilerGenerated) lines.push(T(`注意：${b.totals.compilerGenerated} 个编译器生成/反编译生成类型（非手写代码）`, `Note: ${b.totals.compilerGenerated} compiler-generated / decompiled types (not hand-written code)`));
   // 诚实边界：把"依赖边是名字匹配"这个前提摆在第一屏——只调 overview 的 AI 也得看得到
   const un = b.unresolved || {};
-  lines.push(`可信度：依赖边是静态名字匹配（动态调用 / 反射 / 字符串拼名看不见）——未匹配 ${fmt(un.unknown || 0)} 处 · 同名歧义 ${fmt(un.ambiguous || 0)} 处`);
+  lines.push(T(`可信度：依赖边是静态名字匹配（动态调用 / 反射 / 字符串拼名看不见）——未匹配 ${fmt(un.unknown || 0)} 处 · 同名歧义 ${fmt(un.ambiguous || 0)} 处`, `Confidence: dependency edges are static name matches (dynamic calls / reflection / string-built names are invisible) — ${fmt(un.unknown || 0)} unmatched · ${fmt(un.ambiguous || 0)} ambiguous`));
   const sys = b.facets?.systems || [];
-  if (sys.length) lines.push(`系统划分（${b.facets.configFile}）：\n` + sys.map((s) => `  ${s.name}：${fmt(s.loc)} 行 · ${s.types} 类型 · ${s.files} 文件`).join('\n'));
-  else lines.push('没有系统分组规则（可用 configs/<项目>.facets.json 定义；否则按目录/文件看）');
-  lines.push('被依赖最多（改动的波及面最大）：\n' + topIn.map((t) => `  ${t.fqn} [${t.kind}] 被 ${t.fanIn} 处引用 · ${idx.files.get(t.file)?.path}`).join('\n'));
-  lines.push('最大的文件：\n' + bigFiles.map((f) => `  ${f.path}  ${fmt(f.code)} 行`).join('\n'));
-  lines.push('深入用：search / symbol / refs / subgraph / file');
+  if (sys.length) lines.push(T(`系统划分（${b.facets.configFile}）：\n`, `Systems (${b.facets.configFile}):\n`) + sys.map((s) => T(`  ${sysLabel(s.name)}：${fmt(s.loc)} 行 · ${s.types} 类型 · ${s.files} 文件`, `  ${sysLabel(s.name)}: ${fmt(s.loc)} lines · ${s.types} types · ${s.files} files`)).join('\n'));
+  else lines.push(T('没有系统分组规则（可用 configs/<项目>.facets.json 定义；否则按目录/文件看）', 'No system grouping rules (define them in configs/<project>.facets.json; otherwise browse by directory / file)'));
+  lines.push(T('被依赖最多（改动的波及面最大）：\n', 'Most depended-on (biggest blast radius):\n') + topIn.map((t) => T(`  ${t.fqn} [${t.kind}] 被 ${t.fanIn} 处引用 · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced by ${t.fanIn} · ${idx.files.get(t.file)?.path}`)).join('\n'));
+  lines.push(T('最大的文件：\n', 'Largest files:\n') + bigFiles.map((f) => T(`  ${f.path}  ${fmt(f.code)} 行`, `  ${f.path}  ${fmt(f.code)} lines`)).join('\n'));
+  lines.push(T('深入用：search / symbol / refs / subgraph / file', 'Dig deeper with: search / symbol / refs / subgraph / file'));
   return lines.join('\n');
 }
 
@@ -236,22 +239,22 @@ function toolSearch(idx, a) {
     memberHits.sort((x, y) => y.t.fanIn - x.t.fanIn);
   }
 
-  if (!hits.length && !memberHits.length) return `没有匹配 "${a.query}" 的符号（类型名和成员名都找过了）。`;
+  if (!hits.length && !memberHits.length) return T(`没有匹配 "${a.query}" 的符号（类型名和成员名都找过了）。`, `No symbol matches "${a.query}" (both type names and member names were searched).`);
 
   const out = [];
-  out.push(`匹配：${hits.length} 个类型 · ${memberHits.length} 个成员（按被引用次数排序）`);
+  out.push(T(`匹配：${hits.length} 个类型 · ${memberHits.length} 个成员（按被引用次数排序）`, `Matches: ${hits.length} types · ${memberHits.length} members (sorted by reference count)`));
   if (hits.length) {
-    out.push(`类型（显示前 ${Math.min(hits.length, limit)}）：`);
+    out.push(T(`类型（显示前 ${Math.min(hits.length, limit)}）：`, `Types (first ${Math.min(hits.length, limit)}):`));
     for (const t of hits.slice(0, limit)) {
-      out.push(`  ${t.id}\t${t.fqn}\t[${t.kind}] 被引 ${t.fanIn} 次\t${idx.files.get(t.file)?.path}:${t.line}`);
+      out.push(T(`  ${t.id}\t${t.fqn}\t[${t.kind}] 被引 ${t.fanIn} 次\t${idx.files.get(t.file)?.path}:${t.line}`, `  ${t.id}\t${t.fqn}\t[${t.kind}] referenced ${t.fanIn} times\t${idx.files.get(t.file)?.path}:${t.line}`));
     }
   }
   if (memberHits.length) {
-    out.push(`成员（显示前 ${Math.min(memberHits.length, limit)}）：`);
+    out.push(T(`成员（显示前 ${Math.min(memberHits.length, limit)}）：`, `Members (first ${Math.min(memberHits.length, limit)}):`));
     for (const { t, m } of memberHits.slice(0, limit)) {
-      out.push(`  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（定义在 ${t.id} ${t.name}）`);
+      out.push(T(`  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（定义在 ${t.id} ${t.name}）`, `  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(defined in ${t.id} ${t.name})`));
     }
-    out.push('（成员名后面要看它的上下文，用 symbol 加类型名/id）');
+    out.push(T('（成员名后面要看它的上下文，用 symbol 加类型名/id）', '(to see a member in context, call symbol with the type name / id)'));
   }
   return out.join('\n');
 }
@@ -264,14 +267,14 @@ function toolSymbol(idx, a) {
   const members = (t.memberList || []).slice(0, 40);
   const lines = [];
   lines.push(`${t.fqn}  [${t.kind}]${t.tags?.length ? `  (${t.tags.join(', ')})` : ''}`);
-  lines.push(`文件：${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   系统：${t.system || '（未分组）'}${t.systemRule ? `（规则 ${t.systemRule}）` : ''}`);
-  lines.push(`规模：${t.code} 行代码 · 复杂度≈${t.complexity} · 成员 ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`);
-  lines.push(`依赖：被 ${t.fanIn} 处引用 · 引用了 ${t.fanOut} 个`);
-  if (t.bases?.length) lines.push(`基类/接口：${t.bases.join(', ')}`);
-  if (f?.errors) lines.push(`注意：该文件有 ${f.errors} 处解析异常，数据可能不全`);
-  lines.push(`说明：${t.doc || '（源码里没有注释说明）'}`);
+  lines.push(T(`文件：${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   系统：${t.system ? sysLabel(t.system) : '（未分组）'}${t.systemRule ? `（规则 ${t.systemRule}）` : ''}`, `File: ${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   System: ${t.system ? sysLabel(t.system) : '(ungrouped)'}${t.systemRule ? ` (rule ${t.systemRule})` : ''}`));
+  lines.push(T(`规模：${t.code} 行代码 · 复杂度≈${t.complexity} · 成员 ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`, `Size: ${t.code} lines of code · complexity≈${t.complexity} · members ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none'}`));
+  lines.push(T(`依赖：被 ${t.fanIn} 处引用 · 引用了 ${t.fanOut} 个`, `Dependencies: referenced by ${t.fanIn} · references ${t.fanOut}`));
+  if (t.bases?.length) lines.push(T(`基类/接口：${t.bases.join(', ')}`, `Base types / interfaces: ${t.bases.join(', ')}`));
+  if (f?.errors) lines.push(T(`注意：该文件有 ${f.errors} 处解析异常，数据可能不全`, `Note: this file has ${f.errors} parse errors — its data may be incomplete`));
+  lines.push(T(`说明：${t.doc || '（源码里没有注释说明）'}`, `Doc: ${t.doc || '(no doc comment in the source)'}`));
   if (members.length) {
-    lines.push(`成员（前 ${members.length} / 共 ${(t.memberList || []).length}）：`);
+    lines.push(T(`成员（前 ${members.length} / 共 ${(t.memberList || []).length}）：`, `Members (first ${members.length} / ${(t.memberList || []).length} total):`));
     for (const m of members) lines.push(`  ${m.l}\t${m.k} ${m.n}${m.d ? ` — ${String(m.d).slice(0, 80)}` : ''}`);
   }
   return lines.join('\n');
@@ -285,17 +288,17 @@ function toolRefs(idx, a) {
   const limit = Math.min(Number(a.limit) || 30, 200);
   const out = [];
   const show = (es, label, pick) => {
-    if (!es.length) { out.push(`${label}：无`); return; }
+    if (!es.length) { out.push(T(`${label}：无`, `${label}: none`)); return; }
     es.sort((x, y) => y.w - x.w);
     out.push(`${label}（${es.length}）：`);
     for (const e of es.slice(0, limit)) {
       const o = pick(e);
-      out.push(`  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (继承)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`);
+      out.push(T(`  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (继承)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`, `  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (inherits)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`));
     }
-    if (es.length > limit) out.push(`  …还有 ${fmt(es.length - limit)} 条没显示（limit 可调，上限 200）`);
+    if (es.length > limit) out.push(T(`  …还有 ${fmt(es.length - limit)} 条没显示（limit 可调，上限 200）`, `  …${fmt(es.length - limit)} more not shown (limit is adjustable, max 200)`));
   };
-  if (dir === 'in' || dir === 'both') show(idx.ins.get(t.id) || [], '被谁引用', (e) => idx.byId.get(e.from));
-  if (dir === 'out' || dir === 'both') show(idx.outs.get(t.id) || [], '引用了谁', (e) => idx.byId.get(e.to));
+  if (dir === 'in' || dir === 'both') show(idx.ins.get(t.id) || [], T('被谁引用', 'referenced by'), (e) => idx.byId.get(e.from));
+  if (dir === 'out' || dir === 'both') show(idx.outs.get(t.id) || [], T('引用了谁', 'references'), (e) => idx.byId.get(e.to));
   return `${t.fqn} [${t.kind}]\n${out.join('\n')}`;
 }
 
@@ -315,28 +318,28 @@ function toolSubgraph(idx, a) {
     }
     frontier = next;
   }
-  const lines = [`以 ${r.type.fqn} 为中心、深度 ${depth} 的依赖子图：共 ${seen.size} 个符号`];
+  const lines = [T(`以 ${r.type.fqn} 为中心、深度 ${depth} 的依赖子图：共 ${seen.size} 个符号`, `Dependency subgraph around ${r.type.fqn}, depth ${depth}: ${seen.size} symbols`)];
   for (let d = 0; d <= depth; d++) {
     const at = [...seen].filter(([, dd]) => dd === d).map(([id]) => idx.byId.get(id)).filter(Boolean);
     if (!at.length) continue;
-    lines.push(`第 ${d} 层（${at.length}）：` + at.slice(0, 40).map((t) => `${t.fqn}[${t.kind}]`).join('  '));
+    lines.push(T(`第 ${d} 层（${at.length}）：`, `Level ${d} (${at.length}): `) + at.slice(0, 40).map((t) => `${t.fqn}[${t.kind}]`).join('  '));
   }
-  lines.push('（只看名字；细节用 symbol，引用方向用 refs）');
+  lines.push(T('（只看名字；细节用 symbol，引用方向用 refs）', '(names only; use symbol for detail, refs for direction)'));
   return lines.join('\n');
 }
 
 function toolFile(idx, a) {
   const q = String(a.path || '').toLowerCase();
   const f = idx.b.files.find((x) => x.path.toLowerCase().includes(q));
-  if (!f) return `没有匹配 "${a.path}" 的文件。用 search 可以按文件名片段搜符号。`;
+  if (!f) return T(`没有匹配 "${a.path}" 的文件。用 search 可以按文件名片段搜符号。`, `No file matches "${a.path}". Use search to find symbols by file-name fragment.`);
   const types = idx.b.types.filter((t) => t.file === f.id);
   const lines = [
-    `${f.path}  [${f.lang}]  ${f.loc} 行（代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`,
+    T(`${f.path}  [${f.lang}]  ${f.loc} 行（代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines (code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
   ];
-  if (f.errors) lines.push(`注意：${f.errors} 处解析异常`);
-  lines.push(`类型 ${types.length}：` + types.map((t) => `${t.name}[${t.kind}]`).join('  '));
+  if (f.errors) lines.push(T(`注意：${f.errors} 处解析异常`, `Note: ${f.errors} parse errors`));
+  lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.name}[${t.kind}]`).join('  '));
   const imports = f.imports || [];
-  lines.push(`导入（${imports.length}）：${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` …等 ${imports.length} 条` : ''}`);
+  lines.push(T(`导入（${imports.length}）：${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` …等 ${imports.length} 条` : ''}`, `Imports (${imports.length}): ${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` … ${imports.length} in total` : ''}`));
   return lines.join('\n');
 }
 
@@ -355,16 +358,16 @@ function toolMap(idx, a) {
   const score = (t) => t.fanIn + (t.memberList?.length || 0) / 10;
 
   push(`# ${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`);
-  push(`${fmt(b.files.length)} 文件 / ${fmt(b.totals.types)} 类型 / ${fmt(b.totals.edges)} 依赖边 / ${fmt(b.totals.code)} 行代码`);
+  push(T(`${fmt(b.files.length)} 文件 / ${fmt(b.totals.types)} 类型 / ${fmt(b.totals.edges)} 依赖边 / ${fmt(b.totals.code)} 行代码`, `${fmt(b.files.length)} files / ${fmt(b.totals.types)} types / ${fmt(b.totals.edges)} dependency edges / ${fmt(b.totals.code)} lines of code`));
   push('');
 
   const systems = b.facets?.systems || [];
   if (systems.length) {
-    push(`## 系统（${systems.length} 个，按体量排序）`);
+    push(T(`## 系统（${systems.length} 个，按体量排序）`, `## Systems (${systems.length}, largest first)`));
     for (const s of [...systems].sort((x, y) => y.types - x.types)) {
-      if (!push(`[${s.name}] ${s.types} 类型 / ${s.files} 文件`)) break;
+      if (!push(T(`[${sysLabel(s.name)}] ${s.types} 类型 / ${s.files} 文件`, `[${sysLabel(s.name)}] ${s.types} types / ${s.files} files`))) break;
       for (const t of b.types.filter((x) => x.system === s.name).sort((x, y) => score(y) - score(x)).slice(0, 5)) {
-        if (!push(`  - ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`)) break;
+        if (!push(T(`  - ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`, `  - ${t.fqn} [${t.kind}] refs ${t.fanIn} · ${pth(t)}`))) break;
       }
       if (used >= budget * 0.6) break;
     }
@@ -372,15 +375,15 @@ function toolMap(idx, a) {
   }
 
   if (used < budget) {
-    push('## 关键类型（被引用最多 = 改动的波及面最大）');
+    push(T('## 关键类型（被引用最多 = 改动的波及面最大）', '## Key types (most referenced = biggest blast radius)'));
     for (const t of [...b.types].sort((x, y) => y.fanIn - x.fanIn).slice(0, 25)) {
-      if (!push(`  ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`)) break;
+      if (!push(T(`  ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`, `  ${t.fqn} [${t.kind}] refs ${t.fanIn} · ${pth(t)}`))) break;
     }
     push('');
   }
 
   if (used < budget * 0.8) {
-    push('## 关键成员（挑最重要的几个类型）');
+    push(T('## 关键成员（挑最重要的几个类型）', '## Key members (from the most important types)'));
     for (const t of [...b.types].sort((x, y) => score(y) - score(x)).slice(0, 6)) {
       const ms = (t.memberList || []).slice(0, 6);
       if (!ms.length) continue;
@@ -390,10 +393,10 @@ function toolMap(idx, a) {
   }
 
   const warn = [];
-  if (b.unresolved?.unknown) warn.push(`名字没匹配上的引用 ${fmt(b.unresolved.unknown)} 处（这些依赖看不到）`);
-  if (b.unresolved?.ambiguous) warn.push(`匹配到多个目标的引用 ${fmt(b.unresolved.ambiguous)} 处（只取了一个，可能不准）`);
+  if (b.unresolved?.unknown) warn.push(T(`名字没匹配上的引用 ${fmt(b.unresolved.unknown)} 处（这些依赖看不到）`, `References whose name did not match: ${fmt(b.unresolved.unknown)} (those dependencies are invisible)`));
+  if (b.unresolved?.ambiguous) warn.push(T(`匹配到多个目标的引用 ${fmt(b.unresolved.ambiguous)} 处（只取了一个，可能不准）`, `References matching several targets: ${fmt(b.unresolved.ambiguous)} (only one was taken — may be off)`));
   if (warn.length) push(`⚠ ${warn.join('；')}`);
-  push(`（预算 ~${budget} token，实际约 ${used}；要细节：symbol(id) / refs(名字) / impact(名字)）`);
+  push(T(`（预算 ~${budget} token，实际约 ${used}；要细节：symbol(id) / refs(名字) / impact(名字)）`, `(budget ~${budget} tokens, actual ~${used}; for detail: symbol(id) / refs(name) / impact(name))`));
   return out.join('\n');
 }
 
@@ -430,27 +433,27 @@ function toolImpact(idx, a) {
     frontier = list.map((x) => x.t.id);
   }
 
-  const KIND = { inherit: '继承', call: '调用', type: '类型引用', import: '导入', ref: '引用' };
-  const out = [`影响面：${t0.fqn} [${t0.kind}]（${idx.files.get(t0.file)?.path}:${t0.line}）`];
-  out.push(`沿“谁引用它”展开 ${depth} 层：`);
+  const KIND = { inherit: T('继承', 'inherits'), call: T('调用', 'calls'), type: T('类型引用', 'type ref'), import: T('导入', 'import'), ref: T('引用', 'ref') };
+  const out = [T(`影响面：${t0.fqn} [${t0.kind}]（${idx.files.get(t0.file)?.path}:${t0.line}）`, `Impact: ${t0.fqn} [${t0.kind}] (${idx.files.get(t0.file)?.path}:${t0.line})`)];
+  out.push(T(`沿“谁引用它”展开 ${depth} 层：`, `Following "who references it" ${depth} levels deep:`));
   if (!layers.length) {
-    out.push('  （没有已知的引用者：可能是入口/孤立类型，或者引用它的地方没被识别出来）');
+    out.push(T('  （没有已知的引用者：可能是入口/孤立类型，或者引用它的地方没被识别出来）', '  (no known referrers: entry point / isolated type, or the reference was not recognized)'));
   }
   for (const L of layers) {
     out.push('');
-    out.push(`第 ${L.d} 层（${L.list.length} 个）：`);
+    out.push(T(`第 ${L.d} 层（${L.list.length} 个）：`, `Level ${L.d} (${L.list.length}):`));
     for (const x of L.list.slice(0, 25)) {
       const kinds = [...x.kinds].map((k) => KIND[k] || k).join('/');
       out.push(`  ${x.t.fqn} [${x.t.kind}] ${kinds} ×${x.w} · ${idx.files.get(x.t.file)?.path}`);
     }
-    if (L.list.length > 25) out.push(`  …（还有 ${L.list.length - 25} 个）`);
+    if (L.list.length > 25) out.push(T(`  …（还有 ${L.list.length - 25} 个）`, `  …(${L.list.length - 25} more)`));
   }
   out.push('');
-  out.push('要注意的：');
-  out.push('  · 这是**静态名字匹配**的结果：动态调用 / 反射 / 字符串拼出来的名字看不见；');
-  if (b.unresolved?.unknown) out.push(`  · 本项目有 ${fmt(b.unresolved.unknown)} 处引用没匹配上任何类型（这些边不在图里）；`);
-  if (b.unresolved?.ambiguous) out.push(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标，只取了一个；`);
-  out.push('  · 想看更宽：depth 加大（最多 4）；某个方向：refs(名字, in|out)。');
+  out.push(T('要注意的：', 'Worth knowing:'));
+  out.push(T('  · 这是**静态名字匹配**的结果：动态调用 / 反射 / 字符串拼出来的名字看不见；', '  · these edges come from **static name matching**: dynamic calls / reflection / string-built names are invisible;'));
+  if (b.unresolved?.unknown) out.push(T(`  · 本项目有 ${fmt(b.unresolved.unknown)} 处引用没匹配上任何类型（这些边不在图里）；`, `  · ${fmt(b.unresolved.unknown)} references in this project matched no type (those edges are not in the graph);`));
+  if (b.unresolved?.ambiguous) out.push(T(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标，只取了一个；`, `  · ${fmt(b.unresolved.ambiguous)} references matched several same-named targets; only one was taken;`));
+  out.push(T('  · 想看更宽：depth 加大（最多 4）；某个方向：refs(名字, in|out)。', '  · go wider: raise depth (max 4); one direction only: refs(name, in|out).'));
   return out.join('\n');
 }
 
@@ -458,11 +461,11 @@ const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, r
 
 function callTool(idx, name, args) {
   const fn = IMPL[name];
-  if (!fn) return `未知工具：${name}`;
+  if (!fn) return T(`未知工具：${name}`, `Unknown tool: ${name}`);
   try {
     return fn(idx, args || {});
   } catch (err) {
-    return `工具执行出错：${err.message}`;
+    return T(`工具执行出错：${err.message}`, `Tool failed: ${err.message}`);
   }
 }
 
@@ -472,17 +475,17 @@ function callTool(idx, name, args) {
 
 export function startMcp({ bundlePath }) {
   if (!fs.existsSync(bundlePath)) {
-    process.stderr.write(`MCP：找不到 ${bundlePath}，先跑一次扫描（atlas <路径>）\n`);
+    process.stderr.write(T(`MCP：找不到 ${bundlePath}，先跑一次扫描（atlas <路径>）\n`, `MCP: cannot find ${bundlePath} — run a scan first (atlas <path>)\n`));
     process.exit(1);
   }
   let idx = buildIndex(JSON.parse(fs.readFileSync(bundlePath, 'utf8')));
   let mtime = fs.statSync(bundlePath).mtimeMs;
-  process.stderr.write(`MCP 就绪：${bundlePath}（${idx.b.types.length} 个类型，${TOOLS.length} 个工具）\n`);
+  process.stderr.write(T(`MCP 就绪：${bundlePath}（${idx.b.types.length} 个类型，${TOOLS.length} 个工具）\n`, `MCP ready: ${bundlePath} (${idx.b.types.length} types, ${TOOLS.length} tools)\n`));
   if (process.stdin.isTTY) {
-    process.stderr.write('提示：这是 stdio 服务 —— 它在等客户端发 JSON-RPC，直接跑就是这个样子（不是卡死）。\n');
-    process.stderr.write('     想看工具列表：node src/cli.mjs mcp --list-tools\n');
-    process.stderr.write('     想自动化验证：node tests/mcp-selftest.mjs\n');
-    process.stderr.write('     Ctrl+C 退出。\n');
+    process.stderr.write(T('提示：这是 stdio 服务 —— 它在等客户端发 JSON-RPC，直接跑就是这个样子（不是卡死）。\n', 'Note: this is a stdio service — it waits for the client to send JSON-RPC, so running it directly looks like this (it is not hung).\n'));
+    process.stderr.write(T('     想看工具列表：node src/cli.mjs mcp --list-tools\n', '     list the tools: node src/cli.mjs mcp --list-tools\n'));
+    process.stderr.write(T('     想自动化验证：node tests/mcp-selftest.mjs\n', '     verify automatically: node tests/mcp-selftest.mjs\n'));
+    process.stderr.write(T('     Ctrl+C 退出。\n', '     Ctrl+C to exit.\n'));
   }
 
   // bundle 是快照，会过时。每次调用前看一眼 mtime：重新扫描过就自动换新的（AI 不会拿到隔夜数据）
@@ -492,7 +495,7 @@ export function startMcp({ bundlePath }) {
       if (t !== mtime) {
         mtime = t;
         idx = buildIndex(JSON.parse(fs.readFileSync(bundlePath, 'utf8')));
-        process.stderr.write(`MCP：检测到 bundle 更新，已重载（${idx.b.types.length} 个类型）\n`);
+        process.stderr.write(T(`MCP：检测到 bundle 更新，已重载（${idx.b.types.length} 个类型）\n`, `MCP: bundle changed, reloaded (${idx.b.types.length} types)\n`));
       }
     } catch { /* 读不到就继续用旧的 */ }
   }
@@ -539,7 +542,7 @@ export function startMcp({ bundlePath }) {
       const text = callTool(idx, name, args);
       return ok(id, { content: [{ type: 'text', text }], isError: false });
     }
-    if (id !== undefined) fail(id, -32601, `不支持的方法：${method}`);
+    if (id !== undefined) fail(id, -32601, T(`不支持的方法：${method}`, `Unsupported method: ${method}`));
   }
 
   // 让调用方能优雅收尾
