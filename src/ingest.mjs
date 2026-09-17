@@ -29,6 +29,12 @@ const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', m
 // ---------------------------------------------------------------------------
 
 export function findIlspy() {
+  // 首选启动器自带的（零安装）：启动器启动引擎时把自己的路径放进 CODEATLAS_SELF。
+  // 开发模式（node src/cli.mjs）没这个变量 → 下面照旧找 ilspycmd。
+  const self = process.env.CODEATLAS_SELF;
+  if (self && fs.existsSync(self)) {
+    return { cmd: self, argsPrefix: ['--decompile'], label: 'Code Atlas 内置（ICSharpCode.Decompiler）', builtin: true };
+  }
   const cands = [
     process.env.ILSPYCMD,
     'ilspycmd',
@@ -38,7 +44,7 @@ export function findIlspy() {
   for (const c of cands) {
     if (c.includes(path.sep) && !fs.existsSync(c)) continue;
     const r = run(c, ['--version']);
-    if (!r.error && r.status === 0) return { cmd: c, version: String(r.stdout || '').trim().split('\n')[0] };
+    if (!r.error && r.status === 0) return { cmd: c, argsPrefix: [], label: 'ilspycmd ' + String(r.stdout || '').trim().split('\n')[0] };
   }
   return null;
 }
@@ -124,8 +130,12 @@ function autoFacets(stem, explicit) {
   return { facets: null, note: null };
 }
 
-/** 找单文件解包工具 sfextract（SingleFileExtractor） */
+/** 找单文件解包工具：优先启动器自带的（零安装），再找 sfextract */
 function findSfextract() {
+  const self = process.env.CODEATLAS_SELF;
+  if (self && fs.existsSync(self)) {
+    return { cmd: self, argsPrefix: ['--extract-bundle'], label: 'Code Atlas 内置（SingleFileExtractor）' };
+  }
   const cands = [
     process.env.SFEXTRACT,
     path.join(os.homedir(), '.dotnet', 'tools', 'sfextract.exe'),
@@ -134,11 +144,11 @@ function findSfextract() {
   ].filter(Boolean);
   for (const c of cands) {
     if (c.includes(path.sep)) {
-      if (fs.existsSync(c)) return c;
+      if (fs.existsSync(c)) return { cmd: c, argsPrefix: [], label: 'sfextract' };
       continue;
     }
     const r = run(c, ['--help']);
-    if (!r.error) return c;
+    if (!r.error) return { cmd: c, argsPrefix: [], label: 'sfextract' };
   }
   return null;
 }
@@ -174,22 +184,22 @@ function decompileBundle(exe, workDir, notes) {
   if (!sf) {
     throw new Error([
       `${path.basename(exe)} 是 .NET 单文件发行版（原生宿主），程序集打在里面，要先用工具解包。`,
-      '装一个解包工具：dotnet tool install -g sfextract',
+      '用启动器（CodeAtlas.exe）跑的话，解包是内置的；直接跑引擎才需要：dotnet tool install -g sfextract',
       '或者：把同版本构建输出里的 .dll 直接丢进来（bin/Release/.../win-x64/App.dll）。',
     ].join('\n'));
   }
   const bundleDir = path.join(workDir, '_bundle');
   fs.mkdirSync(bundleDir, { recursive: true });
-  const r = run(sf, [exe, '-o', bundleDir]);
+  const r = run(sf.cmd, [...sf.argsPrefix, exe, '-o', bundleDir]);
   if (r.status !== 0) {
     const out = String(r.stderr || r.stdout || '').trim();
-    // sfextract 对非 .NET 的单文件会直接说这句（退出码有时是 0、有时不是），两条路都给同一个清楚的说法
-    if (/not a \.NET Core/i.test(out)) throw notManagedError(exe);
+    // 解包器对非 .NET 单文件的回话有两种形式（自带的和 sfextract 的措辞不同），两条路都给同一个清楚的说法
+    if (/not a \.NET Core|不是 \.NET 单文件发行版|bundle 清单/i.test(out)) throw notManagedError(exe);
     throw new Error(`解包失败：${out.slice(0, 300)}`);
   }
   const dllCount = countFiles(bundleDir, '.dll');
   if (!dllCount) throw notManagedError(exe);
-  notes.push(`解包单文件发行版：${path.basename(exe)} → ${dllCount} 个 dll（sfextract）`);
+  notes.push(`解包单文件发行版：${path.basename(exe)} → ${dllCount} 个 dll（${sf.label}）`);
 
   const base = path.basename(exe).replace(/\.exe$/i, '');
   const preferred = path.join(bundleDir, `${base}.dll`);
@@ -243,17 +253,18 @@ function decompileAssemblies(assemblies, workDir, notes) {
   const ilspy = findIlspy();
   if (!ilspy) {
     throw new Error([
-      '这个目标需要反编译（.NET 程序集），但机器上没有 ilspycmd。',
-      '反编译工具不随本工具打包，用到才装：dotnet tool install -g ilspycmd --version 9.1.0.7988',
+      '这个目标需要反编译（.NET 程序集），但没找到可用的反编译器。',
+      '用启动器（CodeAtlas.exe）跑的话，反编译是内置的，不需要装任何东西；',
+      '如果是直接跑引擎（node src/cli.mjs），才需要装：dotnet tool install -g ilspycmd --version 9.1.0.7988',
     ].join('\n'));
   }
-  notes.push(`反编译工具：ilspycmd ${ilspy.version}`);
+  notes.push(`反编译工具：${ilspy.label}`);
   let csCount = 0;
   for (const asm of assemblies) {
     const stem = path.basename(asm).replace(/\.(dll|exe)$/i, '');
     const out = path.join(workDir, stem);
     fs.mkdirSync(out, { recursive: true });
-    const r = run(ilspy.cmd, [asm, '-o', out, '-p']);
+    const r = run(ilspy.cmd, [...ilspy.argsPrefix, asm, '-o', out, '-p']);
     if (r.status !== 0) {
       notes.push(`反编译失败（跳过）：${path.basename(asm)} — ${String(r.stderr || r.stdout || '').trim().split('\n').slice(0, 2).join(' ')}`);
       continue;

@@ -24,6 +24,17 @@ namespace CodeAtlas
         [STAThread]
         private static void Main(string[] args)
         {
+            // 引擎要知道"自己在哪"：ingest 会优先调用启动器自带的反编译/解包（用户就不用装 ilspycmd/sfextract）。
+            // 用进程级环境变量，子进程（node）自动继承。
+            try { Environment.SetEnvironmentVariable("CODEATLAS_SELF", Environment.ProcessPath); } catch { }
+
+            // 隐藏子命令：--decompile / --extract-bundle（引擎来调，不启界面、直接退出）
+            if (BuiltinDecompiler.TryRun(args, out int builtinExitCode))
+            {
+                Environment.Exit(builtinExitCode);
+                return;
+            }
+
             // 无界面自检模式：--headless --path <目标> [--out dist] [--port 5173] [--log launcher.log] [--lang csharp,typescript] [--list-langs]
             if (args.Length > 0 && args[0] == "--headless")
             {

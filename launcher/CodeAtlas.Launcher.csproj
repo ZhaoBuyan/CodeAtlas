@@ -34,6 +34,13 @@
   <ItemGroup>
     <!-- 内嵌地图：WebView2（Edge 内核），和浏览器里是同一套页面、同一份观感 -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3351.48" />
+    <!--
+      反编译 / 解包（两者都是 MIT）——放在启动器里而不是让用户去装 ilspycmd：
+      装 ilspycmd 需要 .NET SDK（不是运行时），门槛比“什么都别装”高得多。
+      引擎侧保留回退：开发模式（node src/cli.mjs）没有 CODEATLAS_SELF 时仍然用 ilspycmd/sfextract。
+    -->
+    <PackageReference Include="ICSharpCode.Decompiler" Version="11.0.0.9375" />
+    <PackageReference Include="SingleFileExtractor.Core" Version="2.3.0" />
   </ItemGroup>
 
   <ItemGroup>
