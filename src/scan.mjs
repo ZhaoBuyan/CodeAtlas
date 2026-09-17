@@ -564,7 +564,7 @@ function globToRe(pattern) {
 }
 
 /** 草拟分组规则时用的颜色列（和示例文件同一套） */
-const DRAFT_COLORS = ['#58a6ff', '#f778ba', '#3fb950', '#d29922', '#bc8cff', '#39c5cf', '#f0883e', '#d29922'];
+const DRAFT_COLORS = ['#58a6ff', '#f778ba', '#3fb950', '#d29922', '#bc8cff', '#39c5cf', '#f0883e', '#7ee787'];
 const DRAFT_GREY = '#8b949e';
 /** 这些目录名一看就是人家拿来的代码/依赖，草拟时直接建议排除 */
 const DRAFT_EXCLUDE_HINTS = new Set(['vendor', 'third_party', 'thirdparty', 'third-party', 'external', 'reference', 'references', 'deps', 'submodules']);
@@ -730,7 +730,11 @@ function loadFacets(opts, roots) {
   for (const f of tries) {
     if (!fs.existsSync(f)) continue;
     try {
-      return { file: f, config: JSON.parse(fs.readFileSync(f, 'utf8')) };
+      // 去掉 UTF-8 BOM：Windows 上太常见（PowerShell 5.1 的 Set-Content -Encoding utf8、
+      // VS Code 的“UTF-8 with BOM”、老版记事本都会加），JSON.parse 遇到 BOM 会直接报
+      // Unexpected token —— 配置文件是给人手改的，这种“看起来没毛病却读不了”的坑必须挡掉。
+      const text = fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '');
+      return { file: f, config: JSON.parse(text) };
     } catch (err) {
       throw new Error(t(`facets 分组配置解析失败：${f}\n${err.message}`, `cannot parse the facets config: ${f}\n${err.message}`));
     }

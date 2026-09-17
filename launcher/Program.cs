@@ -1468,7 +1468,7 @@ namespace CodeAtlas
                     foreach (var n in res.Notes) Log(L.T("  提示：", "  note: ") + n);
                     if (draftOut != null)
                     {
-                        File.WriteAllText(draftOut, JsonSerializer.Serialize(res.Config, FacetJson.Options), Encoding.UTF8);
+                        File.WriteAllText(draftOut, JsonSerializer.Serialize(res.Config, FacetJson.Options), new UTF8Encoding(false));
                         Log(L.T("已写出：", "written: ") + draftOut);
                     }
                     File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
