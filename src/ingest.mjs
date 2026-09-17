@@ -144,6 +144,28 @@ function findSfextract() {
 }
 
 /**
+ * 不是 .NET 时的说明。原生可执行文件（C/C++ 编译，很多游戏本体属于这类）走的就是这里：
+ * 它没有 CLR 头 → looksManaged() 为假 → 只能当"单文件发行版"去试，sfextract 会回一句
+ * "Is not a .NET Core 3.x or greater executable."（而且退出码是 0）。
+ * 这个错不能只说"可能不是 .NET 应用"——要直接说清楚是什么、以及为什么做不到。
+ */
+function notManagedError(target) {
+  return new Error([
+    `这不是 .NET 程序集：${path.basename(target)}`,
+    '看起来是原生可执行文件（C/C++ 编译出来的，很多软件和游戏本体属于这一类）。',
+    '',
+    '反编译只支持这三类：',
+    '  ① .NET 程序集：.dll / 带 CLR 头的 .exe',
+    '  ② .NET 单文件发行版：.NET Core 3.x 及以上打包出来的单个 exe',
+    '  ③ Java 的 .jar（需要 Java 运行时 + cfr/vineflower）',
+    '',
+    '原生程序里没有类型名、命名空间、方法签名这些元数据，要出这种图得先反汇编成近似 C 再解释',
+    '（IDA / Ghidra 那个量级的活），不在本工具的能力范围内。',
+    '例外：Unity 游戏的 <游戏名>_Data\\Managed\\*.dll 就是 .NET 程序集，直接指那个目录或文件就能扫。',
+  ].join('\n'));
+}
+
+/**
  * 单文件发行版（PublishSingleFile）：先用 sfextract 解包，再反编译应用自己的程序集。
  * 这样"指一个发行版 exe 就能出图"就成立了。
  */
@@ -159,8 +181,14 @@ function decompileBundle(exe, workDir, notes) {
   const bundleDir = path.join(workDir, '_bundle');
   fs.mkdirSync(bundleDir, { recursive: true });
   const r = run(sf, [exe, '-o', bundleDir]);
-  if (r.status !== 0) throw new Error(`解包失败：${String(r.stderr || r.stdout || '').trim().slice(0, 300)}`);
+  if (r.status !== 0) {
+    const out = String(r.stderr || r.stdout || '').trim();
+    // sfextract 对非 .NET 的单文件会直接说这句（退出码有时是 0、有时不是），两条路都给同一个清楚的说法
+    if (/not a \.NET Core/i.test(out)) throw notManagedError(exe);
+    throw new Error(`解包失败：${out.slice(0, 300)}`);
+  }
   const dllCount = countFiles(bundleDir, '.dll');
+  if (!dllCount) throw notManagedError(exe);
   notes.push(`解包单文件发行版：${path.basename(exe)} → ${dllCount} 个 dll（sfextract）`);
 
   const base = path.basename(exe).replace(/\.exe$/i, '');
@@ -174,7 +202,13 @@ function decompileBundle(exe, workDir, notes) {
       .slice(0, 5)
       .map((n) => path.join(bundleDir, n));
   }
-  if (!assemblies.length) throw new Error('解包后没找到应用自己的程序集（可能不是 .NET 应用？）');
+  if (!assemblies.length) {
+    throw new Error([
+      `解包出来了 ${dllCount} 个 dll，但没有应用自己的程序集（都是运行时/系统程序集？）`,
+      `解包目录：${bundleDir}`,
+      '可以把里面的应用程序集直接指给我：atlas ingest "<那个 .dll>"',
+    ].join('\n'));
+  }
   return decompileAssemblies(assemblies, path.join(workDir, 'src'), notes);
 }
 
@@ -330,6 +364,8 @@ export async function ingest(o) {
         `没有什么可以分析的：${target}`,
         '目录里既没有源码，也没有可反编译的程序集。',
         '办法：① 指向源码目录；② 指向 .dll；③ 指向 .exe（单文件发行版会自动解包，需 sfextract）；④ --dll "App*.dll" 指定。',
+        '注意：原生可执行文件（C/C++ 编译）反编译不了 —— 只支持 .NET 程序集 / .NET 单文件发行版 / Java jar。',
+        '例外：Unity 游戏的 <游戏名>_Data\\Managed\\*.dll 是 .NET 程序集，可以直接指它。',
       ].join('\n'));
     }
   }
