@@ -14,6 +14,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { t } from './i18n.mjs';
 import { scanToDisk, workerExtract, draftFacets, VERSION } from './scan.mjs';
 import { LANGUAGES } from './languages.mjs';
 import { ingest } from './ingest.mjs';
@@ -40,73 +41,81 @@ const nf = (n) => Number(n || 0).toLocaleString('en-US');
 const bytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
 const fmtError = (err) => {
   const msg = String(err?.message || err);
-  return msg.includes('\n') ? `错误：\n${msg}` : `错误：${msg}`;
+  return msg.includes('\n') ? t(`错误：\n${msg}`, `Error:\n${msg}`) : t(`错误：${msg}`, `Error: ${msg}`);
 };
 
 // ---------------------------------------------------------------------------
 // 报告
 // ---------------------------------------------------------------------------
 function printScanReport(b, out) {
-  console.log(`\nCode Atlas v${VERSION} · 扫描完成（${(b.source.scanMs / 1000).toFixed(2)}s）\n`);
+  console.log(t(`\nCode Atlas v${VERSION} · 扫描完成（${(b.source.scanMs / 1000).toFixed(2)}s）\n`, `\nCode Atlas v${VERSION} · scan finished (${(b.source.scanMs / 1000).toFixed(2)}s)\n`));
   const langs = Object.entries(b.languages)
     .sort((a, c) => c[1].loc - a[1].loc)
-    .map(([id, s]) => `${id} ${nf(s.files)}文件 / ${nf(s.loc)}行`).join('   ');
-  console.log(`  语言      ${langs}`);
+    .map(([id, s]) => t(`${id} ${nf(s.files)}文件 / ${nf(s.loc)}行`, `${id} ${nf(s.files)} files / ${nf(s.loc)} lines`)).join('   ');
+  console.log(`${t('  语言      ', '  Languages   ')}${langs}`);
   const kinds = {};
-  for (const t of b.types) kinds[t.kind] = (kinds[t.kind] || 0) + 1;
-  console.log(`  类型      ${nf(b.totals.types)} 个   ${Object.entries(kinds).sort((a, c) => c[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' / ')}`);
+  for (const ty of b.types) kinds[ty.kind] = (kinds[ty.kind] || 0) + 1;
+  const kindsText = Object.entries(kinds).sort((a, c) => c[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' / ');
+  console.log(t(`  类型      ${nf(b.totals.types)} 个   ${kindsText}`, `  Types       ${nf(b.totals.types)}   ${kindsText}`));
   const ek = b.stats.edgeKinds || {};
-  console.log(`  依赖图    ${nf(b.totals.edges)} 条边   ${Object.entries(ek).map(([k, v]) => `${k} ${v}`).join(' / ')}`);
+  const ekText = Object.entries(ek).map(([k, v]) => `${k} ${v}`).join(' / ');
+  console.log(t(`  依赖图    ${nf(b.totals.edges)} 条边   ${ekText}`, `  Graph       ${nf(b.totals.edges)} edges   ${ekText}`));
   const nsCount = b.stats.namespaces;
-  console.log(`  命名空间  ${nsCount <= 1 ? '1 个（这门语言不用命名空间，看目录 / 系统分组）' : `${nf(nsCount)} 个`}`);
+  console.log(t(
+    `  命名空间  ${nsCount <= 1 ? '1 个（这门语言不用命名空间，看目录 / 系统分组）' : `${nf(nsCount)} 个`}`,
+    `  Namespaces  ${nsCount <= 1 ? '1 (this language has no namespaces — use directories / system groups)' : `${nf(nsCount)}`}`,
+  ));
   printSystems(b);
-  console.log(`  代码/注释 ${nf(b.totals.code)} / ${nf(b.totals.comment)} 行（空行 ${nf(b.totals.blank)}）`);
+  console.log(t(`  代码/注释 ${nf(b.totals.code)} / ${nf(b.totals.comment)} 行（空行 ${nf(b.totals.blank)}）`, `  Code/comm.  ${nf(b.totals.code)} / ${nf(b.totals.comment)} lines (blank ${nf(b.totals.blank)})`));
   const unsup = b.stats.skipped?.unsupported || {};
   const unsupTotal = Object.values(unsup).reduce((a, c) => a + c, 0);
   if (unsupTotal) {
     const detail = Object.entries(unsup).sort((a, c) => c[1] - a[1]).slice(0, 6).map(([e, n]) => `${e} ${n}`).join(' · ');
-    console.log(`  未支持语言  ${nf(unsupTotal)} 个文件被跳过（${detail}）`);
+    console.log(t(`  未支持语言  ${nf(unsupTotal)} 个文件被跳过（${detail}）`, `  Unsupported ${nf(unsupTotal)} files skipped (${detail})`));
   }
   // “支持但这次没扫”：和“根本不支持”分开报，免得看起来像是工具做不到
   const oos = b.stats.skipped?.outOfScope || {};
   const oosTotal = Object.values(oos).reduce((a, c) => a + c, 0);
   if (oosTotal) {
     const detail = Object.entries(oos).sort((a, c) => c[1] - a[1]).slice(0, 8).map(([id, n]) => `${id} ${n}`).join(' · ');
-    console.log(`  语言范围外  ${nf(oosTotal)} 个文件没扫（${detail}）—— 想扫就加语言：启动器里勾选，或 --lang auto,json`);
+    console.log(t(
+      `  语言范围外  ${nf(oosTotal)} 个文件没扫（${detail}）—— 想扫就加语言：启动器里勾选，或 --lang auto,json`,
+      `  Out of scope ${nf(oosTotal)} files not scanned (${detail}) — add languages to include them: tick them in the launcher, or --lang auto,json`,
+    ));
   }
-  console.log(`  版本戳    ${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}${b.source.git.dirty ? ' (有未提交改动)' : ''}` : ' （非 git 仓库，用文件时间戳）'}`);
-  console.log(`  未解析引用 unknown ${nf(b.unresolved.unknown)} / ambiguous ${nf(b.unresolved.ambiguous)}`);
-  if (b.totals.parseErrors) console.log(`  解析异常  ${nf(b.totals.parseErrors)} 处 / ${nf(b.totals.parseErrorFiles)} 个文件（语法树没解析干净，这些文件的数据可能不全）`);
-  if (b.source.failures.length) console.log(`  解析失败  ${b.source.failures.length} 个文件`);
+  console.log(`${t('  版本戳    ', '  Revision    ')}${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}${b.source.git.dirty ? t(' (有未提交改动)', ' (uncommitted changes)') : ''}` : t(' （非 git 仓库，用文件时间戳）', ' (not a git repo — using file timestamps)')}`);
+  console.log(`${t('  未解析引用 ', '  Unresolved  ')}unknown ${nf(b.unresolved.unknown)} / ambiguous ${nf(b.unresolved.ambiguous)}`);
+  if (b.totals.parseErrors) console.log(t(`  解析异常  ${nf(b.totals.parseErrors)} 处 / ${nf(b.totals.parseErrorFiles)} 个文件（语法树没解析干净，这些文件的数据可能不全）`, `  Parse errors ${nf(b.totals.parseErrors)} spots / ${nf(b.totals.parseErrorFiles)} files (parse tree had errors; data in those files may be incomplete)`));
+  if (b.source.failures.length) console.log(t(`  解析失败  ${b.source.failures.length} 个文件`, `  Parse failed ${b.source.failures.length} files`));
   if (b.source.failedLanguages && b.source.failedLanguages.length) {
-    const fl = b.source.failedLanguages.map((x) => x.lang).join('、');
-    console.log(`  ⚠ 语言未解析  ${fl}（这一门这次没进地图：${b.source.failedLanguages[0].reason.slice(0, 60)}）`);
+    const fl = b.source.failedLanguages.map((x) => x.lang).join(t('、', ', '));
+    console.log(t(`  ⚠ 语言未解析  ${fl}（这一门这次没进地图：${b.source.failedLanguages[0].reason.slice(0, 60)}）`, `  ⚠ Language failed: ${fl} (this language did not make it into the map: ${b.source.failedLanguages[0].reason.slice(0, 60)})`));
   }
-  console.log(`\n  输出      ${out}  ${bytes(fs.statSync(out).size)}\n`);
+  console.log(`\n${t('  输出      ', '  Output      ')}${out}  ${bytes(fs.statSync(out).size)}\n`);
 
   const hubs = [...b.types].sort((a, c) => c.fanIn - a.fanIn).slice(0, 5);
   if (hubs.length) {
-    console.log('  扇入最高的类型（被依赖最多）');
+    console.log(t('  扇入最高的类型（被依赖最多）', '  Most depended-on types'));
     for (const h of hubs) console.log(`    ${String(h.fanIn).padStart(5)}  ${h.fqn}  (${h.kind})`);
   }
   const all = (function flat(node, out = []) { for (const c of node.children) { out.push(c); flat(c, out); } return out; })(b.namespaces);
   if (b.stats.namespaces > 1) {
     const bigNs = all.sort((a, c) => c.allLoc - a.allLoc).slice(0, 5);
     if (bigNs.length) {
-      console.log('\n  最大的命名空间（含子包）');
-      for (const n of bigNs) console.log(`    ${nf(n.allLoc).padStart(7)} 行  ${n.path}  (${n.allTypes} 类型)`);
+      console.log(t('\n  最大的命名空间（含子包）', '\n  Largest namespaces (incl. subpackages)'));
+      for (const n of bigNs) console.log(t(`    ${nf(n.allLoc).padStart(7)} 行  ${n.path}  (${n.allTypes} 类型)`, `    ${nf(n.allLoc).padStart(7)} lines  ${n.path}  (${n.allTypes} types)`));
     }
   } else {
     // 模块化语言（TS/JS/Python…）没有命名空间，按顶层目录看
     const dirs = {};
     for (const f of b.files) {
-      const d = f.path.includes('/') ? f.path.slice(0, f.path.indexOf('/')) : '(根目录)';
+      const d = f.path.includes('/') ? f.path.slice(0, f.path.indexOf('/')) : t('(根目录)', '(root)');
       dirs[d] = (dirs[d] || 0) + f.loc;
     }
     const top = Object.entries(dirs).sort((a, c) => c[1] - a[1]).slice(0, 5);
     if (top.length) {
-      console.log('\n  最大的顶层目录');
-      for (const [d, loc] of top) console.log(`    ${nf(loc).padStart(7)} 行  ${d}`);
+      console.log(t('\n  最大的顶层目录', '\n  Largest top-level directories'));
+      for (const [d, loc] of top) console.log(t(`    ${nf(loc).padStart(7)} 行  ${d}`, `    ${nf(loc).padStart(7)} lines  ${d}`));
     }
   }
   console.log('');
@@ -114,35 +123,35 @@ function printScanReport(b, out) {
 
 function printSystems(b) {
   const systems = b.facets?.systems || [];
-  if (!systems.length || !systems.some((s) => s.name !== '(未分类)')) return;
+  if (!systems.length || !systems.some((s) => s.name !== t('(未分类)', '(ungrouped)'))) return;
   if (!b.facets.configFile) {
-    console.log('  系统分组  没有规则（可选：在 configs/<目录名>.facets.json 里按目录/命名空间定义自己的系统）');
+    console.log(t('  系统分组  没有规则（可选：在 configs/<目录名>.facets.json 里按目录/命名空间定义自己的系统）', '  Systems     no rules (optional: define your own in configs/<dir>.facets.json by directory / namespace)'));
     return;
   }
-  console.log(`  系统分组  ${b.facets.configFile}（${systems.length} 个）`);
+  console.log(t(`  系统分组  ${b.facets.configFile}（${systems.length} 个）`, `  Systems     ${b.facets.configFile} (${systems.length})`));
   for (const s of systems) {
-    console.log(`      ${String(s.loc).padStart(7)} 行  ${String(s.types).padStart(4)} 类型  ${s.name}`);
+    console.log(t(`      ${String(s.loc).padStart(7)} 行  ${String(s.types).padStart(4)} 类型  ${s.name}`, `      ${String(s.loc).padStart(7)} lines  ${String(s.types).padStart(4)} types  ${s.name}`));
   }
 }
 
 function printIngestReport(res) {
   const b = res.bundle;
-  console.log(`\nCode Atlas v${VERSION} · ${res.tool ? '反编译 + 扫描' : '扫描'}\n`);
-  console.log(`  目标      ${res.original}`);
-  for (const n of res.notes) console.log(`  步骤      ${n}`);
-  if (res.sourceDir) console.log(`  产物目录  ${res.sourceDir}`);
+  console.log(t(`\nCode Atlas v${VERSION} · ${res.tool ? '反编译 + 扫描' : '扫描'}\n`, `\nCode Atlas v${VERSION} · ${res.tool ? 'decompile + scan' : 'scan'}\n`));
+  console.log(`${t('  目标      ', '  Target      ')}${res.original}`);
+  for (const n of res.notes) console.log(`${t('  步骤      ', '  Step        ')}${n}`);
+  if (res.sourceDir) console.log(`${t('  产物目录  ', '  Artifacts   ')}${res.sourceDir}`);
   console.log('');
-  console.log(`  文件      ${nf(b.totals.files)}   类型 ${nf(b.totals.types)}   依赖边 ${nf(b.totals.edges)}   代码/注释 ${nf(b.totals.code)} / ${nf(b.totals.comment)}`);
-  if (b.totals.compilerGenerated) console.log(`  生成物    ${nf(b.totals.compilerGenerated)} 个编译器生成类型（已打标签，界面默认隐藏）`);
-  if (b.totals.parseErrors) console.log(`  解析异常  ${nf(b.totals.parseErrors)} 处 / ${nf(b.totals.parseErrorFiles)} 个文件`);
-  console.log(`  版本戳    ${res.tool ? '（反编译产物，不是 git 源）' : b.source.labels.join(', ') + (b.source.git ? ` @ ${b.source.git.commit}` : '（非 git 目录）')}`);
+  console.log(t(`  文件      ${nf(b.totals.files)}   类型 ${nf(b.totals.types)}   依赖边 ${nf(b.totals.edges)}   代码/注释 ${nf(b.totals.code)} / ${nf(b.totals.comment)}`, `  Files       ${nf(b.totals.files)}   types ${nf(b.totals.types)}   edges ${nf(b.totals.edges)}   code/comment ${nf(b.totals.code)} / ${nf(b.totals.comment)}`));
+  if (b.totals.compilerGenerated) console.log(t(`  生成物    ${nf(b.totals.compilerGenerated)} 个编译器生成类型（已打标签，界面默认隐藏）`, `  Generated   ${nf(b.totals.compilerGenerated)} compiler-generated types (tagged; hidden in the UI by default)`));
+  if (b.totals.parseErrors) console.log(t(`  解析异常  ${nf(b.totals.parseErrors)} 处 / ${nf(b.totals.parseErrorFiles)} 个文件`, `  Parse errors ${nf(b.totals.parseErrors)} spots / ${nf(b.totals.parseErrorFiles)} files`));
+  console.log(`${t('  版本戳    ', '  Revision    ')}${res.tool ? t('（反编译产物，不是 git 源）', '(decompiled artifacts — not a git source tree)') : b.source.labels.join(', ') + (b.source.git ? ` @ ${b.source.git.commit}` : t('（非 git 目录）', ' (not a git directory)'))}`);
   printSystems(b);
-  console.log(`\n  输出      ${res.out}  ${bytes(fs.statSync(res.out).size)}`);
+  console.log(`\n${t('  输出      ', '  Output      ')}${res.out}  ${bytes(fs.statSync(res.out).size)}`);
   if (res.tool) {
     const gen = b.totals.compilerGenerated || 0;
-    console.log('\n  提醒：反编译产物的结构可信，但里面混着编译器生成物（闭包类 / 内部数组 / 状态机）——');
-    console.log(`        ${gen ? `已自动识别 ${gen} 个并打上 compiler-generated 标签，界面里默认隐藏（可取消勾选再看）` : '本包没识别到明确的编译器生成物'}。`);
-    console.log('        另外反编译产物没有源码注释（“说明”会是空的），行数含语法糖展开、比源码略高。');
+    console.log(t('\n  提醒：反编译产物的结构可信，但里面混着编译器生成物（闭包类 / 内部数组 / 状态机）——', '\n  Note: the structure of decompiled output is trustworthy, but it contains compiler-generated types (closures / internal arrays / state machines) —'));
+    console.log(t(`        ${gen ? `已自动识别 ${gen} 个并打上 compiler-generated 标签，界面里默认隐藏（可取消勾选再看）` : '本包没识别到明确的编译器生成物'}。`, `        ${gen ? `${gen} were detected and tagged compiler-generated; hidden in the UI by default (untick to see them)` : 'none were clearly detected in this assembly'}.`));
+    console.log(t('        另外反编译产物没有源码注释（“说明”会是空的），行数含语法糖展开、比源码略高。', '        Also, decompiled output has no source comments (so descriptions will be empty), and line counts include syntactic sugar — slightly higher than the original source.'));
   }
   console.log('');
 }
