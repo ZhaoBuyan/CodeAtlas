@@ -579,16 +579,16 @@ export function draftFacetsByNamespace(opts) {
   const b = JSON.parse(fs.readFileSync(bundlePath, 'utf8'));
   const types = b.types || [];
   const rows = [];
-  for (const t of types) {
-    const fqn = String(t.fqn || t.name || '');
+  for (const ty of types) {
+    const fqn = String(ty.fqn || ty.name || '');
     const segs = fqn.split('.');
     if (segs.length < 2) continue;                 // 没有命名空间（C/JS/Go 这类）
-    rows.push({ t, ns: segs.slice(0, -1).join('.'), segs });
+    rows.push({ t: ty, ns: segs.slice(0, -1).join('.'), segs });
   }
   if (!rows.length || rows.length < types.length * 0.5) {
     return {
       config: null, files: b.totals?.files || 0, preview: [],
-      notes: ['这个项目的类型大多没有命名空间（C / JS / Go 这类语言没有），按命名空间草拟用不上——用默认的"按目录"吧。'],
+      notes: [t('这个项目的类型大多没有命名空间（C / JS / Go 这类语言没有），按命名空间草拟用不上——用默认的"按目录"吧。', 'Most types here have no namespace (C / JS / Go and friends have none), so drafting by namespace does not apply — use the default "by directory" instead.')],
     };
   }
   // 公共根（MuSync.Players / MuSync.Utils → MuSync），按出现最多的第一段算
@@ -613,7 +613,7 @@ export function draftFacetsByNamespace(opts) {
   });
   const rest = [...small.flatMap(([, v]) => v), ...topLevel];
   if (rest.length) {
-    systems.push({ name: topLevel.length && !small.length ? '顶层' : '其他', color: DRAFT_GREY, namespaces: [...new Set(rest.map((r) => r.ns))], _files: rest.length });
+    systems.push({ name: topLevel.length && !small.length ? t('顶层', 'Top level') : t('其他', 'Other'), color: DRAFT_GREY, namespaces: [...new Set(rest.map((r) => r.ns))], _files: rest.length });
   }
   // 顺手建议排除"一看就是第三方的"目录（用 bundle 里的文件路径看；否则别人的命名空间根会全跑到"未分类"）
   const hintDirs = new Set();
@@ -622,18 +622,18 @@ export function draftFacetsByNamespace(opts) {
       if ([...DRAFT_EXCLUDE_HINTS].some((h) => seg.toLowerCase().startsWith(h))) hintDirs.add(seg);
     }
   }
-  const notes = [`按命名空间草拟（公共根：${root}${systems.length ? '' : '——但这个项目分不出系统'}）`];
-  if (hintDirs.size) notes.push(`已建议排除：${[...hintDirs].join('、')}（一看就是第三方/参考代码的目录名）`);
-  if (systems.length < 3) notes.push('分出来的系统少于 3 个，可能这个项目的命名空间层级太平（都挤在同一个命名空间里）');
+  const notes = [t(`按命名空间草拟（公共根：${root}${systems.length ? '' : '——但这个项目分不出系统'}）`, `Drafted by namespace (common root: ${root}${systems.length ? '' : ' — but this project cannot be split into systems'})`)];
+  if (hintDirs.size) notes.push(t(`已建议排除：${[...hintDirs].join('、')}（一看就是第三方/参考代码的目录名）`, `Suggested exclusions: ${[...hintDirs].join(', ')} (directory names that look like third-party / reference code)`));
+  if (systems.length < 3) notes.push(t('分出来的系统少于 3 个，可能这个项目的命名空间层级太平（都挤在同一个命名空间里）', 'Fewer than 3 systems came out — the namespace hierarchy may be too flat (everything sits in one namespace)'));
   return {
     config: {
-      _comment: '系统分组规则：按命名空间草拟（可随意改）。规则按顺序匹配、第一条命中生效。',
+      _comment: t('系统分组规则：按命名空间草拟（可随意改）。规则按顺序匹配、第一条命中生效。', 'System grouping rules: drafted by namespace (edit freely). Rules are matched in order; the first hit wins.'),
       exclude: hintDirs.size ? [...hintDirs] : null,
       systems: systems.map(({ name, color, namespaces }) => ({ name, color, namespaces })),
     },
     files: b.totals?.files || 0,
     by: 'namespace',
-    preview: systems.map((s) => ({ name: s.name, files: s._files, unit: '个类型' })),
+    preview: systems.map((s) => ({ name: s.name, files: s._files, unit: t('个类型', 'types') })),
     notes,
   };
 }
@@ -645,10 +645,14 @@ export function draftFacets(opts) {
   const { files } = collectFiles(roots, { languages, maxKb: Number(opts.maxKb || 1024), excludes: [] });
   const notes = [];
 
+  // 「根目录」这个 key 既当 Map 键、又当草拟出来的系统名 —— 前后必须取**同一个** t() 的值，
+  // 否则切语言后比较键不一致，根目录下的文件会被拆错。
+  const ROOT_KEY = t('(根目录)', '(root)');
+
   /** 文件在第 level 层归到哪个 key（直接躺在这一层的文件归到上一层） */
   const keyOf = (rel, level) => {
     const segs = rel.split('/');
-    if (segs.length <= level) return level <= 1 ? '(根目录)' : keyOf(rel, level - 1);
+    if (segs.length <= level) return level <= 1 ? ROOT_KEY : keyOf(rel, level - 1);
     return segs.slice(0, level).join('/');
   };
   const groupAt = (level) => {
@@ -663,13 +667,13 @@ export function draftFacets(opts) {
 
   let level = 1;
   let groups = groupAt(1);
-  const bigAt = (m) => [...m.entries()].filter(([k, fs]) => k !== '(根目录)' && fs.length >= 3);
+  const bigAt = (m) => [...m.entries()].filter(([k, fs]) => k !== ROOT_KEY && fs.length >= 3);
   if (bigAt(groups).length < 3) {
     const g2 = groupAt(2);
     if (bigAt(g2).length > bigAt(groups).length) {
       groups = g2;
       level = 2;
-      notes.push('顶层目录太集中（大目录不够 3 个），改按第 2 层目录草拟');
+      notes.push(t('顶层目录太集中（大目录不够 3 个），改按第 2 层目录草拟', 'Top-level directories are too concentrated (fewer than 3 big ones) — drafting by second-level directories instead'));
     }
   }
 
@@ -678,7 +682,7 @@ export function draftFacets(opts) {
   const small = [];
   const rootFiles = [];
   for (const [key, fs] of [...groups.entries()].sort((a, b) => b[1].length - a[1].length)) {
-    if (key === '(根目录)') { rootFiles.push(...fs); continue; }
+    if (key === ROOT_KEY) { rootFiles.push(...fs); continue; }
     const dirName = key.split('/').pop();
     // 目录名以这些词开头就算“拿来的代码”（reference-yySync / vendor_js / third_party…）
     if ([...DRAFT_EXCLUDE_HINTS].some((h) => dirName.toLowerCase().startsWith(h))) { excluded.push(dirName); continue; }
@@ -688,15 +692,15 @@ export function draftFacets(opts) {
 
   const out = [];
   systems.forEach((s, i) => out.push({ name: s.name, color: DRAFT_COLORS[i % DRAFT_COLORS.length], paths: [`${s.key}/**`], _files: s.files }));
-  if (small.length) out.push({ name: '其他', color: DRAFT_GREY, paths: small.map((s) => `${s.key}/**`), _files: small.reduce((a, s) => a + s.files, 0) });
+  if (small.length) out.push({ name: t('其他', 'Other'), color: DRAFT_GREY, paths: small.map((s) => `${s.key}/**`), _files: small.reduce((a, s) => a + s.files, 0) });
   // 根目录放最后：`files: ["*"]` 会按“文件名”命中，所以只能当兜底规则（规则是第一条命中生效）
-  if (rootFiles.length) out.push({ name: '根目录', color: DRAFT_GREY, files: ['*'], _files: rootFiles.length });
+  if (rootFiles.length) out.push({ name: t('根目录', 'root'), color: DRAFT_GREY, files: ['*'], _files: rootFiles.length });
 
-  if (excluded.length) notes.push(`建议排除：${excluded.join(', ')}（一看就是第三方/参考代码的目录名）`);
-  if (!systems.length) notes.push('没找到够大的目录（>=3 个文件）——草案可能不好用，建议手动写规则');
+  if (excluded.length) notes.push(t(`建议排除：${excluded.join(', ')}（一看就是第三方/参考代码的目录名）`, `Suggested exclusions: ${excluded.join(', ')} (directory names that look like third-party / reference code)`));
+  if (!systems.length) notes.push(t('没找到够大的目录（>=3 个文件）——草案可能不好用，建议手动写规则', 'No directory is big enough (>= 3 files) — the draft may not be useful; consider writing the rules by hand'));
 
   const config = {
-    _comment: 'Code Atlas 系统分组规则（由首次运行向导按目录结构草拟，可直接改）。规则按顺序匹配，第一条命中生效；匹配对象 = 文件相对路径 / 文件名 / 命名空间 / 完整限定名（glob，** 表示任意层级）。exclude 是额外忽略的目录名。',
+    _comment: t('Code Atlas 系统分组规则（由首次运行向导按目录结构草拟，可直接改）。规则按顺序匹配，第一条命中生效；匹配对象 = 文件相对路径 / 文件名 / 命名空间 / 完整限定名（glob，** 表示任意层级）。exclude 是额外忽略的目录名。', 'Code Atlas system grouping rules (drafted by the first-run wizard from the directory structure; edit freely). Rules are matched in order, first hit wins; candidates = file relative path / file name / namespace / fully-qualified name (glob, ** = any depth). exclude lists extra directory names to ignore.'),
     ...(excluded.length ? { exclude: excluded } : {}),
     systems: out.map(({ name, color, paths, files }) => ({ name, color, ...(paths ? { paths } : {}), ...(files ? { files } : {}) })),
   };
@@ -721,7 +725,7 @@ function loadFacets(opts, roots) {
     try {
       return { file: f, config: JSON.parse(fs.readFileSync(f, 'utf8')) };
     } catch (err) {
-      throw new Error(`facets 分组配置解析失败：${f}\n${err.message}`);
+      throw new Error(t(`facets 分组配置解析失败：${f}\n${err.message}`, `cannot parse the facets config: ${f}\n${err.message}`));
     }
   }
   return null;
@@ -1344,7 +1348,7 @@ export async function scan(opts) {
 
   // 写回增量缓存（下次没变的文件就不用再解析了）
   if (freshFiles.length || reused.size) {
-    try { writeScanCache(cacheFile, langSpec, maxKb, files, byRel); } catch (e) { console.log(`  （增量缓存没写成功：${e.message}；不影响这次扫描）`); }
+    try { writeScanCache(cacheFile, langSpec, maxKb, files, byRel); } catch (e) { console.log(t(`  （增量缓存没写成功：${e.message}；不影响这次扫描）`, `  (could not write the incremental cache: ${e.message}; this scan is unaffected)`)); }
   }
 
   return { bundle, outDir, files, skipped, roots };

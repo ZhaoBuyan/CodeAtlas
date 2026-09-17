@@ -178,7 +178,7 @@ const MIME = {
 
 function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0.1' }) {
   const bundlePath = path.join(path.resolve(outDir), 'bundle.json');
-  if (!fs.existsSync(bundlePath)) throw new Error(`找不到 ${bundlePath}，先扫描一次`);
+  if (!fs.existsSync(bundlePath)) throw new Error(t(`找不到 ${bundlePath}，先扫描一次`, `cannot find ${bundlePath} — run a scan first`));
 
   const server = http.createServer((req, res) => {
     const url = decodeURIComponent((req.url || '/').split('?')[0]);
@@ -201,7 +201,7 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
   const attempt = () => {
     server.once('error', (err) => {
       if (err.code === 'EADDRINUSE' && tryPort < port + 10) { tryPort++; attempt(); return; }
-      console.error(`起服务失败：${err.message}`);
+      console.error(t(`起服务失败：${err.message}`, `could not start the server: ${err.message}`));
     });
     // 只绑回环地址（而不是 0.0.0.0）：
     // ① 更安全：地图只给本机看，不会暴露到局域网；
@@ -212,13 +212,13 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
     server.listen(tryPort, host, () => {
       const url = `http://localhost:${tryPort}`;
       if (open) {
-        console.log(`\n  ✔ 已启动并打开浏览器：${url}`);
+        console.log(t(`\n  ✔ 已启动并打开浏览器：${url}`, `\n  ✔ Started — opening your browser: ${url}`));
         openBrowser(url);
       } else {
-        console.log(`\n  ✔ 已启动：${url}`);
+        console.log(t(`\n  ✔ 已启动：${url}`, `\n  ✔ Started: ${url}`));
       }
-      console.log(`    （bundle: ${bundlePath}）`);
-      console.log('    （窗口别关，关掉服务就停了）\n');
+      console.log(t(`    （bundle: ${bundlePath}）`, `    (bundle: ${bundlePath})`));
+      console.log(t('    （窗口别关，关掉服务就停了）\n', '    (keep this window open — closing it stops the server)\n'));
     });
   };
   attempt();
@@ -234,7 +234,7 @@ async function cmdAuto(argv) {
   const target = opts._[0];
   const outDir = opts.out || 'dist';
   console.log(`\nCode Atlas v${VERSION}`);
-  console.log(`  正在处理：${path.resolve(target)}`);
+  console.log(t(`  正在处理：${path.resolve(target)}`, `  Working on: ${path.resolve(target)}`));
   const res = await ingest({
     target,
     outDir,
@@ -308,12 +308,12 @@ function cmdLangs(argv) {
     console.log(JSON.stringify(all.map((l) => ({ id: l.id, label: l.label, optIn: !!l.optIn, exts: l.exts })), null, 2));
     return;
   }
-  console.log(`\nCode Atlas 支持的语言：${code.length} 门代码语言 + ${fileLevel.length} 种文件级格式\n`);
-  console.log('代码语言（默认扫这些）：');
+  console.log(t(`\nCode Atlas 支持的语言：${code.length} 门代码语言 + ${fileLevel.length} 种文件级格式\n`, `\nCode Atlas supported languages: ${code.length} code languages + ${fileLevel.length} file-level formats\n`));
+  console.log(t('代码语言（默认扫这些）：', 'Code languages (scanned by default):'));
   for (const l of code) console.log(`  ${l.id.padEnd(12)} ${l.label.padEnd(14)} ${l.exts.join(' ')}`);
-  console.log('\n文件级格式（默认不扫，显式指定才扫）：');
+  console.log(t('\n文件级格式（默认不扫，显式指定才扫）：', '\nFile-level formats (off by default — name them explicitly to scan):'));
   for (const l of fileLevel) console.log(`  ${l.id.padEnd(12)} ${l.label.padEnd(14)} ${l.exts.join(' ')}`);
-  console.log('\n用法：--lang auto（默认，所有代码语言） · --lang csharp,typescript · --lang auto,json\n');
+  console.log(t('\n用法：--lang auto（默认，所有代码语言） · --lang csharp,typescript · --lang auto,json\n', '\nUsage: --lang auto (default, all code languages) · --lang csharp,typescript · --lang auto,json\n'));
 }
 
 /**
@@ -403,7 +403,7 @@ function cmdServe(argv) {
 }
 
 // ---------------------------------------------------------------------------
-const HELP = `Code Atlas v${VERSION}
+const HELP_ZH = `Code Atlas v${VERSION}
 
 最简单：把路径丢进来就行（源码目录、程序集、jar 都认）
   atlas "C:/path/to/project"         扫描并打开浏览器
@@ -427,6 +427,34 @@ const HELP = `Code Atlas v${VERSION}
   --facets <文件>  系统/模块分组规则（默认自动找 <目标>/atlas.facets.json 或 configs/<目录名>.facets.json）
   --exclude a,b    额外跳过的目录名
   --work <目录>    反编译产物放哪（默认 ingest/<名字>）`;
+
+// 英文帮助：和上面的中文版成对，由 t() 二选一（两份都写在调用点上，改文案时能同时看到）
+const HELP_EN = `Code Atlas v${VERSION}
+
+Easiest: just pass a path (source directory, assembly or jar all work)
+  atlas "C:/path/to/project"         scan and open the browser
+  atlas "C:/path/to/App.dll"         decompile + scan
+  atlas "C:/path/to/game.jar"        decompile the jar + scan
+
+Subcommands:
+  atlas scan   <dir...>              scan source directories only (add --incremental to re-parse only changed files)
+  atlas ingest <dir|.dll|.exe|.jar>  decompile first, then scan (for targets without source)
+  atlas serve                        start the local server (no re-scan)
+                                      binds 127.0.0.1 only by default (no firewall prompt, not exposed on the LAN);
+                                      to view it from your LAN/phone: --host 0.0.0.0
+  atlas langs                        list the supported languages (--json for machines)
+  atlas draft-facets <dir>           draft a grouping config from the directory structure (--out writes it; --by namespace --bundle dist uses namespaces)
+
+Common options:
+  --out <dir>       output directory (default dist)
+  --port <port>     local server port (default 5173, walks forward if taken)
+  --no-open         do not open the browser automatically
+  --lang <lang>     only scan the given languages (csharp / typescript / java / lua / auto)
+  --facets <file>   system/module grouping rules (default: <target>/atlas.facets.json or configs/<dirname>.facets.json)
+  --exclude a,b     extra directory names to skip
+  --work <dir>      where decompiled output goes (default ingest/<name>)`;
+
+const HELP = t(HELP_ZH, HELP_EN);
 
 /**
  * 跑完主动退出：个别语法包（实测 Swift）在进程退出阶段的 wasm 析构会崩，
