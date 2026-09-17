@@ -23,7 +23,24 @@ const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..
 const SOURCE_EXTS = new Set(Object.values(LANGUAGES).flatMap((l) => l.exts));
 const SKIP_ASM = /^(System|Microsoft|netstandard|WindowsBase|mscorlib|PresentationFramework|PresentationCore|Accessibility|UIAutomation)/i;
 
-const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts });
+/**
+ * 子进程输出解码：先按 UTF-8；**不是合法 UTF-8 就按 GBK 再解一次**。
+ * 为什么需要：Windows 上 java.exe 的启动器早期报错（例如 “Invalid or corrupt jarfile <路径>”）是按
+ * **系统代码页**（中文机器 = GBK）输出的，JVM 的 stdout/stderr.encoding 参数管不到它 —— 实测中文路径会变乱码。
+ * 修在读的一侧最省事，而且对“外部工具按本地代码页说话”这类情况普遍有效。
+ */
+function dec(buf) {
+  if (buf == null) return '';
+  const b = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf));
+  const s = b.toString('utf8');
+  if (!s.includes('\uFFFD')) return s;
+  try { return new TextDecoder('gbk').decode(b); } catch { return s; }
+}
+
+const run = (cmd, args, opts = {}) => {
+  const r = spawnSync(cmd, args, { ...opts, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
+  return { ...r, stdout: dec(r.stdout), stderr: dec(r.stderr) };
+};
 
 // ---------------------------------------------------------------------------
 // 工具探测
@@ -320,7 +337,16 @@ function decompileJar(jar, workDir, notes, decompilerPath) {
   notes.push(t(`反编译工具：${path.basename(dec)} + ${java.label}${java.bundled ? '（自带）' : ''}`, `Decompiler: ${path.basename(dec)} + ${java.label}${java.bundled ? ' (bundled)' : ''}`));
   fs.mkdirSync(workDir, { recursive: true });
   // 注意用找到的那个 java（以前这里写死了 'java'，自带运行时形同虚设）
-  const r = run(java.cmd, ['-jar', dec, jar, '--outputdir', workDir, '--silent', 'true']);
+  // JVM 编码参数：让 **JVM 内部**（cfr 自己的输出 / 异常信息）走 UTF-8。
+  // 注：java.exe 启动器的早期报错（jar 打不开之类）不归它管，那段靠 `dec()` 按 GBK 兜（实测过）。
+  const jvmEnc = [
+    '-Dfile.encoding=UTF-8',
+    '-Dstdout.encoding=UTF-8',
+    '-Dstderr.encoding=UTF-8',
+    '-Dsun.stdout.encoding=UTF-8',
+    '-Dsun.stderr.encoding=UTF-8',
+  ];
+  const r = run(java.cmd, [...jvmEnc, '-jar', dec, jar, '--outputdir', workDir, '--silent', 'true']);
   if (r.status !== 0) throw new Error(t(`反编译 .jar 失败：${String(r.stderr || r.stdout || '').slice(0, 400)}`, `Decompiling the .jar failed: ${String(r.stderr || r.stdout || '').slice(0, 400)}`));
   notes.push(t(`反编译 ${path.basename(jar)} → ${countFiles(workDir, '.java')} 个 .java`, `Decompiled ${path.basename(jar)} → ${countFiles(workDir, '.java')} .java files`));
   return workDir;

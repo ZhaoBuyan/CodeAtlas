@@ -502,8 +502,10 @@ so the whole file does not vanish from the map; their members (functions/variabl
   them). Ticking only the languages your project actually uses is markedly faster and keeps foreign languages
   from dependency directories out of the map (there is a checkbox panel in the launcher, stored globally in
   `Langs`).
-- **Files are read as UTF-8**: files in other encodings (GBK, …) may produce parse errors (listed separately in
-  the report). If the whole repo uses another encoding, converting it to UTF-8 first gives better results.
+- **Files are read as UTF-8**: files in another encoding (GBK, …) are **detected and flagged** — the scan report,
+  the MCP `overview` and a chip in the web UI all say how many files are affected (`totals.nonUtf8Files`).
+  Their comments/strings show up as mojibake even when the parse itself succeeds (so there is no “parse error”),
+  and converting them to UTF-8 gives back clean text on the next scan.
 - **What incremental scanning relies on**: `--incremental` decides cache validity from an engine fingerprint
   (version + mtimes of `scan.mjs`/`languages.mjs`/`preprocess.mjs`). Change the version or those files and the
   cache is discarded and a full scan runs — it will not quietly answer with results produced by old rules.

@@ -65,6 +65,8 @@ Small tip: **dark blocks** are things outside the current filter/search, not an 
   in the wizard).
 - **Some numbers say "unknown / ambiguous"**: dependencies are decided by **static name matching**, so same-named
   types and dynamic calls are honestly marked instead of guessed (unresolved, ambiguous, confidence).
+- **The report says "Encoding? N files are probably not UTF-8"**: those files' comments / strings show as mojibake
+  (their parse may still have succeeded, so there is **no** "parse error"). Re-save them as UTF-8 and scan again.
 - **Uninstalling**: delete the exe; then delete `%LocalAppData%\CodeAtlas` and nothing is left.
 - **Slow or stuck**: tick fewer languages in "Setup…" (only what the project really uses) — big repos get much faster.
 - **You changed a few files and want to look again**: no need to wait for a full scan — tick **"Incremental"**
