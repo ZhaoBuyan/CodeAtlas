@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scanToDisk } from './scan.mjs';
 import { LANGUAGES, languageForExt } from './languages.mjs';
+import { t } from './i18n.mjs';
 
 const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -33,7 +34,7 @@ export function findIlspy() {
   // 开发模式（node src/cli.mjs）没这个变量 → 下面照旧找 ilspycmd。
   const self = process.env.CODEATLAS_SELF;
   if (self && fs.existsSync(self)) {
-    return { cmd: self, argsPrefix: ['--decompile'], label: 'Code Atlas 内置（ICSharpCode.Decompiler）', builtin: true };
+    return { cmd: self, argsPrefix: ['--decompile'], label: t('Code Atlas 内置（ICSharpCode.Decompiler）', 'built into Code Atlas (ICSharpCode.Decompiler)'), builtin: true };
   }
   const cands = [
     process.env.ILSPYCMD,
@@ -142,7 +143,7 @@ function autoFacets(stem, explicit) {
 function findSfextract() {
   const self = process.env.CODEATLAS_SELF;
   if (self && fs.existsSync(self)) {
-    return { cmd: self, argsPrefix: ['--extract-bundle'], label: 'Code Atlas 内置（SingleFileExtractor）' };
+    return { cmd: self, argsPrefix: ['--extract-bundle'], label: t('Code Atlas 内置（SingleFileExtractor）', 'built into Code Atlas (SingleFileExtractor)') };
   }
   const cands = [
     process.env.SFEXTRACT,
@@ -207,7 +208,7 @@ function decompileBundle(exe, workDir, notes) {
   }
   const dllCount = countFiles(bundleDir, '.dll');
   if (!dllCount) throw notManagedError(exe);
-  notes.push(`解包单文件发行版：${path.basename(exe)} → ${dllCount} 个 dll（${sf.label}）`);
+  notes.push(t(`解包单文件发行版：${path.basename(exe)} → ${dllCount} 个 dll（${sf.label}）`, `Unpacked single-file bundle: ${path.basename(exe)} → ${dllCount} dlls (${sf.label})`));
 
   const base = path.basename(exe).replace(/\.exe$/i, '');
   const preferred = path.join(bundleDir, `${base}.dll`);
@@ -266,7 +267,7 @@ function decompileAssemblies(assemblies, workDir, notes) {
       '如果是直接跑引擎（node src/cli.mjs），才需要装：dotnet tool install -g ilspycmd --version 9.1.0.7988',
     ].join('\n'));
   }
-  notes.push(`反编译工具：${ilspy.label}`);
+  notes.push(t(`反编译工具：${ilspy.label}`, `Decompiler: ${ilspy.label}`));
   let csCount = 0;
   for (const asm of assemblies) {
     const stem = path.basename(asm).replace(/\.(dll|exe)$/i, '');
@@ -279,7 +280,7 @@ function decompileAssemblies(assemblies, workDir, notes) {
     }
     const n = countFiles(out, '.cs');
     csCount += n;
-    notes.push(`反编译 ${path.basename(asm)} → ${n} 个 .cs（${path.relative(process.cwd(), out)}）`);
+    notes.push(t(`反编译 ${path.basename(asm)} → ${n} 个 .cs（${path.relative(process.cwd(), out)}）`, `Decompiled ${path.basename(asm)} → ${n} .cs files (${path.relative(process.cwd(), out)})`));
   }
   if (!csCount) throw new Error('反编译没有产出任何 .cs 文件');
   return workDir;
@@ -314,12 +315,12 @@ function decompileJar(jar, workDir, notes, decompilerPath) {
       '完全版内置了一份（vendor/cfr.jar）；直接跑引擎的话可以下 cfr.jar 放到 ' + path.join(os.homedir(), '.code-atlas', 'cfr.jar') + '，或用 --decompiler <路径> 指定。',
     ].join('\n'));
   }
-  notes.push(`反编译工具：${path.basename(dec)} + ${java.label}${java.bundled ? '（自带）' : ''}`);
+  notes.push(t(`反编译工具：${path.basename(dec)} + ${java.label}${java.bundled ? '（自带）' : ''}`, `Decompiler: ${path.basename(dec)} + ${java.label}${java.bundled ? ' (bundled)' : ''}`));
   fs.mkdirSync(workDir, { recursive: true });
   // 注意用找到的那个 java（以前这里写死了 'java'，自带运行时形同虚设）
   const r = run(java.cmd, ['-jar', dec, jar, '--outputdir', workDir, '--silent', 'true']);
   if (r.status !== 0) throw new Error(`反编译 .jar 失败：${String(r.stderr || r.stdout || '').slice(0, 400)}`);
-  notes.push(`反编译 ${path.basename(jar)} → ${countFiles(workDir, '.java')} 个 .java`);
+  notes.push(t(`反编译 ${path.basename(jar)} → ${countFiles(workDir, '.java')} 个 .java`, `Decompiled ${path.basename(jar)} → ${countFiles(workDir, '.java')} .java files`));
   return workDir;
 }
 
@@ -351,8 +352,8 @@ export async function ingest(o) {
     const oneLang = languageForExt(path.extname(target).toLowerCase());
     if (oneLang) {
       const dir = path.dirname(target);
-      notes.push(`目标是单个源码文件（${oneLang.label}）：${path.basename(target)}`);
-      notes.push(`改为扫描它所在的目录：${dir}`);
+      notes.push(t(`目标是单个源码文件（${oneLang.label}）：${path.basename(target)}`, `Target is a single source file (${oneLang.label}): ${path.basename(target)}`));
+      notes.push(t(`改为扫描它所在的目录：${dir}`, `Scanning its directory instead: ${dir}`));
       const q = autoFacets(path.basename(dir), o.facets);
       if (q.note) notes.push(q.note);
       const res = await scanToDisk({ roots: [dir], outDir: o.outDir, lang: o.lang, facets: q.facets, maxKb: o.maxKb, incremental: o.incremental, ingest: { original: target, tool: null, sourceDir: dir, notes } });
@@ -361,7 +362,7 @@ export async function ingest(o) {
   }
 
   if (stat.isDirectory() && hasSource(target)) {
-    notes.push('目录里已有可扫源码，跳过反编译');
+    notes.push(t('目录里已有可扫源码，跳过反编译', 'Directory already has source to scan — skipping decompilation'));
     const res = await scanToDisk({ roots: [target], outDir: o.outDir, lang: o.lang, facets: o.facets, maxKb: o.maxKb, incremental: o.incremental, ingest: { original: target, tool: null, sourceDir: target, notes } });
     return { ...res, sourceDir: target, tool: null, notes, original: target };
   }

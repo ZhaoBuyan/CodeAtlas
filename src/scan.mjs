@@ -13,6 +13,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Parser, Language } from 'web-tree-sitter';
 import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages } from './languages.mjs';
+import { t } from './i18n.mjs';
 import { preprocess } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
@@ -807,7 +808,7 @@ async function extractFiles(files) {
   let parsedFiles = 0;
   let lastReportAt = startedAt;
   const langsUsed = [...new Set(files.map((f) => f.lang.id))];
-  console.log(`  开始解析：${totalFiles} 个文件（${langsUsed.join(', ')}）`);
+  console.log(t(`  开始解析：${totalFiles} 个文件（${langsUsed.join(', ')}）`, `  Parsing ${totalFiles} files (${langsUsed.join(', ')})`));
 
   for (const f of files) {
     let rawSource;
@@ -919,7 +920,7 @@ async function extractFiles(files) {
     parsedFiles++;
     if (totalFiles > 150 && (parsedFiles % 150 === 0 || Date.now() - lastReportAt > 2500)) {
       lastReportAt = Date.now();
-      console.log(`  解析中… ${parsedFiles}/${totalFiles} 文件（${((Date.now() - startedAt) / 1000).toFixed(1)}s）`);
+      console.log(t(`  解析中… ${parsedFiles}/${totalFiles} 文件（${((Date.now() - startedAt) / 1000).toFixed(1)}s）`, `  Parsing… ${parsedFiles}/${totalFiles} files (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`));
     }
 
     part.file = {
@@ -1063,7 +1064,7 @@ export async function scan(opts) {
 
   for (const r of roots) {
     if (!fs.existsSync(r) || !fs.statSync(r).isDirectory()) {
-      throw new Error(`目录不存在：${r}`);
+      throw new Error(t(`目录不存在：${r}`, `Directory not found: ${r}`));
     }
   }
 
@@ -1098,14 +1099,14 @@ export async function scan(opts) {
     } else freshFiles.push(f);
   }
   if (opts.incremental) {
-    console.log(`  增量扫描：复用 ${reused.size} 个没变的文件，重新解析 ${freshFiles.length} 个` + (cache ? '' : '（没有可用缓存，本次算全量）'));
+    console.log(t(`  增量扫描：复用 ${reused.size} 个没变的文件，重新解析 ${freshFiles.length} 个` + (cache ? '' : '（没有可用缓存，本次算全量）'), `  Incremental: reused ${reused.size} unchanged files, re-parsing ${freshFiles.length}` + (cache ? '' : ' (no usable cache — treating this as a full scan)')));
   }
 
   const freshParts = [];
   const failedLanguages = [];   // 整门语言没抽出来（子进程崩了等）——要记进 bundle，不能只飘一行日志
   if (freshFiles.length) {
     const langsWithFiles = [...new Set(freshFiles.map((f) => f.lang.id))];
-    console.log(`  开始解析：${freshFiles.length} 个文件（${langsWithFiles.join(', ')}）`);
+    console.log(t(`  开始解析：${freshFiles.length} 个文件（${langsWithFiles.join(', ')}）`, `  Parsing ${freshFiles.length} files (${langsWithFiles.join(', ')})`));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'code-atlas-'));
     const work = path.join(tmp, 'files.json');
     fs.writeFileSync(work, JSON.stringify({
@@ -1128,11 +1129,11 @@ export async function scan(opts) {
       });
       let ok = false;
       if (fs.existsSync(emit)) {
-        try { freshParts.push(JSON.parse(fs.readFileSync(emit, 'utf8'))); ok = true; } catch (e) { console.log(`  ⚠ ${langId} 的结果读不出来：${e.message}`); }
+        try { freshParts.push(JSON.parse(fs.readFileSync(emit, 'utf8'))); ok = true; } catch (e) { console.log(t(`  ⚠ ${langId} 的结果读不出来：${e.message}`, `  ⚠ ${langId}: cannot read the extract result: ${e.message}`)); }
       }
       if (!ok) {
         const tail = String(r.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
-        console.log(`  ⚠ ${langId} 没解析成功（子进程退出码 ${r.status}）—— 这门语言这次不进地图。${tail ? `子进程最后一句：${tail.slice(0, 200)}` : ''}`);
+        console.log(t(`  ⚠ ${langId} 没解析成功（子进程退出码 ${r.status}）—— 这门语言这次不进地图。${tail ? `子进程最后一句：${tail.slice(0, 200)}` : ''}`, `  ⚠ ${langId} failed to parse (child exit code ${r.status}) — this language is not in the map this time. ${tail ? `Last line from the child: ${tail.slice(0, 200)}` : ''}`));
         failedLanguages.push({ lang: langId, files: (byLang.get(langId) || []).length, reason: tail || `子进程退出码 ${r.status}` });
       }
       // 注意：子进程是 SIGKILL 硬退的（绕开退出阶段的 libuv 断言），所以**成功时退出码也是 1**。
