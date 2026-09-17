@@ -325,7 +325,11 @@ function toolSubgraph(idx, a) {
   for (let d = 0; d <= depth; d++) {
     const at = [...seen].filter(([, dd]) => dd === d).map(([id]) => idx.byId.get(id)).filter(Boolean);
     if (!at.length) continue;
-    lines.push(T(`第 ${d} 层（${at.length}）：`, `Level ${d} (${at.length}): `) + at.slice(0, 40).map((t) => `${t.fqn}[${t.kind}]`).join('  '));
+    const shown = at.slice(0, 40);
+    // 每层最多列 40 个（控 token），超了要写明“前 N / 共 M”——否则会被当成“这层只有 40 个”
+    const head = shown.length < at.length ? `前 ${shown.length} / 共 ${at.length}` : `${at.length}`;
+    const headEn = shown.length < at.length ? `first ${shown.length} of ${at.length}` : `${at.length}`;
+    lines.push(T(`第 ${d} 层（${head}）：`, `Level ${d} (${headEn}): `) + shown.map((t) => `${t.fqn}[${t.kind}]`).join('  '));
   }
   lines.push(T('（只看名字；细节用 symbol，引用方向用 refs）', '(names only; use symbol for detail, refs for direction)'));
   return lines.join('\n');
