@@ -151,8 +151,8 @@ What the full edition has beyond the lite one: `node.exe` in the payload (88 MB)
 runtime (about 30 MB).
 
 - Extracted size: about 163 MB (full) / 45 MB (lite); delete it and it is re-extracted automatically.
-  Caches untouched for more than 7 days are cleaned up on the next start, so switching versions does not
-  leave ~160 MB behind per version.
+  Old extraction directories for other versions are cleaned up **on every start**, keeping only the one in
+  use plus the most recently used one — so switching versions does not leave ~160 MB behind each time.
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
@@ -523,7 +523,8 @@ so the whole file does not vanish from the map; their members (functions/variabl
   scanning never goes online (use `--host 0.0.0.0` only to view the map from your LAN).
 - **`dist/` and `ingest/` land next to the exe**: the engine extraction directory
   (`%LocalAppData%\CodeAtlas\engine\<version-fingerprint>\`) is a cache — delete it and it is re-extracted;
-  caches untouched for over 7 days are cleaned up on the next start.
+  old caches from other versions are cleaned up on every start (only the current one and the most recently
+  used one are kept).
 
 ### What it cannot read (the boundaries, stated plainly)
 
