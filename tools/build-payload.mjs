@@ -104,6 +104,10 @@ copy([
   ['package.json', null],
   ['LICENSE', null],
   ['THIRD-PARTY-NOTICES.md', null],
+  // 两份用户说明书也放一份（用户拍板：反正要重打载荷，顺带打进去，解包目录里东西就齐了）。
+  // 注意：启动器没有“打开该目录”的入口，所以这**不是给用户看的渠道**，只是自带一份而已。
+  ['USAGE.md', null],
+  ['使用说明.md', null],
 ]);
 // 第三方许可证原文（Node.js 那份 154 KB，是官方原文件，所以单独放目录）
 copy(fs.readdirSync(path.join(ROOT, 'licenses')).map((f) => [`licenses/${f}`, null]));
