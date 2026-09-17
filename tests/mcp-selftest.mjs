@@ -52,6 +52,7 @@ const check = (ok, label, detail = '') => {
 // 握手
 const init = await req('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'selftest', version: '1' } });
 check(!!init.result?.serverInfo, 'initialize', `${init.result?.serverInfo?.name} v${init.result?.serverInfo?.version}（协议 ${init.result?.protocolVersion}）`);
+check(!!init.result?.instructions, 'initialize 带 instructions（给 AI 的说明书/边界声明）', String(init.result?.instructions || '').split('\n')[0].slice(0, 50));
 notify('notifications/initialized');
 
 const tools = await req('tools/list');
@@ -65,6 +66,9 @@ const groupName = bundle.facets?.systems?.[0]?.name || biggestFile.path.split('/
 
 const overview = await call('overview', {});
 check(/类型|types/.test(overview) && overview.length > 60, 'overview', overview.split('\n')[0].slice(0, 60));
+check(/扫描根/.test(overview), 'overview 给扫描根（AI 才能拼绝对路径去读源文件）', (overview.split('\n').find((l) => l.startsWith('扫描根')) || '').slice(0, 60));
+check(/名字匹配/.test(overview), 'overview 交代可信度前提（依赖边是名字匹配）');
+check(/数据快照/.test(overview), 'overview 给数据时效（生成时间/语言/上限）');
 
 const search = await call('search', { query: hottest.fqn.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))) });
 check(search.includes(hottest.name), 'search', `找到 ${hottest.name}`);
@@ -74,6 +78,8 @@ check(sym.includes(hottest.name) && /文件|file/.test(sym), 'symbol', sym.split
 
 const refs = await call('refs', { name: hottest.fqn, direction: 'in' });
 check(refs.length > 10, 'refs', refs.split('\n')[0].slice(0, 70));
+const refsTrunc = await call('refs', { name: hottest.fqn, direction: 'in', limit: 1 });
+check(hottest.fanIn <= 1 || /还有 .*条没显示|无/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
 
 const sub = await call('subgraph', { name: hottest.fqn, depth: 2 });
 check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));

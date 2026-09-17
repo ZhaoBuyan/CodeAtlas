@@ -171,7 +171,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 | `symbol(name)` | 一个类型的全部细节：说明、文件:行、成员清单、基类、依赖数、所属系统 |
 | `refs(name, in/out)` | 谁引用它 / 它引用谁（改代码前的影响面） |
 | `subgraph(name, depth)` | 依赖子图（“改这里会牵连什么”） |
-| `file(path)` | 一个文件的类型、导入、行数、解析异常 |
+| `file(path)` | 一个文件的类型、导入、行数（**有解析异常时标注**） |
 | `map(budget)` | 按 token 预算导出**骨架**（系统 → 关键类型 → 关键成员）——让 AI 先拿到全局，省 token |
 | `impact(name, depth)` | **影响面分析**：沿“谁引用它”多跳展开，并说明哪些看不见（动态调用/反射） |
 
@@ -191,7 +191,10 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 两个细节：
 
 - 输出是**紧凑文本**而不是 JSON —— 同样的问题 token 更少，AI 也更好读；
-- bundle 是快照，会过时。MCP 每次调用前会查 mtime，**重新扫描过就自动换新的**，不会拿隔夜数据回答。
+- bundle 是快照，会过时。MCP 每次调用前会查 mtime，**重新扫描过就自动换新的**，不会拿隔夜数据回答；
+- **接上就知道边界**：`initialize` 会带一段 `instructions`（这份数据怎么用、哪里不可信）；
+  `overview` 的第一屏还直接给出**扫描根目录**（AI 自己拼绝对路径去读源文件用）、**数据快照**（生成时间 / 语言范围 / 单文件上限 / 是否增量）
+  和**可信度前提**（依赖边是名字匹配，并报未匹配与同名歧义的数量）。
 
 自检：`node tests/mcp-selftest.mjs [dist]`（用真实 stdio 协议把每个工具跑一遍）。
 

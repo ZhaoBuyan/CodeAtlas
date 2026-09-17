@@ -30,6 +30,27 @@ export function listToolsText() {
 
 const PROTOCOL = '2024-11-05';
 
+/**
+ * 给 AI 的"说明书"：MCP 客户端的 initialize 会把这段交给模型。
+ * 为什么要有它：光看工具描述，AI 只能知道"能问什么"，不知道"这些结论能信到什么程度"——
+ * 本项目的第一条价值观是诚实，所以把边界直接说在开头，而不是等模型自己踩坑。
+ * （overview 里也放了一版浓缩的，因为不是每个客户端都会把 instructions 交给模型。）
+ */
+const INSTRUCTIONS = [
+  '这是 Code Atlas 生成的代码地图：由 tree-sitter 静态解析源码得到，全程本地，不联网。',
+  '',
+  '怎么用：先 overview 建立全局，再 search 找符号（返回 id），然后用 symbol / refs / subgraph / impact 往下钻；',
+  '上下文紧张时先用 map(budget) 拿骨架（系统 → 关键类型 → 关键成员）。',
+  '',
+  '要知道的边界（诚实优先，别把推断当事实）：',
+  '- 类型 / 成员 / 行数 / 导入来自语法树，可信；依赖边是静态**名字匹配**——动态调用、反射、字符串拼出来的名字看不见，',
+  '  未匹配与同名歧义的数量在 overview 和 impact 里会明确报出来；',
+  '- 有解析异常的文件会单独标注，那些文件的数据可能不全；',
+  '- 反编译产物（.dll / .exe / .jar 反编译出来的）没有源码注释，所以"说明"为空是正常的；',
+  '- 输出里的路径都**相对于扫描根**，扫描根在 overview 里给出（用来拼绝对路径、自己去读源文件）；',
+  '- 数据是快照：overview 里有生成时间；重新扫描后服务会自动换新，不必重启。',
+].join('\n');
+
 export function buildIndex(b) {
   const byId = new Map(b.types.map((t) => [t.id, t]));
   const files = new Map(b.files.map((f) => [f.id, f]));
@@ -169,9 +190,17 @@ function toolOverview(idx) {
   const bigFiles = b.files.slice().sort((a, c) => c.code - a.code).slice(0, 6);
   const lines = [];
   lines.push(`项目：${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`);
+  const roots = (b.source.roots || []).join('  ');
+  if (roots) lines.push(`扫描根：${roots}（输出里的路径都相对于它）`);
+  const so = b.source.scanOptions || {};
+  const when = String(b.generated || '').replace('T', ' ').slice(0, 19);
+  lines.push(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`);
   lines.push(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`);
   if (b.totals.parseErrors) lines.push(`注意：${b.totals.parseErrors} 处语法树解析异常（这些文件数据可能不全）`);
   if (b.totals.compilerGenerated) lines.push(`注意：${b.totals.compilerGenerated} 个编译器生成/反编译生成类型（非手写代码）`);
+  // 诚实边界：把"依赖边是名字匹配"这个前提摆在第一屏——只调 overview 的 AI 也得看得到
+  const un = b.unresolved || {};
+  lines.push(`可信度：依赖边是静态名字匹配（动态调用 / 反射 / 字符串拼名看不见）——未匹配 ${fmt(un.unknown || 0)} 处 · 同名歧义 ${fmt(un.ambiguous || 0)} 处`);
   const sys = b.facets?.systems || [];
   if (sys.length) lines.push(`系统划分（${b.facets.configFile}）：\n` + sys.map((s) => `  ${s.name}：${fmt(s.loc)} 行 · ${s.types} 类型 · ${s.files} 文件`).join('\n'));
   else lines.push('没有系统分组规则（可用 configs/<项目>.facets.json 定义；否则按目录/文件看）');
@@ -261,6 +290,7 @@ function toolRefs(idx, a) {
       const o = pick(e);
       out.push(`  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (继承)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`);
     }
+    if (es.length > limit) out.push(`  …还有 ${fmt(es.length - limit)} 条没显示（limit 可调，上限 200）`);
   };
   if (dir === 'in' || dir === 'both') show(idx.ins.get(t.id) || [], '被谁引用', (e) => idx.byId.get(e.from));
   if (dir === 'out' || dir === 'both') show(idx.outs.get(t.id) || [], '引用了谁', (e) => idx.byId.get(e.to));
@@ -304,7 +334,7 @@ function toolFile(idx, a) {
   if (f.errors) lines.push(`注意：${f.errors} 处解析异常`);
   lines.push(`类型 ${types.length}：` + types.map((t) => `${t.name}[${t.kind}]`).join('  '));
   const imports = f.imports || [];
-  lines.push(`导入（${imports.length}）：${imports.slice(0, 20).join(', ')}`);
+  lines.push(`导入（${imports.length}）：${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` …等 ${imports.length} 条` : ''}`);
   return lines.join('\n');
 }
 
@@ -490,6 +520,8 @@ export function startMcp({ bundlePath }) {
         protocolVersion: PROTOCOL,
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: 'code-atlas', version: idx.b.generator?.version || '0.1.0' },
+        // MCP 规范里的字段：客户端会把这段交给模型，相当于"使用说明书 + 边界声明"
+        instructions: INSTRUCTIONS,
       });
     }
     if (method === 'notifications/initialized' || String(method).startsWith('notifications/')) return;
