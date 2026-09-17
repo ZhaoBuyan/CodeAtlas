@@ -76,12 +76,14 @@ check(search.includes(hottest.name), 'search', `找到 ${hottest.name}`);
 const sym = await call('symbol', { name: String(hottest.id) });   // 用 id：多语言 bundle 里同名同全名的类型可能有好几个（C# 和 TS 的 Animal）
 check(sym.includes(hottest.name) && /文件|[Ff]ile/.test(sym), 'symbol', sym.split('\n')[0].slice(0, 70));
 
-const refs = await call('refs', { name: hottest.fqn, direction: 'in' });
-check(refs.length > 10, 'refs', refs.split('\n')[0].slice(0, 70));
-const refsTrunc = await call('refs', { name: hottest.fqn, direction: 'in', limit: 1 });
-check(hottest.fanIn <= 1 || /还有 .*条没显示|more not shown|无|none/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
+// 用 **id** 而不是 fqn：多语言 bundle 里同名 / 同全名的类型可能有好几个（symbol / impact 那边已经这么做了，
+// 这两处漏了）—— 用名字会被工具判成“歧义”并发回一句提示而不是数据，CI 上就因此红过。
+const refs = await call('refs', { name: String(hottest.id), direction: 'in' });
+check(refs.length > 10 && /×/.test(refs), 'refs', refs.split('\n')[0].slice(0, 70));
+const refsTrunc = await call('refs', { name: String(hottest.id), direction: 'in', limit: 1 });
+check(hottest.fanIn <= 1 || /还有 .*条没显示|more not shown/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
 
-const sub = await call('subgraph', { name: hottest.fqn, depth: 2 });
+const sub = await call('subgraph', { name: String(hottest.id), depth: 2 });
 check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));
 
 const fileOut = await call('file', { path: biggestFile.path.slice(0, Math.max(4, biggestFile.path.length - 4)) });

@@ -1,6 +1,6 @@
 name: CI
 
-# 推代码/PR：跑测试（24 门语言回归 + MCP 自检）
+# 推代码/PR：跑测试（27 门语言回归 + MCP 自检）
 # 打 tag（v*）：同上 + 打两个发行版 exe，并挂到 GitHub Release 当下载资产
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    name: 测试（语言回归 24 门 + MCP 自检）
+    name: 测试（语言回归 27 门 + MCP 自检）
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
       - name: 装依赖
         run: npm ci
 
-      - name: 语言 fixtures 回归（24 门，每门独立进程）
+      - name: 语言 fixtures 回归（27 门，每门独立进程）
         run: node tests/run-fixtures.mjs
 
       - name: 先扫一份 bundle（MCP 自检要用）
