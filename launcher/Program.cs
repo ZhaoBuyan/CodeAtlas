@@ -702,7 +702,7 @@ namespace CodeAtlas
                 Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             } Log(_inc.Checked ? "增量扫描：开（只重解析改过的文件）" : "增量扫描：关（每次全量）"); };
-            _tips.SetToolTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。");
+            SetTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。", "Incremental scan: re-parse only the files that changed (off by default = full scan every time).\r\nIt only saves parsing; who-references-whom is still recomputed wholesale, so it only pays off on big projects.");
 
             SetText(_run, "扫描", "Scan");
             Style(_run, true);
@@ -726,7 +726,7 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            _tips.SetToolTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。");
+            SetTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: 23 code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
             SetText(_wiz, "项目设置…", "Setup…");

@@ -39,11 +39,11 @@ namespace CodeAtlas
                 Top = 16,
                 Width = 368,
             };
-            var ok = new Button { Text = "确定", Width = 84, Height = 30, Left = 16 + 368 - 84, Top = 62 };
+            var ok = new Button { Text = L.T("确定", "OK"), Width = 84, Height = 30, Left = 16 + 368 - 84, Top = 62 };
             Launcher.Style(ok, true);
             ok.BackColor = Palette.Accent;
             ok.ForeColor = Palette.Bg;
-            var cancel = new Button { Text = "取消", Width = 84, Height = 30, Left = ok.Left - 92, Top = 62 };
+            var cancel = new Button { Text = L.T("取消", "Cancel"), Width = 84, Height = 30, Left = ok.Left - 92, Top = 62 };
             Launcher.Style(cancel);
             ok.DialogResult = DialogResult.OK;
             cancel.DialogResult = DialogResult.Cancel;
@@ -110,7 +110,7 @@ namespace CodeAtlas
             Langs = langsSpec ?? "";
             FacetsPath = facetsPath ?? "";
 
-            Text = "项目设置";
+            Text = L.T("项目设置", "Project setup");
             BackColor = Palette.Bg;
             ForeColor = Palette.Fg;
             Font = new Font("Microsoft YaHei UI", 10.5f);
@@ -133,11 +133,11 @@ namespace CodeAtlas
 
             var left = new FlowLayoutPanel { Dock = DockStyle.Left, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight };
             var right = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.RightToLeft };
-            _next.Text = "下一步";
+            _next.Text = L.T("下一步", "Next");
             _next.Click += (s, e) => OnNext();
-            _prev.Text = "上一步";
+            _prev.Text = L.T("上一步", "Back");
             _prev.Click += (s, e) => SetStep(_step - 1);
-            _cancel.Text = "取消";
+            _cancel.Text = L.T("取消", "Cancel");
             _cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             foreach (var b in new[] { _next, _prev, _cancel }) Launcher.Style(b);
             _next.BackColor = Palette.Accent;
@@ -146,7 +146,7 @@ namespace CodeAtlas
             var foot = new Panel { Dock = DockStyle.Bottom, BackColor = Palette.Bg, Height = 56 };
             foot.Controls.Add(left);
             foot.Controls.Add(right);
-            foot.Controls.Add(new Label { Text = "首次配置只做一次；以后打开这个项目就直接扫描。", ForeColor = Palette.Dim, AutoSize = true, Left = 16, Top = 18 });
+            foot.Controls.Add(new Label { Text = L.T("首次配置只做一次；以后打开这个项目就直接扫描。", "Set up once; later scans just run."), ForeColor = Palette.Dim, AutoSize = true, Left = 16, Top = 18 });
 
             Controls.Add(_body);     // Fill 先加
             Controls.Add(head);
@@ -196,13 +196,13 @@ namespace CodeAtlas
             _path.Text = Target;
             _path.SelectionStart = 0;   // 长路径默认从头显示（不然会滚到末尾，看不清是哪个盘）
             _path.SelectionLength = 0;
-            var pickDir = new Button { Text = "选择文件夹…" };
-            var pickFile = new Button { Text = "选择文件…" };
+            var pickDir = new Button { Text = L.T("选择文件夹…", "Choose folder…") };
+            var pickFile = new Button { Text = L.T("选择文件…", "Choose file…") };
             Launcher.Style(pickDir);
             Launcher.Style(pickFile);
-            pickDir.Click += (s, e) => { using var d = new FolderBrowserDialog { Description = "选一个要分析的文件夹（源码目录，或放着 .dll / .exe / .jar 的目录）" }; if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.SelectedPath; };
-            pickFile.Click += (s, e) => { using var d = new OpenFileDialog { Title = "选一个要分析的文件", Filter = "程序集 / 压缩包 (*.dll;*.exe;*.jar)|*.dll;*.exe;*.jar|所有文件 (*.*)|*.*" }; if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.FileName; };
-            var label = new Label { Text = "要分析什么？", ForeColor = Palette.Fg, AutoSize = true };
+            pickDir.Click += (s, e) => { using var d = new FolderBrowserDialog { Description = L.T("选一个要分析的文件夹（源码目录，或放着 .dll / .exe / .jar 的目录）", "Pick a folder to analyze (a source directory, or one holding .dll / .exe / .jar)") }; if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.SelectedPath; };
+            pickFile.Click += (s, e) => { using var d = new OpenFileDialog { Title = L.T("选一个要分析的文件", "Pick a file to analyze"), Filter = L.T("程序集 / 压缩包 (*.dll;*.exe;*.jar)|*.dll;*.exe;*.jar|所有文件 (*.*)|*.*", "Assemblies / archives (*.dll;*.exe;*.jar)|*.dll;*.exe;*.jar|All files (*.*)|*.*") }; if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.FileName; };
+            var label = new Label { Text = L.T("要分析什么？", "What to analyze?"), ForeColor = Palette.Fg, AutoSize = true };
             // 一行三个：输入框 + 两个按钮。用 TableLayoutPanel + Anchor 排——
             // 这是 WinForms 自己的布局引擎：Anchor=Left|Right 的控件会在单元格里**垂直居中**，
             // 宽度自己撑满，不需要我们算任何像素（手算坐标会跟框架的缩放叠在一起，踩过三次）。
@@ -225,7 +225,7 @@ namespace CodeAtlas
             row.Controls.Add(pickFile, 2, 0);
             var note = new Label
             {
-                Text = "源码目录直接扫；.dll / .exe（含单文件发行版）/ .jar 会先反编译再扫。\n这一页就是主窗口那个「目标」，在这里选完，后面两页会用到它。",
+                Text = L.T("源码目录直接扫；.dll / .exe（含单文件发行版）/ .jar 会先反编译再扫。\n这一页就是主窗口那个「目标」，在这里选完，后面两页会用到它。", "Source dirs are scanned as-is; .dll / .exe / .jar (single-file .exe too) get decompiled first.\nThis is the same target as in the main window; the next two pages build on it."),
                 ForeColor = Palette.Dim,
                 AutoSize = false,
             };
@@ -252,10 +252,10 @@ namespace CodeAtlas
         private void BuildStep2()
         {
             var p = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Bg };
-            var label = new Label { Text = "扫哪些语言？", ForeColor = Palette.Fg, AutoSize = true };
+            var label = new Label { Text = L.T("扫哪些语言？", "Which languages?"), ForeColor = Palette.Fg, AutoSize = true };
             _langInfo.ForeColor = Palette.Dim;
             _langInfo.AutoSize = false;
-            _pickLangs.Text = "选择语言…";
+            _pickLangs.Text = L.T("选择语言…", "Choose languages…");
             Launcher.Style(_pickLangs);
             _pickLangs.Click += (s, e) =>
             {
@@ -283,7 +283,7 @@ namespace CodeAtlas
             row2.Controls.Add(_pickLangs, 1, 0);
             var note = new Label
             {
-                Text = "默认「自动」= 所有代码语言都扫、配置文件格式（JSON/YAML…）不扫。\n只扫这个项目真正用的语言能明显提速，也能让地图干净。",
+                Text = L.T("默认「自动」= 所有代码语言都扫、配置文件格式（JSON/YAML…）不扫。\n只扫这个项目真正用的语言能明显提速，也能让地图干净。", "The default (auto) scans every code language and skips config formats (JSON/YAML…).\nScanning only what this project actually uses is much faster and keeps the map clean."),
                 ForeColor = Palette.Dim,
                 AutoSize = false,
             };
@@ -309,7 +309,7 @@ namespace CodeAtlas
         private void BuildStep3()
         {
             var p = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Bg };
-            var label = new Label { Text = "系统分组规则（按目录草拟，可改）", ForeColor = Palette.Fg, AutoSize = true };
+            var label = new Label { Text = L.T("系统分组规则（按目录草拟，可改）", "Grouping rules"), ForeColor = Palette.Fg, AutoSize = true };
             label.Name = "label";
             _list.CheckOnClick = true;
             _list.BackColor = Palette.Panel;
@@ -318,21 +318,21 @@ namespace CodeAtlas
             _list.IntegralHeight = false;
             _draftInfo.ForeColor = Palette.Dim;
             _draftInfo.AutoSize = false;
-            _intoProject.Text = "写进项目目录（atlas.facets.json，跟项目走）";
+            _intoProject.Text = L.T("写进项目目录（atlas.facets.json，跟项目走）", "Write into the project directory (atlas.facets.json, travels with the project)");
             _intoProject.ForeColor = Palette.Dim;
             _intoProject.AutoSize = true;
-            _redraft.Text = "重新草拟";
-            _rename.Text = "改名";
-            _recolor.Text = "换色";
+            _redraft.Text = L.T("重新草拟", "Re-draft");
+            _rename.Text = L.T("改名", "Rename");
+            _recolor.Text = L.T("换色", "Recolor");
             foreach (var b in new[] { _redraft, _rename, _recolor, _byNs }) Launcher.Style(b);
-            _byNs.Text = "用命名空间重新草拟";
+            _byNs.Text = L.T("用命名空间重新草拟", "By namespace");
             _byNs.ForeColor = _hasBundle ? Palette.Fg : Palette.DimInactive;
             _byNs.Cursor = _hasBundle ? Cursors.Hand : Cursors.Default;
             _byNs.Click += (s, e) =>
             {
                 if (!_hasBundle)
                 {
-                    _draftInfo.Text = "这个项目还没扫过 —— 先点一次「保存并扫描」，再回来用命名空间重新草拟。";
+                    _draftInfo.Text = L.T("这个项目还没扫过 —— 先点一次「保存并扫描」，再回来用命名空间重新草拟。", "This project has not been scanned yet — hit Save and scan once, then come back to re-draft by namespace.");
                     return;
                 }
                 _draftedFor = null;
@@ -343,7 +343,7 @@ namespace CodeAtlas
             {
                 int i = _list.SelectedIndex;
                 if (i < 0 || i >= _systems.Count) return;
-                string name = InputPrompt.Ask(this, "系统名", _systems[i].Name);
+                string name = InputPrompt.Ask(this, L.T("系统名", "System name"), _systems[i].Name);
                 if (name == null || name.Length == 0) return;
                 _systems[i].Name = name;
                 RefreshList(i);
@@ -389,17 +389,17 @@ namespace CodeAtlas
             // 不用 Enabled=false（系统会把文字压成深灰，在暗底上等于隐形），改成变暗 + 不响应
             _prev.ForeColor = _step > 1 ? Palette.Fg : Palette.DimInactive;
             _prev.Cursor = _step > 1 ? Cursors.Hand : Cursors.Default;
-            _next.Text = _step == 3 ? "保存并扫描" : "下一步";
+            _next.Text = _step == 3 ? L.T("保存并扫描", "Save and scan") : L.T("下一步", "Next");
             _next.Tag = "on";
             _next.BackColor = Palette.Accent;
             _next.ForeColor = Palette.Bg;
 
-            string[] titles = { "① 选项目", "② 选语言", "③ 分组规则" };
+            string[] titles = { L.T("① 选项目", "① Project"), L.T("② 选语言", "② Languages"), L.T("③ 分组规则", "③ Grouping") };
             string[] hints =
             {
-                "要分析哪个项目？源码目录、.dll / .exe / .jar 都行。",
-                "这个项目用哪些语言？默认自动（所有代码语言）。",
-                "规则草案：不想要的取消勾选，名字/颜色可以改。保存后扫描就会用上它。",
+                L.T("要分析哪个项目？源码目录、.dll / .exe / .jar 都行。", "Which project? A source directory, or a .dll / .exe / .jar."),
+                L.T("这个项目用哪些语言？默认自动（所有代码语言）。", "Which languages does it use? Auto (all code languages) by default."),
+                L.T("规则草案：不想要的取消勾选，名字/颜色可以改。保存后扫描就会用上它。", "Draft rules: untick, rename or recolor. Saved rules are used by the scan."),
             };
             _stepTitle.Text = titles[_step - 1];
             _stepHint.Text = hints[_step - 1];
@@ -411,16 +411,16 @@ namespace CodeAtlas
         {
             int n = string.IsNullOrWhiteSpace(Langs) ? _langs.Count((l) => !l.OptIn) : Langs.Split(',').Count((s) => s.Trim().Length > 0);
             _langInfo.Text = string.IsNullOrWhiteSpace(Langs)
-                ? $"自动（{n} 门代码语言；配置文件格式不扫）"
-                : $"只扫 {n} 种：{Langs}";
+                ? L.T($"自动（{n} 门代码语言；配置文件格式不扫）", $"auto ({n} code languages; file-level formats are not scanned)")
+                : L.T($"只扫 {n} 种：{Langs}", $"only {n}: {Langs}");
         }
 
         /// <summary>草拟（target 或语言变了才重算；失败就把原因写在界面上，不假装成功）</summary>
         private void DraftNow(bool byNs = false)
         {
             string t = _path.Text.Trim().Trim('"');
-            if (t.Length == 0) { _draftInfo.Text = "先在上一步选个目标。"; _list.Items.Clear(); _systems = new List<DraftSystem>(); return; }
-            if (!Directory.Exists(t) && !File.Exists(t)) { _draftInfo.Text = "这个路径不存在：" + t; _list.Items.Clear(); _systems = new List<DraftSystem>(); return; }
+            if (t.Length == 0) { _draftInfo.Text = L.T("先在上一步选个目标。", "Pick a target on the previous step first."); _list.Items.Clear(); _systems = new List<DraftSystem>(); return; }
+            if (!Directory.Exists(t) && !File.Exists(t)) { _draftInfo.Text = L.T("这个路径不存在：", "Path does not exist: ") + t; _list.Items.Clear(); _systems = new List<DraftSystem>(); return; }
             string key = t + "|" + Langs + (byNs ? "|ns" : "");
             if (_draftedFor == key && _list.Items.Count > 0) return;
             try
@@ -429,7 +429,7 @@ namespace CodeAtlas
                 if (res.Config == null)
                 {
                     // 这个项目用不上（没有命名空间）——把原因说清楚，但别把现有草案毁掉
-                    _draftInfo.Text = res.Notes != null && res.Notes.Count > 0 ? string.Join("　·　", res.Notes) : "按命名空间草拟用不上。";
+                    _draftInfo.Text = res.Notes != null && res.Notes.Count > 0 ? string.Join(L.T("　·　", " · "), res.Notes) : L.T("按命名空间草拟用不上。", "Drafting by namespace does not apply here.");
                     _draftedFor = null;
                     return;
                 }
@@ -439,16 +439,16 @@ namespace CodeAtlas
                 _systems = res.Config.Systems ?? new List<DraftSystem>();
                 _draftedFor = key;
                 RefreshList(-1);
-                var bits = new List<string> { $"共 {res.Files} 个文件 · 草拟 {_systems.Count} 个系统" };
+                var bits = new List<string> { L.T($"共 {res.Files} 个文件 · 草拟 {_systems.Count} 个系统", $"{res.Files} files · {_systems.Count} systems drafted") };
                 bits.AddRange(res.Notes);
-                _draftInfo.Text = string.Join("　·　", bits);
+                _draftInfo.Text = string.Join(L.T("　·　", " · "), bits);
             }
             catch (Exception ex)
             {
                 _draftedFor = null;
                 _systems = new List<DraftSystem>();
                 RefreshList(-1);
-                _draftInfo.Text = "草拟失败：" + ex.Message.Replace("\n", " ");
+                _draftInfo.Text = L.T("草拟失败：", "Draft failed: ") + ex.Message.Replace("\n", " ");
             }
         }
 
@@ -465,7 +465,7 @@ namespace CodeAtlas
                 string rule = (s.Paths != null && s.Paths.Count > 0) ? string.Join("  ", s.Paths)
                     : (s.Namespaces != null && s.Namespaces.Count > 0) ? string.Join("  ", s.Namespaces)
                     : (s.Files != null ? string.Join("  ", s.Files) : "");
-                string unit = (s.Namespaces != null && s.Namespaces.Count > 0) ? "个类型" : "个文件";
+                string unit = (s.Namespaces != null && s.Namespaces.Count > 0) ? L.T("个类型", "types") : L.T("个文件", "files");
                 _list.Items.Add($"{s.Name}    ·    {s.FileCount} {unit}    ·    {rule}");
                 _list.SetItemChecked(i, firstTime || checkedIdx.Contains(i));
             }
@@ -477,8 +477,8 @@ namespace CodeAtlas
         {
             if (_step < 3) { SetStep(_step + 1); return; }
             string t = _path.Text.Trim().Trim('"');
-            if (t.Length == 0) { MessageBox.Show(this, "还没选目标。", "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Information); SetStep(1); return; }
-            if (!Directory.Exists(t) && !File.Exists(t)) { MessageBox.Show(this, "这个路径不存在：" + t, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning); SetStep(1); return; }
+            if (t.Length == 0) { MessageBox.Show(this, L.T("还没选目标。", "No target selected yet."), "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Information); SetStep(1); return; }
+            if (!Directory.Exists(t) && !File.Exists(t)) { MessageBox.Show(this, L.T("这个路径不存在：", "Path does not exist: ") + t, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning); SetStep(1); return; }
             Target = t;
             try
             {
@@ -489,7 +489,7 @@ namespace CodeAtlas
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "规则文件写不出来：" + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, L.T("规则文件写不出来：", "Cannot write the rules file: ") + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
@@ -518,8 +518,8 @@ namespace CodeAtlas
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(this, "这个目录写不进去：\n" + probeDir + "\n\n" + ex.Message +
-                        "\n\n建议取消勾选「写进项目目录」——规则会存到你自己的用户目录里，效果一样。",
+                    MessageBox.Show(this, L.T("这个目录写不进去：\n", "Cannot write into this directory:\n") + probeDir + "\n\n" + ex.Message +
+                        L.T("\n\n建议取消勾选「写进项目目录」——规则会存到你自己的用户目录里，效果一样。", "\n\nConsider unticking the project-directory option — the rules go to your own user folder instead, same effect."),
                         "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return "";
                 }
