@@ -81,6 +81,16 @@ namespace CodeAtlas
         public static bool En => Lang == "en";
         public static string T(string zh, string en) => En ? en : zh;
 
+        /// <summary>定下本进程的语言：环境变量优先（用户显式指定就听他的），否则用配置里的。
+        /// 界面路径与无界面（--headless）路径都要先调这个，别忘了。</summary>
+        public static void Init(string cfgLang)
+        {
+            var envLang = Environment.GetEnvironmentVariable("CODEATLAS_LANG");
+            Lang = !string.IsNullOrWhiteSpace(envLang) ? Normalize(envLang) : Normalize(cfgLang);
+            // 给本进程设上：之后 spawn 的每一个引擎子进程（scan / langs / draft-facets / mcp）都会继承它
+            Environment.SetEnvironmentVariable("CODEATLAS_LANG", Lang);
+        }
+
         /// <summary>把外部给的字符串规整成 zh / en（外部可能是 en-US、EN、english…）</summary>
         public static string Normalize(string s) =>
             !string.IsNullOrWhiteSpace(s) && s.Trim().ToLowerInvariant().StartsWith("en") ? "en" : "zh";
@@ -628,10 +638,7 @@ namespace CodeAtlas
         public Launcher()
         {
             // 语言：环境变量优先（用户显式指定就听他的），否则用配置里的
-            var envLang = Environment.GetEnvironmentVariable("CODEATLAS_LANG");
-            L.Lang = !string.IsNullOrWhiteSpace(envLang) ? L.Normalize(envLang) : L.Normalize(_cfg.Lang);
-            // 给本进程设上：之后 spawn 的每一个引擎子进程（scan / langs / draft-facets / mcp）都会继承它
-            Environment.SetEnvironmentVariable("CODEATLAS_LANG", L.Lang);
+            L.Init(_cfg.Lang);
 
             Text = "Code Atlas";
             // 双屏注意：用"光标所在的那块屏幕"的工作区来定尺寸与位置（默认居中到主屏可能会跨屏）
@@ -1427,6 +1434,7 @@ namespace CodeAtlas
             var sb = new StringBuilder();
             void Log(string s) { sb.AppendLine(s); }
             var cfg = Engine.LoadConfig();
+            L.Init(cfg.Lang);   // 无界面路径也得定语言，否则日志永远中文（en 模式下会莫名其妙）
             cfg.Out = outDir;
             cfg.Port = port;
             if (langs != null) cfg.Langs = langs;
