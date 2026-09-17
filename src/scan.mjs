@@ -1091,6 +1091,8 @@ export async function scan(opts) {
         const tail = String(r.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
         console.log(`  ⚠ ${langId} 没解析成功（子进程退出码 ${r.status}）—— 这门语言这次不进地图。${tail ? `子进程最后一句：${tail.slice(0, 200)}` : ''}`);
       }
+      // 注意：子进程是 SIGKILL 硬退的（绕开退出阶段的 libuv 断言），所以**成功时退出码也是 1**。
+      // 不要用“退出码非 0”去判定失败，也不要据此打日志（否则每门语言都会刷一行）——成败只看 emit。
       try { fs.rmSync(emit, { force: true }); } catch { }
     }
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { }

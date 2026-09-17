@@ -308,8 +308,14 @@ function cmdLangs(argv) {
 async function cmdExtractWorker(argv) {
   const opts = parseArgs(argv);
   await workerExtract({ work: opts.work, lang: opts.lang, emit: opts.emit });
-  // 结果已经落盘。接下来直接硬退：语法包（实测 Swift/Scala）在 V8 释放 isolate 时会崩，
-  // 而父进程只看 emit 文件在不在、不看我们用什么退出码，所以干脆跳掉整个析构。
+  // 结果已经落盘（writeFileSync）。接下来必须**硬退**，不能让它走正常退出：
+  // 实测（2026-09-17，web-tree-sitter 0.27 + Node 24）——只要是在进程内退出，不管走
+  // process.exit(0) 还是 process.reallyExit(0)，退出阶段都会撞：
+  //   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 94
+  // （退出码 0xC0000409）；此时 emit 已经写好，父进程看不到差异，但退出码不可信。
+  // 只有 OS 级的 SIGKILL 能干净结束：代价是退出码恒为 1，所以**父进程只能靠 emit 在不在判断成败**
+  // （scan.mjs 里就是这么写的，别改成只看退出码）。
+  // 想要“退出码可信”得把解析搬进 worker_threads 用 terminate() 结束——那是架构改动，先记在 ROADMAP。
   try { process.kill(process.pid, 'SIGKILL'); } catch { /* 不行就正常退 */ }
   process.exit(0);
 }
