@@ -166,6 +166,9 @@ runtime (about 30 MB).
   .NET 9 + Node), so scanning `.jar` there still needs a Java runtime.
 - Development mode is unaffected: when `src/cli.mjs` sits next to the exe (e.g. the exe was copied into the
   repo), the repo engine is used instead of the bundled one.
+**Official downloads**: every release ships both exes on [GitHub Releases](https://github.com/ZhaoBuyan/CodeAtlas/releases) —
+built by CI from the tagged commit (the paths below are just where the local build puts them).
+
 - **Release flow**: tag and push — `git tag v1.1.0 && git push --tags`. CI runs the tests, builds both exes
   and attaches them to a GitHub Release (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
 - **Three places carry the version** and have to move together: `launcher/CodeAtlas.Launcher.csproj`’s `<Version>`

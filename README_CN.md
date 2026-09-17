@@ -110,6 +110,9 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
 
 没有安装器，就是一个 exe，想放哪放哪。
 
+> **官方下载**：每个版本的两个 exe 都挂在 [GitHub Releases](https://github.com/ZhaoBuyan/CodeAtlas/releases)
+> （CI 从打 tag 的那个提交构建；下面表里的路径只是本地构建的产物位置）。
+
 | 版本 | 构建产物 | 体积 | 机器上要先有什么 |
 | --- | --- | --- | --- |
 | **完全版** | `publish-sc/CodeAtlas.exe` | 104.3 MB | 什么都不用装（内置 Node 24 + 引擎 + 裁剪版 Java 运行时） |
