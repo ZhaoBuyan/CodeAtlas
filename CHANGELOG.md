@@ -31,6 +31,14 @@
 - **新增 GraphQL 支持**（26 门）：`.graphql` / `.graphqls` / `.gql`。type / interface / union / enum / scalar /
   input / schema / directive 都是图上的节点；字段是成员（函数的参数单独算 argument）；`implements`
   与 union 成员连成继承边；SDL 的 `"""..."""` 描述当"说明"显示。
+- **新增「界面语言」设置**（启动器工具栏、就在「增量」右边）：一键在 **中文 / English** 之间切，
+  立即生效并记入 `launcher.config.json` 的 `Lang`；也可用环境变量 `CODEATLAS_LANG=en` 指定
+  （环境变量优先，给不开启动器、直接连 MCP 的人用）。
+  本次先覆盖启动器主窗口（按钮 / 提示 / 状态），向导与扫描过程中的提示、引擎输出、MCP 输出、网页界面
+  在后续几步里陆续跟上。
+- 顺手修掉启动器里两处过时数字（提示里的「23 门」→「26 门」、日志里的「19 门」→「26 门」），
+  以及「MCP 配置」拷出的 JSON：现在会带上 `CODEATLAS_LANG`，并且 command 用实际解析到的 node 绝对路径
+  （完全版自带 node.exe，以前写死 `node` 靠 PATH，没装 Node 的机器粘过去会连不上）。
 - 按钮文案：主按钮「开跑」→ **「扫描」**（向导里的「保存并开跑」→「保存并扫描」）；只是叫法更贴切，行为没变。
 - **反编译不再需要你装任何东西（完全版）**：扫 `.dll` / `.exe` 用启动器**内置**的反编译器（ILSpy 引擎，MIT）；
   扫 `.jar` 用**自带的裁剪版 Java 运行时 + cfr**（只含 `java.base` + `java.logging`，从 microsoft-jdk-25 裁出来）。

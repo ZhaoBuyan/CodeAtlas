@@ -11,6 +11,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -68,6 +69,23 @@ namespace CodeAtlas
         }
     }
 
+    /// <summary>
+    /// 界面与输出语言：zh（默认）/ en。
+    /// 所有面向用户的文案一律走 L.T("中文", "English")，别在代码里硬写中文。
+    /// 优先级：**环境变量 CODEATLAS_LANG > launcher.config.json 的 Lang > zh**——
+    /// 用户显式设了环境变量就听他的（不然"我明明设了 en"却被启动器覆盖，很恼人）。
+    /// </summary>
+    internal static class L
+    {
+        public static string Lang = "zh";
+        public static bool En => Lang == "en";
+        public static string T(string zh, string en) => En ? en : zh;
+
+        /// <summary>把外部给的字符串规整成 zh / en（外部可能是 en-US、EN、english…）</summary>
+        public static string Normalize(string s) =>
+            !string.IsNullOrWhiteSpace(s) && s.Trim().ToLowerInvariant().StartsWith("en") ? "en" : "zh";
+    }
+
     internal sealed class Config
     {
         public string NodePath { get; set; } = "node";
@@ -80,6 +98,8 @@ namespace CodeAtlas
         public string Langs { get; set; } = "";
         /// <summary>增量扫描：只重新解析改过的文件（默认关 = 每次全量）</summary>
         public bool Incremental { get; set; }
+        /// <summary>界面与引擎输出的语言："zh"（默认）或 "en"</summary>
+        public string Lang { get; set; } = "zh";
         /// <summary>每个项目记一份（语言 / 规则文件 / 上次跑的时间）——再打开就不用重新配</summary>
         public Dictionary<string, ProjectRecord> Projects { get; set; } = new Dictionary<string, ProjectRecord>();
     }
@@ -345,6 +365,20 @@ namespace CodeAtlas
             string outp = p.StandardOutput.ReadToEnd();
             if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch { } throw new InvalidOperationException("引擎 30 秒没响应"); }
             if (outp.Trim().Length == 0) throw new InvalidOperationException("引擎没吐出配置（node 跑不起来？）");
+            // 引擎写出来的配置里 command 是 "node"（靠 PATH）——但完全版自带 node.exe，这里换成实际解析到的
+            // 绝对路径，否则机器上没装 Node 的人把这段粘进客户端会连不上。
+            // 顺手带上 CODEATLAS_LANG：AI 侧的语言跟界面选的一致（用户也能自己在客户端里改）。
+            try
+            {
+                var doc = JsonNode.Parse(outp.Trim());
+                if (doc?["mcpServers"]?["code-atlas"] is JsonObject srv)
+                {
+                    srv["command"] = PickNode(cfg, root);
+                    srv["env"] = new JsonObject { ["CODEATLAS_LANG"] = L.Lang };
+                    return doc.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+                }
+            }
+            catch { /* 解析不了就原样返回，别把功能弄坏 */ }
             return outp.Trim();
         }
 
@@ -542,6 +576,7 @@ namespace CodeAtlas
         private readonly Button _langs = new Button();
         private readonly Button _wiz = new Button();
         private readonly Button _mcp = new Button();
+        private readonly Button _ui = new Button();
         private readonly Label _status = new Label();
         private readonly Label _hint = new Label();
         private readonly Label _targetLabel = new Label();
@@ -552,6 +587,35 @@ namespace CodeAtlas
         private string _url;
         private bool _webReady;
         private bool _showingMap;
+        private ToolTip _tips;
+        // 切语言时要重刷的文案（控件 / 提示），存 (中文, English) 对，避免把字符串写两遍
+        private readonly List<(Control c, string zh, string en)> _relang = new List<(Control, string, string)>();
+        private readonly List<(Control c, string zh, string en)> _retip = new List<(Control, string, string)>();
+
+        /// <summary>设控件文案，并登记下来供切语言时重刷</summary>
+        private void SetText(Control c, string zh, string en) { _relang.Add((c, zh, en)); c.Text = L.T(zh, en); }
+
+        /// <summary>设提示文案，并登记下来供切语言时重刷</summary>
+        private void SetTip(Control c, string zh, string en) { _retip.Add((c, zh, en)); _tips.SetToolTip(c, L.T(zh, en)); }
+
+        /// <summary>界面语言按钮的文字：显示**当前**语言（点了就切到另一种）</summary>
+        private static string UiLangButtonText() => L.En ? "UI: English" : "界面：中文";
+
+        /// <summary>切语言后重新应用界面文案（日志里已经写过的那几行是历史记录，不追改）</summary>
+        private void ApplyLang()
+        {
+            foreach (var (c, zh, en) in _relang) c.Text = L.T(zh, en);
+            foreach (var (c, zh, en) in _retip) _tips.SetToolTip(c, L.T(zh, en));
+            _inc.Text = L.T("增量", "Incremental");   // 这几个不在登记表里，手动刷
+            _autoSwitch.Text = L.T("跑完自动切到地图", "Switch to map when done");
+            _ui.Text = UiLangButtonText();
+            _langs.Text = LangsButtonText();
+            RefreshToggleText();
+            _status.Text = L.T("就绪", "Ready");
+        }
+
+        /// <summary>「看日志 / 看地图」按钮的字：随当前视图变</summary>
+        private void RefreshToggleText() => _toggle.Text = L.T(_showingMap ? "看日志" : "看地图", _showingMap ? "Show log" : "Show map");
 
         private static readonly Color Bg = Palette.Bg;
         private static readonly Color Panel = Palette.Panel;
@@ -562,6 +626,12 @@ namespace CodeAtlas
 
         public Launcher()
         {
+            // 语言：环境变量优先（用户显式指定就听他的），否则用配置里的
+            var envLang = Environment.GetEnvironmentVariable("CODEATLAS_LANG");
+            L.Lang = !string.IsNullOrWhiteSpace(envLang) ? L.Normalize(envLang) : L.Normalize(_cfg.Lang);
+            // 给本进程设上：之后 spawn 的每一个引擎子进程（scan / langs / draft-facets / mcp）都会继承它
+            Environment.SetEnvironmentVariable("CODEATLAS_LANG", L.Lang);
+
             Text = "Code Atlas";
             // 双屏注意：用"光标所在的那块屏幕"的工作区来定尺寸与位置（默认居中到主屏可能会跨屏）
             var startScreen = Screen.FromPoint(Cursor.Position);
@@ -583,7 +653,7 @@ namespace CodeAtlas
             _bar = new Panel { Dock = DockStyle.Top, BackColor = Bg };
 
             var targetLabel = _targetLabel;
-            targetLabel.Text = "目标";
+            SetText(targetLabel, "目标", "Target");
             targetLabel.ForeColor = Dim;
             targetLabel.AutoSize = true;
 
@@ -592,35 +662,36 @@ namespace CodeAtlas
             _path.ForeColor = Fg;
             _path.BorderStyle = BorderStyle.FixedSingle;
 
-            _pickDir.Text = "选择文件夹…";
-            _pickFile.Text = "选择文件…";
+            SetText(_pickDir, "选择文件夹…", "Choose folder…");
+            SetText(_pickFile, "选择文件…", "Choose file…");
             Style(_pickDir);
             Style(_pickFile);
             _pickDir.Click += (s, e) => PickFolder();
             _pickFile.Click += (s, e) => PickFile();
 
-            var tips = new ToolTip { AutoPopDelay = 12000, InitialDelay = 300 };
-            tips.SetToolTip(_path, "要分析的目标：源码目录 / 编译好的 .dll、.exe / .jar；也可以直接把文件夹拖进窗口");
-            tips.SetToolTip(_pickDir, "选一个文件夹：源码目录，或里面放着 .dll / .exe / .jar 的目录");
-            tips.SetToolTip(_pickFile, "选一个文件：.dll / .exe / .jar（没有源码的目标）");
-            tips.SetToolTip(_run, "开始分析，完事后把地图嵌到窗口里");            tips.SetToolTip(_stop, "停掉分析和服务");
-            tips.SetToolTip(_toggle, "在地图与运行日志之间切换");
-            tips.SetToolTip(_browser, "用系统浏览器另外开一个窗口看（方便左右对照）");
+            _tips = new ToolTip { AutoPopDelay = 12000, InitialDelay = 300 };
+            SetTip(_path, "要分析的目标：源码目录 / 编译好的 .dll、.exe / .jar；也可以直接把文件夹拖进窗口", "What to analyze: a source directory, or compiled .dll / .exe / .jar. You can also drag a folder onto the window.");
+            SetTip(_pickDir, "选一个文件夹：源码目录，或里面放着 .dll / .exe / .jar 的目录", "Pick a folder: a source directory, or one containing .dll / .exe / .jar");
+            SetTip(_pickFile, "选一个文件：.dll / .exe / .jar（没有源码的目标）", "Pick a file: .dll / .exe / .jar (targets without source code)");
+            SetTip(_run, "开始分析，完事后把地图嵌到窗口里", "Start the scan; when it finishes the map is embedded in this window");
+            SetTip(_stop, "停掉分析和服务", "Stop the scan and the local server");
+            SetTip(_toggle, "在地图与运行日志之间切换", "Toggle between the map and the run log");
+            SetTip(_browser, "用系统浏览器另外开一个窗口看（方便左右对照）", "Open the map in your system browser (handy for side-by-side)");
 
-            _hint.Text = "提示：源码目录直接扫，.dll / .exe / .jar 先反编译；也可以直接把文件夹拖进来";
+            SetText(_hint, "提示：源码目录直接扫，.dll / .exe / .jar 先反编译；也可以直接把文件夹拖进来", "Tip: source directories are scanned directly; .dll / .exe / .jar are decompiled first. You can also drag a folder in.");
             _hint.ForeColor = Dim;
             _hint.AutoSize = false;
             _hint.AutoEllipsis = true;
             _hint.TextAlign = ContentAlignment.MiddleLeft;
 
-            _autoSwitch.Text = "跑完自动切到地图";
+            SetText(_autoSwitch, "跑完自动切到地图", "Switch to map when done");
             _autoSwitch.Checked = true;
             _autoSwitch.ForeColor = Fg;
             _autoSwitch.AutoSize = true;
             _autoSwitch.Click += (s, e) => { if (_autoSwitch.Checked && _url != null) ShowMap(); };
 
             // 增量扫描（默认关）：只重新解析改过的文件；跨文件索引仍会整体重算
-            _inc.Text = "增量";
+            _inc.Text = L.T("增量", "Incremental");
             _inc.Checked = _cfg.Incremental;
             _inc.ForeColor = Fg;
             _inc.AutoSize = true;
@@ -630,21 +701,21 @@ namespace CodeAtlas
                 Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             } Log(_inc.Checked ? "增量扫描：开（只重解析改过的文件）" : "增量扫描：关（每次全量）"); };
-            tips.SetToolTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。");
+            _tips.SetToolTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。");
 
-            _run.Text = "扫描";
+            SetText(_run, "扫描", "Scan");
             Style(_run, true);
             SetBtn(_run, true, true); // 必须让它处于"可用"状态（点击处理里会查 IsOn，漏了这行就会点了没反应）
             _run.Click += (s, e) => { if (IsOn(_run)) Run(); };
-            _stop.Text = "停止";
+            SetText(_stop, "停止", "Stop");
             Style(_stop);
             SetBtn(_stop, false);
             _stop.Click += (s, e) => { if (IsOn(_stop)) Stop(); };
-            _toggle.Text = "看日志";
+            _toggle.Text = L.T("看日志", "Show log");
             Style(_toggle);
             SetBtn(_toggle, false);
             _toggle.Click += (s, e) => { if (IsOn(_toggle)) ToggleView(); };
-            _browser.Text = "在浏览器打开";
+            SetText(_browser, "在浏览器打开", "Open in browser");
             Style(_browser);
             SetBtn(_browser, false);
             _browser.Click += (s, e) => { if (_url != null && IsOn(_browser)) OpenUrl(_url); };
@@ -654,28 +725,46 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            tips.SetToolTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。");
+            _tips.SetToolTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
-            _wiz.Text = "项目设置…";
+            SetText(_wiz, "项目设置…", "Project setup…");
             Style(_wiz);
             SetBtn(_wiz, true);
             _wiz.Click += (s, e) => { if (IsOn(_wiz)) OpenWizard(_path.Text.Trim().Trim('"')); };
-            tips.SetToolTip(_wiz, "首次配置一个项目：选目标 → 选语言 → 自动草拟一套\"系统分组规则\"（可改名/换色/取消） → 存下来并扫描");
+            SetTip(_wiz, "首次配置一个项目：选目标 → 选语言 → 自动草拟一套\"系统分组规则\"（可改名/换色/取消） → 存下来并扫描", "Set up a project once: target → languages → auto-drafted system grouping rules (rename / recolor / drop) → save and scan");
 
             // 一键复制 MCP 配置（让 AI 客户端读这个项目）
-            _mcp.Text = "MCP 配置";
+            SetText(_mcp, "MCP 配置", "MCP config");
             Style(_mcp);
             SetBtn(_mcp, true);
             _mcp.Click += (s, e) => { if (IsOn(_mcp)) CopyMcpConfig(); };
-            tips.SetToolTip(_mcp, "把「让 AI 读这个项目」的 MCP 配置复制到剪贴板。\r\n粘进 Chatbox / Claude Desktop 等客户端的 mcpServers 里即可；指向当前扫描的输出目录。");
+            SetTip(_mcp, "把「让 AI 读这个项目」的 MCP 配置复制到剪贴板。\r\n粘进 Chatbox / Claude Desktop 等客户端的 mcpServers 里即可；指向当前扫描的输出目录。", "Copy the MCP config that lets your AI read this project.\r\nPaste it into mcpServers in Chatbox / Claude Desktop etc.; it points at the current scan output directory.");
 
-            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _inc, _hint, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
+            // 界面语言：按一下在 中文 / English 之间切（环境变量 CODEATLAS_LANG 优先，见 L 类注释）
+            SetText(_ui, UiLangButtonText(), UiLangButtonText());
+            Style(_ui);
+            SetBtn(_ui, true);
+            _ui.Click += (s, e) =>
+            {
+                L.Lang = L.En ? "zh" : "en";
+                _cfg.Lang = L.Lang;
+                // 本进程设上，后面 spawn 的引擎就跟着切（已经跑着的扫描不受影响）
+                Environment.SetEnvironmentVariable("CODEATLAS_LANG", L.Lang);
+                Engine.SaveConfig(_cfg);
+                ApplyLang();
+                Log(L.T("界面语言：中文（界面、扫描输出、MCP 接口都会跟着切；日志里已经写过的行不追改）",
+                        "UI language: English (interface, scan output and the MCP interface follow; lines already logged stay as they are)"));
+            };
+            SetTip(_ui, "切换界面语言：中文 / English。\r\n同时影响扫描输出与 MCP 接口；也可用环境变量 CODEATLAS_LANG=en 指定（优先级更高）。",
+                        "Switch UI language: 中文 / English.\r\nAlso affects scan output and the MCP interface; you can set the env var CODEATLAS_LANG=en instead (it wins).");
+
+            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _inc, _ui, _hint, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
             _targetLabel = targetLabel;
             _bar.Resize += (s, e) => ApplyLayout();
 
             // ---------- 状态栏 ----------
-            _status.Text = "就绪";
+            _status.Text = L.T("就绪", "Ready");
             _status.ForeColor = Dim;
             _status.Dock = DockStyle.Bottom;
             _status.TextAlign = ContentAlignment.MiddleLeft;
@@ -764,6 +853,7 @@ namespace CodeAtlas
             int rowBCenter = rowB + btnH / 2;
             _autoSwitch.Location = new Point(pad, rowBCenter - _autoSwitch.Height / 2);
             _inc.Location = new Point(_autoSwitch.Right + (int)(14 * k), rowBCenter - _inc.Height / 2);
+            _ui.Location = new Point(_inc.Right + (int)(14 * k), rowBCenter - _ui.Height / 2);
 
             int x = w - pad;
             foreach (var b in new[] { _mcp, _browser, _toggle, _stop, _langs, _wiz, _run })
@@ -771,7 +861,7 @@ namespace CodeAtlas
                 b.Location = new Point(x - b.PreferredSize.Width, rowB);
                 x = b.Left - gap;
             }
-            int hintLeft = _inc.Right + (int)(16 * k);
+            int hintLeft = _ui.Right + (int)(16 * k);
             _hint.SetBounds(hintLeft, rowB, Math.Max(60, x - gap - hintLeft), btnH + (int)(4 * k));
 
             _bar.Height = rowB + btnH + (int)(16 * k);
@@ -991,17 +1081,17 @@ namespace CodeAtlas
 
         private string LangsButtonText()
         {
-            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return "语言：自动";
+            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("语言：自动", "Languages: auto");
             int n = _cfg.Langs.Split(',').Count((s) => s.Trim().Length > 0);
-            return "语言：" + n + " 种";
+            return L.En ? $"Languages: {n}" : $"语言：{n} 种";
         }
 
         /// <summary>日志 / 状态区里的人类可读描述（不糊弄：没配就说清楚默认到底扫什么）</summary>
         private string LangsSummary()
         {
-            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return "自动（19 门代码语言；配置文件格式不扫）";
+            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("自动（26 门代码语言；配置文件格式默认不扫）", "auto (all 26 code languages; file-level formats are opt-in)");
             var ids = _cfg.Langs.Split(',').Select((s) => s.Trim()).Where((s) => s.Length > 0).ToArray();
-            return $"只扫 {ids.Length} 种：" + string.Join(", ", ids);
+            return L.En ? $"scanning {ids.Length} languages: " + string.Join(", ", ids) : $"只扫 {ids.Length} 种：" + string.Join(", ", ids);
         }
 
         private void Ui(Action a)
@@ -1041,7 +1131,7 @@ namespace CodeAtlas
             _url = null;
             SetBtn(_browser, false);
             SetBtn(_toggle, false);
-            _toggle.Text = "看日志";
+            RefreshToggleText();
             SetBtn(_run, false, true);
             SetBtn(_stop, true);
             _status.Text = "运行中…（第一次扫描大项目会慢一点）";
@@ -1121,7 +1211,7 @@ namespace CodeAtlas
             _showingMap = true;
             _web.Visible = true;
             _log.Visible = false;
-            _toggle.Text = "看日志";
+            RefreshToggleText();
             try { _web.CoreWebView2.Navigate(_url); } catch { }
         }
 
@@ -1130,7 +1220,7 @@ namespace CodeAtlas
             _showingMap = false;
             _web.Visible = false;
             _log.Visible = true;
-            _toggle.Text = "看地图";
+            RefreshToggleText();
         }
 
         private void ToggleView()
