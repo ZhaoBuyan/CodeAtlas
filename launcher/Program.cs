@@ -1,4 +1,4 @@
-// Code Atlas 启动台：双击 exe -> 选/拖一个路径 -> 开跑 -> 地图直接嵌在窗口里。
+// Code Atlas 启动台：双击 exe -> 选/拖一个路径 -> 扫描 -> 地图直接嵌在窗口里。
 // 三件事：找到引擎（node + src/cli.mjs）、把路径丢给它、把地图或日志显示给你。
 // 地图用 WebView2（Edge 内核）嵌进来，和浏览器里看的是同一套页面、同一份观感。
 using System;
@@ -171,7 +171,7 @@ namespace CodeAtlas
     {
         public const string ResourceName = "CodeAtlas.engine.zip";
 
-        /// <summary>释放动作上锁：OnShown 的后台预热和「开跑」可能同时来</summary>
+        /// <summary>释放动作上锁：OnShown 的后台预热和「扫描」可能同时来</summary>
         private static readonly object Gate = new object();
 
         /// <summary>这份 exe 里带没带引擎</summary>
@@ -632,7 +632,7 @@ namespace CodeAtlas
             } Log(_inc.Checked ? "增量扫描：开（只重解析改过的文件）" : "增量扫描：关（每次全量）"); };
             tips.SetToolTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。");
 
-            _run.Text = "开跑";
+            _run.Text = "扫描";
             Style(_run, true);
             SetBtn(_run, true, true); // 必须让它处于"可用"状态（点击处理里会查 IsOn，漏了这行就会点了没反应）
             _run.Click += (s, e) => { if (IsOn(_run)) Run(); };
@@ -652,7 +652,7 @@ namespace CodeAtlas
             // 语言：默认不传 --lang（引擎自己“自动”：所有代码语言，配置文件不扫）。
             _langs.Text = LangsButtonText();
             Style(_langs);
-            SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"开跑"一样点了没反应）
+            SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
             tips.SetToolTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。");
 
@@ -661,7 +661,7 @@ namespace CodeAtlas
             Style(_wiz);
             SetBtn(_wiz, true);
             _wiz.Click += (s, e) => { if (IsOn(_wiz)) OpenWizard(_path.Text.Trim().Trim('"')); };
-            tips.SetToolTip(_wiz, "首次配置一个项目：选目标 → 选语言 → 自动草拟一套\"系统分组规则\"（可改名/换色/取消） → 存下来并开跑");
+            tips.SetToolTip(_wiz, "首次配置一个项目：选目标 → 选语言 → 自动草拟一套\"系统分组规则\"（可改名/换色/取消） → 存下来并扫描");
 
             // 一键复制 MCP 配置（让 AI 客户端读这个项目）
             _mcp.Text = "MCP 配置";
@@ -712,7 +712,7 @@ namespace CodeAtlas
             Log($"node：{_cfg.NodePath}（值为 node 时优先用内置的，没有内置就按 PATH 找）   输出目录：{_cfg.Out}   端口：{_cfg.Port}");
             Log("语言：" + LangsSummary());
             Log("");
-            Log("下一步：点「开跑」开始扫描（也可以直接把文件夹拖进上面的输入框）。");
+            Log("下一步：点「扫描」开始（也可以直接把文件夹拖进上面的输入框）。");
             Log("扫完地图会自动嵌到这个窗口里；想看扫描日志就点「看日志」。");
             if (Engine.FindDevRoot() == null && !Payload.HasEngine)
                 _status.Text = "⚠ 找不到引擎：把 CodeAtlas.exe 放进 CodeAtlas 目录（含 src\\cli.mjs）再运行";
@@ -801,14 +801,14 @@ namespace CodeAtlas
         protected override async void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            // 内置引擎要释放一次（几十 MB，别占着 UI 线程）；提前放好，用户点「开跑」时就不用等
+            // 内置引擎要释放一次（几十 MB，别占着 UI 线程）；提前放好，用户点「扫描」时就不用等
             if (Payload.HasEngine && !File.Exists(Path.Combine(Payload.TargetDir(), ".ready")))
             {
                 _status.Text = "正在释放内置引擎（首次运行，只做一次）…";
                 Task.Run(() =>
                 {
                     string dir = Payload.Ensure(Log);
-                    Ui(() => _status.Text = dir != null ? "内置引擎就绪，点「开跑」开始" : "就绪");
+                    Ui(() => _status.Text = dir != null ? "内置引擎就绪，点「扫描」开始" : "就绪");
                 });
             }
             // 第一次碰到这个项目（没有记录）才引导；已经有记录的就不打扰（再打开=零操作）
@@ -930,7 +930,7 @@ namespace CodeAtlas
             }
         }
 
-        /// <summary>项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（可一并开跑）</summary>
+        /// <summary>项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（可一并扫描）</summary>
         private void OpenWizard(string target)
         {
             LangInfo[] langs;
@@ -1090,7 +1090,7 @@ namespace CodeAtlas
             }
         }
 
-        /// <summary>--auto：开窗后直接开跑</summary>
+        /// <summary>--auto：开窗后直接扫描</summary>
         public void AutoRun(string path)
         {
             _path.Text = path;

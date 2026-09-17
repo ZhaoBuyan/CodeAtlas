@@ -1,4 +1,4 @@
-// 首次运行向导：选项目 → 勾语言 → 草拟分组规则 → 保存（可一并开跑）。
+// 首次运行向导：选项目 → 勾语言 → 草拟分组规则 → 保存（可一并扫描）。
 // 只在"这个项目还没有记录"或用户主动点「项目设置…」时出现；有记录的项目再打开=零操作。
 using System;
 using System.Collections.Generic;
@@ -146,7 +146,7 @@ namespace CodeAtlas
             var foot = new Panel { Dock = DockStyle.Bottom, BackColor = Palette.Bg, Height = 56 };
             foot.Controls.Add(left);
             foot.Controls.Add(right);
-            foot.Controls.Add(new Label { Text = "首次配置只做一次；以后打开这个项目就直接开跑。", ForeColor = Palette.Dim, AutoSize = true, Left = 16, Top = 18 });
+            foot.Controls.Add(new Label { Text = "首次配置只做一次；以后打开这个项目就直接扫描。", ForeColor = Palette.Dim, AutoSize = true, Left = 16, Top = 18 });
 
             Controls.Add(_body);     // Fill 先加
             Controls.Add(head);
@@ -332,7 +332,7 @@ namespace CodeAtlas
             {
                 if (!_hasBundle)
                 {
-                    _draftInfo.Text = "这个项目还没扫过 —— 先点一次「保存并开跑」，再回来用命名空间重新草拟。";
+                    _draftInfo.Text = "这个项目还没扫过 —— 先点一次「保存并扫描」，再回来用命名空间重新草拟。";
                     return;
                 }
                 _draftedFor = null;
@@ -389,7 +389,7 @@ namespace CodeAtlas
             // 不用 Enabled=false（系统会把文字压成深灰，在暗底上等于隐形），改成变暗 + 不响应
             _prev.ForeColor = _step > 1 ? Palette.Fg : Palette.DimInactive;
             _prev.Cursor = _step > 1 ? Cursors.Hand : Cursors.Default;
-            _next.Text = _step == 3 ? "保存并开跑" : "下一步";
+            _next.Text = _step == 3 ? "保存并扫描" : "下一步";
             _next.Tag = "on";
             _next.BackColor = Palette.Accent;
             _next.ForeColor = Palette.Bg;
