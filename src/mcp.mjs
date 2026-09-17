@@ -174,6 +174,13 @@ function basename(p) {
   return String(p).split('/').pop();
 }
 
+/** 搜索命中上挂的一行说明摘要：压空白、截到 n 字（省 AI 一次 symbol 调用） */
+function briefDoc(s, n = 80) {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
 function resolve(idx, key) {
   const s = String(key ?? '').trim();
   if (/^\d+$/.test(s) && idx.byId.has(Number(s))) return { type: idx.byId.get(Number(s)) };
@@ -249,13 +256,13 @@ function toolSearch(idx, a) {
   if (hits.length) {
     out.push(T(`类型（显示前 ${Math.min(hits.length, limit)}）：`, `Types (first ${Math.min(hits.length, limit)}):`));
     for (const t of hits.slice(0, limit)) {
-      out.push(T(`  ${t.id}\t${t.fqn}\t[${t.kind}] 被引 ${t.fanIn} 次\t${idx.files.get(t.file)?.path}:${t.line}`, `  ${t.id}\t${t.fqn}\t[${t.kind}] referenced ${t.fanIn} times\t${idx.files.get(t.file)?.path}:${t.line}`));
+      out.push(T(`  ${t.id}\t${t.fqn}\t[${t.kind}] 被引 ${t.fanIn} 次\t${idx.files.get(t.file)?.path}:${t.line}`, `  ${t.id}\t${t.fqn}\t[${t.kind}] referenced ${t.fanIn} times\t${idx.files.get(t.file)?.path}:${t.line}`) + (t.doc ? T(`\t说明：${briefDoc(t.doc)}`, `\tdoc: ${briefDoc(t.doc)}`) : ''));
     }
   }
   if (memberHits.length) {
     out.push(T(`成员（显示前 ${Math.min(memberHits.length, limit)}）：`, `Members (first ${Math.min(memberHits.length, limit)}):`));
     for (const { t, m } of memberHits.slice(0, limit)) {
-      out.push(T(`  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（定义在 ${t.id} ${t.name}）`, `  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(defined in ${t.id} ${t.name})`));
+      out.push(T(`  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（定义在 ${t.id} ${t.name}）`, `  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(defined in ${t.id} ${t.name})`) + (m.d ? T(`\t说明：${briefDoc(m.d)}`, `\tdoc: ${briefDoc(m.d)}`) : ''));
     }
     out.push(T('（成员名后面要看它的上下文，用 symbol 加类型名/id）', '(to see a member in context, call symbol with the type name / id)'));
   }
