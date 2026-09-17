@@ -2,6 +2,19 @@
 
 > English version: [README.md](README.md)
 
+**文档地图（本仓库）**
+
+| 文件 | 是什么 |
+| --- | --- |
+| [README_CN.md](README_CN.md) · [README.md](README.md) | 本文 —— 它是什么、怎么搭起来的、能做什么 / 不能做什么（参考手册） |
+| [使用说明.md](使用说明.md) · [USAGE.md](USAGE.md) | **给使用者**的逐步指引：第一次跑、怎么看图、接 AI、排错 |
+| [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么 |
+| [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) + [licenses/](licenses/) | 随包分发的第三方组件与许可证原文（一字未改） |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | 发版怎么走（跑测试 → 两个 exe → 打 `v*` tag 时建 Release） |
+
+哪块看哪节：**能力与边界** → 「支持读什么（输入）」「默认跳过什么」「读不了什么」；
+**MCP 那层** → 「给 AI 用」；**日常怎么用** → [使用说明.md](使用说明.md)。
+
 把**任意源码目录**扫成一份可读的中间数据（`bundle.json`），然后用浏览器翻图。
 目标：一份数据同时服务两种消费者 —— 人（探索、建立心智模型）和 AI（查询、省 token）。
 
@@ -67,6 +80,7 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
 - `--lang` 只扫指定语言：`--lang csharp` / `--lang typescript,lua`
 - `--exclude` 追加要跳过的目录名（默认已跳过 node_modules / bin / obj / dist / build / target / vendor / .git 等）
 - `--maxkb` 单文件大小上限
+- 同样的命令也装成全局 CLI：`npm i -g .` → `atlas scan <目录>`（`atlas` 这个别名在 `package.json` 的 `bin` 里；不装的话 `node src/cli.mjs …` 完全等价）
 
 ## 启动器（`CodeAtlas.exe`）
 
@@ -123,6 +137,8 @@ npm run publish:lite   # 只出精简版
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
 - **发版流程**：打 tag 推上去就行 —— `git tag v1.1.0 && git push --tags`。CI 会先跑测试，
   然后打两个 exe 并挂到 GitHub Release 当下载资产（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+- **版本号有三个地方，必须一起改**：`launcher/CodeAtlas.Launcher.csproj` 的 `<Version>`（exe 与窗口标题显示的就是它）、
+  `src/scan.mjs` 的 `VERSION`（bundle 元数据 + 增量缓存指纹）、`package.json` 的 `version`。
 
 ## 没有源码也能扫（ingest）
 
@@ -288,10 +304,6 @@ node src/cli.mjs langs [--json]                    # 看支持哪些语言（--j
 3. **本地优先**。源码不出本机，bundle 也在本地；工具只处理数据，不分发任何被扫代码。
 4. **引擎与宿主解耦**。引擎只产出 `bundle.json`；浏览器 / 未来的 MCP / 编辑器扩展都是消费者，换宿主不动引擎。
 
-## 协议
-
-MIT（见 [LICENSE](LICENSE)）。
-
 ## 支持读什么（输入）
 
 | 你给它什么 | 它做什么 | 状态 |
@@ -428,3 +440,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] 增量扫描（`--incremental`，只重解析改过的文件；启动器有「增量」勾选框）
 - [x] AI 接口补强：一键复制 MCP 配置 · `map(budget)` 骨架导出 · `impact` 影响面（多跳 + 诚实说明）
 - [x] 界面语言：中文 / English，覆盖启动器、引擎输出、MCP 工具与网页地图（切语言不用重扫）
+
+## 协议
+
+MIT（见 [LICENSE](LICENSE)）。

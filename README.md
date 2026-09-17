@@ -7,6 +7,19 @@ Shape: **CLI + local web page** (nothing is uploaded; your code never leaves the
 
 > 中文版见 [README_CN.md](README_CN.md)（Chinese version）
 
+**Docs in this repo**
+
+| File | What it is |
+| --- | --- |
+| [README.md](README.md) · [README_CN.md](README_CN.md) | This document — what Code Atlas is, how it is built, what it can and cannot do (reference) |
+| [USAGE.md](USAGE.md) · [使用说明.md](使用说明.md) | Step-by-step for **users**: first run, reading the map, connecting an AI, troubleshooting |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes — what changed in each version |
+| [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) + [licenses/](licenses/) | Every bundled third-party component and its licence text, verbatim |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | How a release is produced (tests → two exes → GitHub Release on a `v*` tag) |
+
+Where to look: **capabilities & limits** → “What it can read (input)” / “What is skipped by default” /
+“What it cannot read”; **the MCP layer** → “For AI”; **day-to-day usage** → [USAGE.md](USAGE.md).
+
 ## How it differs from the other projects named "Code Atlas"
 
 There is more than one project called Code Atlas on GitHub (the three closest: the Visual Studio extension
@@ -73,6 +86,8 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # MCP server for AI cli
 - `--lang` scans only the given languages: `--lang csharp` / `--lang typescript,lua`
 - `--exclude` adds directory names to skip (node_modules / bin / obj / dist / build / target / vendor / .git … are already skipped)
 - `--maxkb` per-file size limit
+- The same commands exist as a global CLI: `npm i -g .` → `atlas scan <dir>` (the `atlas` alias is declared in
+  `package.json`’s `bin`; without installing, `node src/cli.mjs …` does the same)
 
 ## The launcher (`CodeAtlas.exe`)
 
@@ -153,6 +168,9 @@ runtime (about 30 MB).
   repo), the repo engine is used instead of the bundled one.
 - **Release flow**: tag and push — `git tag v1.1.0 && git push --tags`. CI runs the tests, builds both exes
   and attaches them to a GitHub Release (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
+- **Three places carry the version** and have to move together: `launcher/CodeAtlas.Launcher.csproj`’s `<Version>`
+  (what the exe and the window title show), `src/scan.mjs`’s `VERSION` (bundle metadata + the incremental cache
+  fingerprint) and `package.json`’s `version`.
 
 ## Scanning without source (ingest)
 
@@ -361,10 +379,6 @@ the output contains a `_comment` explaining the format — edit away).
 4. **Engine and host are decoupled.** The engine only produces `bundle.json`; the browser / MCP / future
    editor extensions are all consumers, so swapping a host does not touch the engine.
 
-## License
-
-MIT (see [LICENSE](LICENSE)).
-
 ## What it can read (input)
 
 | What you give it | What it does | Status |
@@ -535,3 +549,7 @@ so the whole file does not vanish from the map; their members (functions/variabl
 - [x] Incremental scanning (`--incremental`, re-parses changed files only; "Incremental" checkbox in the launcher)
 - [x] AI interface hardening: one-click MCP config copy · `map(budget)` skeleton export · `impact` blast radius (multi-hop + honest caveats)
 - [x] UI language: 中文 / English across the launcher, the engine's output, all MCP tools and the web map (switching needs no re-scan)
+
+## License
+
+MIT (see [LICENSE](LICENSE)).
