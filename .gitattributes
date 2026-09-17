@@ -10,3 +10,10 @@
 *.dll binary
 *.zip binary
 *.ico binary
+*.jar binary
+
+# 自带的 Java 运行时（vendor/jre）整棵树按二进制存取：
+# 里面的 release / legal/* / lib/classlist / lib/tzmappings / conf/security/java.security 都是“看着像文本”的文件，
+# 被 CRLF→LF 归一化后就与原始 jlink 产物不一致了——这份运行时是要原样分发的。
+# （注意：git 用最后一条匹配的规则，所以这条必须放在上面的 * text=auto 之后。）
+vendor/jre/** -text

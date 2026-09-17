@@ -2,9 +2,9 @@
  * ingest：把"不是源码的东西"变成能扫的源码目录。
  *
  *   目录里有源码        -> 直接扫
- *   .dll / .exe（.NET）  -> ILSpy 反编译成 .cs 再扫
- *   .jar（Java）         -> 用 cfr / vineflower 反编译再扫（需要 java，指定 --decompiler）
- *   单文件发行版 .exe    -> 识别出来并给出可行路径（解包暂未做）
+ *   .dll / .exe（.NET）  -> 启动器内置的 ILSpy 反编译（开发模式下回退到 ilspycmd）
+ *   .jar（Java）         -> cfr 反编译；java 与 cfr.jar 优先用自带的 vendor/（完全版内置，用户不用装）
+ *   单文件发行版 .exe    -> 解包（启动器内置 SingleFileExtractor；开发模式回退到 sfextract）
  *
  * 设计原则：ingest 只负责"把产物变源码"，产出的目录就是普通源码目录，
  * 后面全部走同一个 scan；反编译这件事本身不污染中间数据，只记进 source.ingest。
@@ -50,14 +50,22 @@ export function findIlspy() {
 }
 
 function findJava() {
-  const r = run('java', ['-version']);
-  if (r.error || r.status !== 0) return null;
-  return String(r.stderr || r.stdout || '').split('\n')[0].trim();
+  // 先看仓库/引擎自带的裁剪运行时（完全版带它，用户什么都不用装）——路径跟打包脚本一致
+  const bundled = path.join(PROJECT_ROOT, 'vendor', 'jre', 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+  const cands = [bundled, 'java'];
+  for (const c of cands) {
+    if (c.includes(path.sep) && !fs.existsSync(c)) continue;
+    const r = run(c, ['-version']);
+    if (!r.error && r.status === 0) return { cmd: c, label: String(r.stderr || r.stdout || '').split('\n')[0].trim(), bundled: c === bundled };
+  }
+  return null;
 }
 
-/** 找 Java 反编译器（cfr / vineflower），可用 --decompiler 指定 */
+/** 找 Java 反编译器（cfr / vineflower）：自带 > 显式指定 > 环境变量 > 家目录 */
 function findJarDecompiler(explicit) {
+  const bundled = path.join(PROJECT_ROOT, 'vendor', 'cfr.jar');
   const cands = [
+    fs.existsSync(bundled) ? bundled : null,
     explicit,
     process.env.CFR_JAR,
     process.env.VINEFLOWER_JAR,
@@ -292,14 +300,24 @@ function countFiles(dir, ext) {
 
 function decompileJar(jar, workDir, notes, decompilerPath) {
   const java = findJava();
-  if (!java) throw new Error('这个目标是 .jar，需要 Java 运行时（JRE/JDK）才能反编译。装个 JRE 再来。');
+  if (!java) {
+    throw new Error([
+      '这个目标是 .jar，需要 Java 运行时才能反编译。',
+      '完全版（CodeAtlas.exe）自带一份裁剪过的运行时，不需要装；',
+      '直接跑引擎（node src/cli.mjs）才需要装个 JRE。',
+    ].join('\n'));
+  }
   const dec = findJarDecompiler(decompilerPath);
   if (!dec) {
-    throw new Error(`要反编译 .jar 需要 cfr 或 vineflower（下载 cfr.jar 后放到 ${path.join(os.homedir(), '.code-atlas', 'cfr.jar')}，或用 --decompiler <路径> 指定）`);
+    throw new Error([
+      '没找到 cfr.jar（Java 反编译器）。',
+      '完全版内置了一份（vendor/cfr.jar）；直接跑引擎的话可以下 cfr.jar 放到 ' + path.join(os.homedir(), '.code-atlas', 'cfr.jar') + '，或用 --decompiler <路径> 指定。',
+    ].join('\n'));
   }
-  notes.push(`反编译工具：${path.basename(dec)} + ${java}`);
+  notes.push(`反编译工具：${path.basename(dec)} + ${java.label}${java.bundled ? '（自带）' : ''}`);
   fs.mkdirSync(workDir, { recursive: true });
-  const r = run('java', ['-jar', dec, jar, workDir, '--silent', 'true']);
+  // 注意用找到的那个 java（以前这里写死了 'java'，自带运行时形同虚设）
+  const r = run(java.cmd, ['-jar', dec, jar, '--outputdir', workDir, '--silent', 'true']);
   if (r.status !== 0) throw new Error(`反编译 .jar 失败：${String(r.stderr || r.stdout || '').slice(0, 400)}`);
   notes.push(`反编译 ${path.basename(jar)} → ${countFiles(workDir, '.java')} 个 .java`);
   return workDir;

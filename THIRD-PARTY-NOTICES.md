@@ -133,6 +133,56 @@ THIS SOFTWARE.
 - **许可**：随 .NET 发行版附带的 Microsoft 软件许可条款
 - **原文**：整份随附：[`licenses/dotnet-LICENSE.txt`](licenses/dotnet-LICENSE.txt)（取自本机构建用的 .NET 9 SDK，一字未改）
 
-## 我们刻意没带的
+### ICSharpCode.Decompiler（.NET 包，MIT）
 
-- `ilspycmd` / `sfextract` / `cfr.jar`（反编译 .dll / .exe / .jar 用的）：它们不是单文件工具（本体在 `~/.dotnet/tools/.store/…`，还依赖 .NET 工具宿主），所以不打进包；用到时会提示安装命令。
+- **是什么**：启动器内置的 .NET 反编译器（ILSpy 的反编译引擎）。扫 `.dll` / `.exe` 时不再需要用户装 ilspycmd。
+- **许可**：MIT ｜ **作者**：ILSpy Team ｜ **源代码**：https://github.com/icsharpcode/ILSpy ｜ 版本 11.0.0.9375
+
+### SingleFileExtractor.Core（.NET 包，MIT）
+
+- **是什么**：启动器内置的 .NET 单文件发行版解包库。
+- **许可**：MIT ｜ **作者**：Joery Droppers ｜ **源代码**：https://github.com/Droppers/SingleFileExtractor ｜ 版本 2.3.0
+
+### cfr（Java 反编译器，MIT）
+
+- **是什么**：反编译 `.jar`。**它本身只有 2 MB，随包分发**（`vendor/cfr.jar`）。
+- **许可**：MIT ｜ **作者**：Lee Benfield ｜ **官网**：https://www.benf.org/other/cfr ｜ 版本 0.152
+- **原文**：整份随附：[`licenses/CFR-LICENSE.txt`](licenses/CFR-LICENSE.txt)（含作者官网的许可说明：年份是 Maven 模板占位符，已照实标注）
+
+### Microsoft Build of OpenJDK 25（仅完全版内置，GPLv2 + ClassPath Exception）
+
+- **是什么**：为了让扫 `.jar` 也“什么都不用装”，用 `jlink` 从 microsoft-jdk-25.0.4.1-windows-x64 裁出一份最小运行时
+  （只含 `java.base` + `java.logging`，实测能跑 cfr），放在 `vendor/jre/`。精简版不带它。
+- **许可**：GPLv2 with Classpath Exception（允许随包分发）
+- **原文**：**随裁出的运行时一起带**：`vendor/jre/legal/java.base/`（LICENSE / ASSEMBLY_EXCEPTION / ADDITIONAL_LICENSE_INFO +
+  第三方声明）、`vendor/jre/legal/java.logging/`（同上）—— 一共 15 个文件，**清一不可删**。
+- 重裁方法：`node tools/build-jre.mjs --jdk <JDK 路径>`（模块列表改不了：少 `java.logging` 会让 cfr 报 NoClassDefFoundError）。
+
+### 三个 MIT 项目的许可证标准文本
+
+上面 ICSharpCode.Decompiler / SingleFileExtractor.Core / cfr 都是 MIT，用的是同一份标准文本（版权行各自见上）：
+版权行：*ICSharpCode.Decompiler — Copyright (c) ILSpy Team*；*SingleFileExtractor — Copyright (c) Joery Droppers*；
+*cfr — Copyright (c) Lee Benfield - https://www.benf.org/other/cfr*
+
+```text
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## 开发模式下才需要的工具（发行版内置了，普通用户不用管）
+
+- 直接跑引擎（`node src/cli.mjs`）而不是启动器时：扫 `.dll` / `.exe` 需要 `ilspycmd`（或 `sfextract` 解包单文件），
+  提示会给出安装命令；用启动器时这些能力是**内置**的，不用装。
+- 扫 `.jar`：完全版自带运行时与 cfr；精简版 / 直接跑引擎时需要机器上有 Java。

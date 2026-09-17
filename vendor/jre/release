@@ -1,0 +1,2 @@
+JAVA_VERSION="25.0.4.1"
+MODULES="java.base java.logging"

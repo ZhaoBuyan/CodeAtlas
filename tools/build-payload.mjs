@@ -39,6 +39,15 @@ const copy = (list) => {
   }
 };
 
+/** 整个目录树照搬（用于 vendor/jre 这种几百个文件的运行时；路径与仓库里一致） */
+const copyDir = (fromRel) => {
+  const src = path.join(ROOT, fromRel);
+  if (!fs.existsSync(src)) throw new Error(`打包缺目录：${src}`);
+  const walk = (dir, base) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(dir, e.name), `${base}${e.name}/`) : [`${base}${e.name}`]);
+  copy(walk(src, '').map((p) => [`${fromRel}/${p}`, null]));
+};
+
 /** 找真 node.exe：绝不接受 Electron 冒充的那种（本沙箱里 `node` 就是 Chatbox） */
 function findRealNode() {
   const candidates = [];
@@ -130,7 +139,17 @@ copy([
     .map((f) => [`vendor/wasm/${f}`, null]),
 ]);
 
-// 6) node.exe（完全版）
+// 6) Java 反编译链路：自带的裁剪运行时（**只进完全版**）+ cfr.jar（两份都带；精简版要扫 .jar 仍需自己装 Java）
+//    vendor/jre 是用 tools/build-jre.mjs 从 JDK 裁出来的（只含 java.base + java.logging，实测能跑 cfr）
+if (withNode) {
+  copyDir('vendor/jre');
+} else {
+  console.log('  Java 运行时：精简版不带（要扫 .jar 得自己装 Java）');
+}
+copy([['vendor/cfr.jar', null]]);
+copy([['licenses/CFR-LICENSE.txt', null]]);
+
+// 7) node.exe（完全版）
 let nodeInfo = null;
 if (withNode) {
   const nodeExe = findRealNode();
@@ -150,6 +169,8 @@ const meta = {
   node: nodeInfo,
   languages: langs.map((l) => l.id),
   wasms,
+  javaRuntime: withNode ? 'vendor/jre（jlink: java.base + java.logging）' : null,
+  javaDecompiler: 'vendor/cfr.jar',
 };
 fs.writeFileSync(path.join(STAGE, 'payload.json'), JSON.stringify(meta, null, 2) + '\n', 'utf8');
 

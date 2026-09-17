@@ -135,8 +135,10 @@ node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
 - **原生可执行文件（C/C++ 编译）反编译不了**：它们没有 CLR 头，不是 .NET 程序集，里面也没有类型名 / 命名空间 / 方法签名，只有机器码；要出这种图得先反汇编成近似 C 再解释（IDA / Ghidra 那个量级的活），不在本工具的能力范围内。
   指到这类文件时会直接说明「这不是 .NET 程序集」，并列出能扫的三类。
   **例外：Unity 游戏**——`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指那个目录或那个 dll 就能扫。
-- **.NET 单文件发行版（PublishSingleFile）自动解包**：需要 `dotnet tool install -g sfextract`（已接好，指个 exe 就直接出图）。没装会提示；临时办法是把压缩版单文件程序**跑一次**，宿主会解包到 `%TEMP%\.net\<应用>\<id>\`。
-- .jar 需要 Java 运行时 + cfr/vineflower（`--decompiler` 指定路径，或放到 `%USERPROFILE%\.code-atlas\cfr.jar`）。
+- **反编译不用装东西（完全版）**：扫 `.dll` / `.exe` 用启动器**内置**的反编译器（ILSpy 引擎链接进 exe）；
+  扫 `.jar` 用**自带的裁剪版 Java 运行时 + cfr**——都不需要你先去装 ilspycmd / sfextract / Java。
+  精简版不带 Java 运行时（它本来就要求机器上有 .NET 9 + Node），所以扫 `.jar` 仍需自己装 Java；
+  直接跑引擎（`node src/cli.mjs`）也仍是开发模式：扫 `.dll` / `.jar` 需要自己装工具。
 - 反编译产物没有源码注释，所以“说明”是空的；行数含语法糖展开（实测比源码高 ~6%），界面上会明确标出来。
 - **编译器生成物自动识别**：形如 `<PrivateImplementationDetails>`、`_003C...`（ILSpy 转义）、`__InlineArray`、`__DisplayClass` 的类型会自动打上 `compiler-generated` 标签，反编译产物默认在界面里隐藏（可取消勾选看）。
 
