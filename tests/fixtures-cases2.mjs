@@ -224,4 +224,19 @@ export const EXTRA_CASES = [
     membersMin: 13,   // 各块的 attribute 总数（实测 13）
     errorsMax: 0,
   },
+  {
+    // GraphQL（SDL，2026-09-17）：type / interface / union / enum / scalar / input / schema / directive 都是节点，
+    // 成员是 field（参数单独算 argument）、enum 值是 value；`implements` 与 union 成员连成继承边。
+    // 两个实测坑：① `implements A & B` 在语法树里是**左递归嵌套**（collectBaseNames 改成递归才拿全 A 与 B）；
+    // ② `name` 是**子节点不是字段**（必须走 nameOf 钩子）；enum 值的名字还深一层。
+    dir: 'graphql',
+    lang: 'graphql',
+    types: 12,
+    names: ['schema', 'Query', 'Node', 'Timestamped', 'Post', 'User', 'Mutation', 'SearchResult', 'Role', 'DateTime', 'PostInput', 'auth'],
+    kinds: { type: 4, interface: 2, schema: 1, union: 1, enum: 1, scalar: 1, input: 1, directive: 1 },
+    extends: ['Query -> Node', 'Query -> Timestamped', 'Post -> Node', 'Post -> Timestamped', 'SearchResult -> Post', 'SearchResult -> User'],
+    docs: 2,          // schema 上的注释 + Query 上的 description
+    membersMin: 24,
+    errorsMax: 0,
+  },
 ];

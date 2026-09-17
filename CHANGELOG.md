@@ -28,6 +28,9 @@
 - **新增 HCL / Terraform 支持**（25 门）：`.tf` / `.tfvars` / `.hcl` / `.nomad`。图上的节点是块
   （resource / data / module / variable / output / locals / terraform），成员是块里的 attribute；
   块之间的引用会连成依赖边（如 `output "ip"` → `resource "aws_instance" "web"`）。
+- **新增 GraphQL 支持**（26 门）：`.graphql` / `.graphqls` / `.gql`。type / interface / union / enum / scalar /
+  input / schema / directive 都是图上的节点；字段是成员（函数的参数单独算 argument）；`implements`
+  与 union 成员连成继承边；SDL 的 `"""..."""` 描述当"说明"显示。
 - 按钮文案：主按钮「开跑」→ **「扫描」**（向导里的「保存并开跑」→「保存并扫描」）；只是叫法更贴切，行为没变。
 - **反编译不再需要你装任何东西（完全版）**：扫 `.dll` / `.exe` 用启动器**内置**的反编译器（ILSpy 引擎，MIT）；
   扫 `.jar` 用**自带的裁剪版 Java 运行时 + cfr**（只含 `java.base` + `java.logging`，从 microsoft-jdk-25 裁出来）。
@@ -38,7 +41,7 @@
   `overview` 第一屏给出**扫描根目录**、**数据快照**（生成时间 / 语言 / 单文件上限 / 是否增量）
   和**可信度前提**（未匹配 / 同名歧义计数）；`refs` 与 `file` 在截断时会说明还剩多少条没显示。
 
-（支持的语言：**25 门代码语言** + 5 种文件级格式；SystemRDL 暂时缺席，等它的语法包补上。）
+（支持的语言：**26 门代码语言** + 5 种文件级格式；SystemRDL 暂时缺席，等它的语法包补上。）
 
 ## 1.0.0（2026-09-17）
 

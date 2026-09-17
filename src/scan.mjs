@@ -204,13 +204,17 @@ function baseNameOf(node) {
 
 /** 收集一组基类/接口名 */
 function collectBaseNames(node, out) {
-  const listTypes = new Set(['base_list', 'super_interfaces', 'interface_type_list', 'type_list', 'extends_clause', 'implements_clause', 'delegation_specifiers', 'superclass']);
-  const items = listTypes.has(node.type) ? node.namedChildren : [node];
-  for (const item of items) {
-    if (item.type === 'type_arguments' || item.type === 'type_parameter') continue;
-    const name = baseNameOf(item);
-    if (name && /^[A-Za-z_$][\w$.]*$/.test(name)) out.push(name.split('.').pop());
+  const listTypes = new Set(['base_list', 'super_interfaces', 'interface_type_list', 'type_list', 'extends_clause', 'implements_clause', 'delegation_specifiers', 'superclass', 'implements_interfaces', 'union_member_types']);
+  if (listTypes.has(node.type)) {
+    // 列表型节点要**递归**：GraphQL 的 implements_interfaces / union_member_types 是左递归嵌套的
+    //（`implements Node & Timestamped` 外层只直接挂着最后一个名字，只取一层就会漏掉前面的）。
+    // 实测：不递归时 Query 的基类只剩 ["Timestamped"]，Node 丢了。
+    for (const c of node.namedChildren) collectBaseNames(c, out);
+    return;
   }
+  if (node.type === 'type_arguments' || node.type === 'type_parameter') return;
+  const name = baseNameOf(node);
+  if (name && /^[A-Za-z_$][\w$.]*$/.test(name)) out.push(name.split('.').pop());
 }
 
 /** 从 import 语句里抠出目标名（C# using / Java import / JS-TS import / Python from-import / C-C++ #include / PHP use 都吃） */
@@ -261,6 +265,26 @@ function docstringOf(node) {
   const text = str.text.replace(/^[rbfuRBFU]*('''|"""|'|")/, '').replace(/('''|"""|'|")$/, '');
   const t = text.replace(/\s+/g, ' ').trim();
   return t ? (t.length > 300 ? `${t.slice(0, 297)}…` : t) : null;
+}
+
+/** 把一段可能的"说明"清一下：压空白、封顶 300 字 */
+function normalizeDoc(text) {
+  if (!text) return null;
+  const t = String(text).replace(/\s+/g, ' ').trim();
+  return t ? (t.length > 300 ? `${t.slice(0, 297)}…` : t) : null;
+}
+
+/**
+ * 一个节点的"说明"从哪来：
+ *   ① 上面的注释（所有语言通用）；
+ *   ② 没有注释时看 lang.docstring——Python 写 true（用内置的声明体首句字符串规则），
+ *      其它语言（如 GraphQL 的 description 节点）可以给一个函数，返回字符串或 null。
+ */
+function languageDoc(lang, node, comments, lines) {
+  const fromComment = docFor(comments, node.startPosition.row, lines);
+  if (fromComment) return fromComment;
+  if (!lang.docstring) return null;
+  return typeof lang.docstring === 'function' ? normalizeDoc(lang.docstring(node)) : docstringOf(node);
 }
 
 /**
@@ -412,7 +436,7 @@ function extractFile(source, tree, lang) {
         startRow: node.startPosition.row,
         endRow: node.endPosition.row,
         bases,
-        doc: docFor(comments, node.startPosition.row, lines) || (lang.docstring ? docstringOf(node) : null),
+        doc: languageDoc(lang, node, comments, lines),
         members: {},
         memberList: [],
         complexity: 1,
@@ -439,7 +463,7 @@ function extractFile(source, tree, lang) {
     if (lang.membersOf) {
       const many = lang.membersOf(node);
       if (many && many.length) {
-        const mdoc = docFor(comments, node.startPosition.row, lines) || (lang.docstring ? docstringOf(node) : null);
+        const mdoc = languageDoc(lang, node, comments, lines);
         for (const m of many) bumpMember(m.kind, m.name, node.startPosition.row + 1, mdoc);
         for (const c of node.namedChildren) walk(c);
         return;
@@ -449,7 +473,7 @@ function extractFile(source, tree, lang) {
     const memberKind = lang.memberKindOf ? lang.memberKindOf(node) : lang.members[type];
     if (memberKind) {
       const name = nameOf(node, lang);
-      const mdoc = docFor(comments, node.startPosition.row, lines) || (lang.docstring ? docstringOf(node) : null);
+      const mdoc = languageDoc(lang, node, comments, lines);
       bumpMember(memberKind, name, node.startPosition.row + 1, mdoc);
       for (const c of node.namedChildren) walk(c);
       return;

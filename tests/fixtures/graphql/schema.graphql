@@ -1,0 +1,55 @@
+# 顶层注释：schema 定义
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+"""这是 description 节点，不是注释"""
+type Query implements Node & Timestamped {
+  "最新的若干条"
+  latest(limit: Int = 10, after: String): [Post!]!
+  post(id: ID!): Post
+  search(text: String!): [SearchResult]
+}
+
+interface Node {
+  id: ID!
+}
+
+interface Timestamped {
+  createdAt: DateTime!
+}
+
+type Post implements Node & Timestamped {
+  id: ID!
+  createdAt: DateTime!
+  title: String!
+  author: User
+  tags: [String!]
+}
+
+type User {
+  id: ID!
+  posts(first: Int): [Post!]
+}
+
+type Mutation {
+  createPost(input: PostInput!): Post
+}
+
+union SearchResult = Post | User
+
+enum Role {
+  ADMIN
+  """普通用户"""
+  USER
+}
+
+scalar DateTime
+
+input PostInput {
+  title: String!
+  tags: [String!]
+}
+
+directive @auth(role: Role!) on FIELD_DEFINITION

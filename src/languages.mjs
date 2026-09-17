@@ -183,6 +183,43 @@ const hclName = (node) => {
   return head && head.type === 'identifier' ? head.text : null;
 };
 
+// ---------- GraphQL（SDL）----------
+// 实测结构（2026-09-17）：节点在 document → definition → type_system_definition 下面，
+// 但走 namedChildren 遍历会自然穿透；**注意 name 是子节点不是字段**（childForFieldName('name') 拿不到），
+// 所以取名必须用 nameOf 钩子；"""说明""" 是 description 节点（不是注释）→ 用 docstring 钩子。
+const gqlName = (node) => {
+  // enum 值的名字深一层：enum_value_definition → enum_value → name（实测，不特殊处理会一个都抽不到）
+  if (node.type === 'enum_value_definition') {
+    const v = node.namedChildren.find((c) => c.type === 'enum_value');
+    const n = v && v.namedChildren.find((c) => c.type === 'name');
+    return n ? n.text : null;
+  }
+  const n = node.namedChildren.find((c) => c.type === 'name');
+  if (n) return n.text;
+  if (node.type === 'schema_definition') return 'schema';   // 它没有名字，但它是块真正的根声明
+  return null;
+};
+
+/** """这是说明""" → description 节点 → 取里面的字符串并压成一行 */
+const gqlDescription = (node) => {
+  const d = node.namedChildren.find((c) => c.type === 'description');
+  if (!d) return null;
+  return d.text.replace(/^"""|"""$/g, '').replace(/"([^"]*)"/g, '$1');
+};
+
+/**
+ * 参数与字段在语法树里是同一个节点类型（input_value_definition），靠父节点分：
+ *   `latest(limit: Int)` → arguments_definition 下的是**参数**；
+ *   `input PostInput { title: String! }` → input_fields_definition 下的是**字段**。
+ * 不分的话 Query 的成员表里会出现 limit / after / text 这些参数，看着像字段（实测踩到）。
+ */
+const gqlMembersOf = (node) => {
+  if (node.type !== 'input_value_definition') return null;
+  const kind = node.parent && node.parent.type === 'arguments_definition' ? 'argument' : 'field';
+  const name = gqlName(node);
+  return name ? [{ kind, name }] : null;
+};
+
 // ---------- Ruby ----------
 // 节点名都是实测出来的（2026-09-17，tests/probe-nodes.mjs + 一份特意写全各种写法的样本）：
 //   class / module / method / singleton_method / superclass / call / if / unless / case / while / until / for
@@ -861,6 +898,40 @@ export const LANGUAGES = {
     baseNodes: [],
     kindOf: hclKind,
     nameOf: hclName,
+    decisions: [],
+    decisionOps: [],
+  },
+
+  // GraphQL（SDL）：type / interface / union / enum / scalar / input / schema / directive 都是图上的节点，
+  // 成员是 field / input 字段 / enum 值；`implements` 与 union 成员连成继承边。
+  graphql: {
+    id: 'graphql',
+    label: 'GraphQL',
+    status: 'ok',
+    exts: ['.graphql', '.graphqls', '.gql'],
+    wasm: 'graphql/tree-sitter-graphql.wasm',
+    namespaces: {},
+    types: {
+      object_type_definition: 'type',
+      interface_type_definition: 'interface',
+      union_type_definition: 'union',
+      enum_type_definition: 'enum',
+      scalar_type_definition: 'scalar',
+      input_object_type_definition: 'input',
+      schema_definition: 'schema',
+      directive_definition: 'directive',
+    },
+    members: {
+      field_definition: 'field',
+      input_value_definition: 'field',
+      enum_value_definition: 'value',
+    },
+    imports: {},
+    baseNodes: ['implements_interfaces', 'union_member_types'],
+    baseFields: [],
+    nameOf: gqlName,
+    membersOf: gqlMembersOf,
+    docstring: gqlDescription,
     decisions: [],
     decisionOps: [],
   },
