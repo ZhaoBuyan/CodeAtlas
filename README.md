@@ -321,7 +321,7 @@ MIT（见 [LICENSE](LICENSE)）。
 | Elixir | `.ex` `.exs` | ✅ fixtures（module / function / struct；注：`defmodule`/`def` 在语法树里是 call 节点，靠专属钩子识别；`alias` 会计入导入，但暂不连成依赖边） |
 
 **目前用不了的**（我们的运行时锁在 tree-sitter 0.20.8，它们的语法包要求更新的 ABI）：`Dart`、`Ruby`、`Elm`、`QL`。
-`Vue` 单文件组件、`Objective-C`（`.m` 与 MATLAB 扩名冲突）、`Elixir`（语法全部用 call 表达，通用提取器不好区分）暂未支持，原因已记录。
+`Vue` 单文件组件、`Objective-C`（`.m` 与 MATLAB 扩名冲突）暂未支持，原因已记录。
 审计命令：`node tests/probe-abi.mjs`（把每个语法包真解析一遍，分清能用 / 用不了）。
 
 **文件级格式（默认不开，要看就显式指定）**：`JSON` `.json` · `YAML` `.yaml .yml` · `TOML` `.toml` · `CSS` `.css` · `HTML` `.html .htm` —— 这些没有"类型"可言，只会以文件为单位出现在图上（合成 module 节点）：
