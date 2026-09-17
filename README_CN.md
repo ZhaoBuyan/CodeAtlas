@@ -82,6 +82,10 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
   「**MCP 配置**」按钮（一键把"让 AI 读这个项目"的配置复制到剪贴板——粘进客户端即可，见 [使用说明.md](使用说明.md) 第五节）。
   语言表由引擎提供（`node src/cli.mjs langs`），启动器不自己维护一份——加语言只要改 `languages.mjs`。
   选的语言写进 `launcher.config.json` 的 `Langs`（逗号分隔；空 = 自动）。注意这是**全局设置**，不跟项目走。
+- **界面语言**：工具栏「增量」右边那个按钮（`界面：中文` / `UI: English`）点一下即可切，并记入 `launcher.config.json`。
+  它管的面包括：启动器（运行日志 / 状态栏 / 对话框 / 报错）、引擎的扫描输出、MCP 八个工具的输出，以及网页地图。
+  切语言**不需要重新扫描**（bundle 里存的是中性值，显示层按语言映射）。不开启动器的人用环境变量
+  `CODEATLAS_LANG=en` 指定（环境变量优先级最高；`en` 开头就算英文）。
 - 需要装了 **Node.js**（引擎是 Node 写的）；不需要 .NET SDK（但需要 .NET 9 运行时，.NET 9 SDK 自带）。
 - 配置在 `launcher.config.json`（node 路径 / 端口 / 输出目录 / 上次的路径），首次运行自动生成——node 不在 PATH 里就改这个文件。
 - 重新构建：`dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -o .`
@@ -94,8 +98,8 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
 
 | 版本 | 构建产物 | 体积 | 机器上要先有什么 |
 | --- | --- | --- | --- |
-| **完全版** | `publish-sc/CodeAtlas.exe` | 104.1 MB | 什么都不用装（内置 Node 24 + 引擎 + 裁剪版 Java 运行时） |
-| **精简版** | `publish-lite/CodeAtlas-lite.exe` | 9.9 MB | .NET 9 桌面运行时 + Node.js |
+| **完全版** | `publish-sc/CodeAtlas.exe` | 104.3 MB | 什么都不用装（内置 Node 24 + 引擎 + 裁剪版 Java 运行时） |
+| **精简版** | `publish-lite/CodeAtlas-lite.exe` | 10.1 MB | .NET 9 桌面运行时 + Node.js |
 
 ```bash
 npm run publish        # 两个版本都出（= publish:sc + publish:lite）
@@ -103,12 +107,13 @@ npm run publish:sc     # 只出完全版
 npm run publish:lite   # 只出精简版
 ```
 
-原理一句话：引擎（`src` / `web` / `configs` / 28 个语法包 wasm / d3）先由 `tools/build-payload.mjs`
+原理一句话：引擎（`src` / `web` / `configs` / 32 个语法包 wasm / d3）先由 `tools/build-payload.mjs`
 打成 zip，构建时作为 `<EmbeddedResource>` 整个嵌进 exe；**首次运行**解到
-`%LocalAppData%\CodeAtlas\engine\<版本-包大小>\`，之后直接用，不再重复解。
+`%LocalAppData%\CodeAtlas\engine\<版本-包指纹>\`，之后直接用，不再重复解
+（目录名用的是**包内容指纹**而不是大小：内容变了但大小没变时也会重新解，避得用错旧引擎）。
 完全版比精简版多出来的就是包里的 `node.exe`（88 MB）和那份裁剪版 Java 运行时（约 30 MB）。
 
-- 解包目录：完全版约 161 MB / 精简版约 43 MB（删掉它会自动重新释放）；
+- 解包目录：完全版约 163 MB / 精简版约 45 MB（删掉它会自动重新释放）；
   超过 7 天没动过的旧解包目录会在下次启动时顺手清掉，免得换个版本就多留一百多 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本/包大小不同 → 自动重新释放配套引擎。
@@ -179,22 +184,26 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 | `map(budget)` | 按 token 预算导出**骨架**（系统 → 关键类型 → 关键成员）——让 AI 先拿到全局，省 token |
 | `impact(name, depth)` | **影响面分析**：沿“谁引用它”多跳展开，并说明哪些看不见（动态调用/反射） |
 
-接入客户端（以 Chatbox / Claude Desktop 这类配置为例，路径用绝对路径）：
+接入客户端（以 Chatbox / Claude Desktop 这类配置为例）——**启动器的「MCP 配置」按钮拷出来的就是这个形状**
+（路径都是绝对路径，`command` 已经指向实际解析到的 `node.exe`，`env` 是当前界面语言）：
 
 ```json
 {
   "mcpServers": {
     "code-atlas": {
-      "command": "node",
-      "args": ["C:/path/to/CodeAtlas/src/cli.mjs", "mcp", "--out", "C:/path/to/CodeAtlas/dist"]
+      "command": "C:/path/to/node.exe",
+      "args": ["C:/path/to/CodeAtlas/src/cli.mjs", "mcp", "--out", "C:/path/to/CodeAtlas/dist"],
+      "env": { "CODEATLAS_LANG": "zh" }
     }
   }
 }
 ```
 
-两个细节：
+三个细节：
 
 - 输出是**紧凑文本**而不是 JSON —— 同样的问题 token 更少，AI 也更好读；
+- **工具输出跟界面语言走**：拷出来的配置里带 `CODEATLAS_LANG`，所以 AI 拿到的答案和你的界面同一种语言
+  （环境变量优先；删掉它就是中文）；
 - bundle 是快照，会过时。MCP 每次调用前会查 mtime，**重新扫描过就自动换新的**，不会拿隔夜数据回答；
 - **接上就知道边界**：`initialize` 会带一段 `instructions`（这份数据怎么用、哪里不可信）；
   `overview` 的第一屏还直接给出**扫描根目录**（AI 自己拼绝对路径去读源文件用）、**数据快照**（生成时间 / 语言范围 / 单文件上限 / 是否增量）
@@ -417,3 +426,4 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] 首次运行向导（选项目 → 草拟分组规则 → 勾语言 → 保存并扫描；配过的项目再打开=零操作）
 - [x] 增量扫描（`--incremental`，只重解析改过的文件；启动器有「增量」勾选框）
 - [x] AI 接口补强：一键复制 MCP 配置 · `map(budget)` 骨架导出 · `impact` 影响面（多跳 + 诚实说明）
+- [x] 界面语言：中文 / English，覆盖启动器、引擎输出、MCP 工具与网页地图（切语言不用重扫）

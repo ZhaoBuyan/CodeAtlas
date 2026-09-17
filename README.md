@@ -99,6 +99,11 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # MCP server for AI cli
   adding a language only touches `languages.mjs`.
   Selected languages are stored in `launcher.config.json` under `Langs` (comma separated; empty = auto).
   Note this is a **global** setting, not per project.
+- **UI language**: the toolbar button right after "Incremental" reads `界面：中文` / `UI: English` — one click
+  switches the interface and saves the choice to `launcher.config.json`. It covers the launcher (run log, status
+  bar, dialogs, error messages), the engine's scan output, all eight MCP tools **and** the web map. Switching
+  does **not** re-scan anything: the bundle stores language-neutral values and the display layer maps them.
+  Without the launcher, set `CODEATLAS_LANG=en` (the env var overrides the config; anything starting with `en` works).
 - Requires **Node.js** (the engine is written in Node); no .NET SDK needed (but the .NET 9 runtime is,
   which the .NET 9 SDK includes).
 - Configuration lives in `launcher.config.json` (node path / port / output dir / last path), created on first
@@ -115,8 +120,8 @@ No installer — just an exe you can put anywhere.
 
 | Edition | Build output | Size | What the machine needs first |
 | --- | --- | --- | --- |
-| **Full** | `publish-sc/CodeAtlas.exe` | 104.1 MB | nothing (bundles Node 24, the engine, and a trimmed Java runtime) |
-| **Lite** | `publish-lite/CodeAtlas-lite.exe` | 9.9 MB | .NET 9 desktop runtime + Node.js |
+| **Full** | `publish-sc/CodeAtlas.exe` | 104.3 MB | nothing (bundles Node 24, the engine, and a trimmed Java runtime) |
+| **Lite** | `publish-lite/CodeAtlas-lite.exe` | 10.1 MB | .NET 9 desktop runtime + Node.js |
 
 ```bash
 npm run publish        # both editions (= publish:sc + publish:lite)
@@ -124,13 +129,13 @@ npm run publish:sc     # full only
 npm run publish:lite   # lite only
 ```
 
-One line on how it works: the engine (`src` / `web` / `configs` / 28 grammar wasm files / d3) is zipped by
+One line on how it works: the engine (`src` / `web` / `configs` / 32 grammar wasm files / d3) is zipped by
 `tools/build-payload.mjs` and embedded into the exe as an `<EmbeddedResource>`; on **first run** it is
 extracted to `%LocalAppData%\CodeAtlas\engine\<version-payloadfingerprint>\` and reused from there.
 What the full edition has beyond the lite one: `node.exe` in the payload (88 MB) plus the trimmed Java
 runtime (about 30 MB).
 
-- Extracted size: about 161 MB (full) / 43 MB (lite); delete it and it is re-extracted automatically.
+- Extracted size: about 163 MB (full) / 45 MB (lite); delete it and it is re-extracted automatically.
   Caches untouched for more than 7 days are cleaned up on the next start, so switching versions does not
   leave ~160 MB behind per version.
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
@@ -219,22 +224,26 @@ Tools provided:
 | `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply |
 | `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus an explicit list of what is invisible (dynamic calls / reflection) |
 
-Client configuration (Chatbox / Claude Desktop style, use absolute paths):
+Client configuration — the "MCP config" button copies exactly this shape (absolute paths, `command` already
+pointing at the resolved `node.exe`, `env` set to the current UI language):
 
 ```json
 {
   "mcpServers": {
     "code-atlas": {
-      "command": "node",
-      "args": ["C:/path/to/CodeAtlas/src/cli.mjs", "mcp", "--out", "C:/path/to/CodeAtlas/dist"]
+      "command": "C:/path/to/node.exe",
+      "args": ["C:/path/to/CodeAtlas/src/cli.mjs", "mcp", "--out", "C:/path/to/CodeAtlas/dist"],
+      "env": { "CODEATLAS_LANG": "en" }
     }
   }
 }
 ```
 
-Three details:
+Four details:
 
 - Output is **compact text, not JSON** — fewer tokens for the same question, and easier for a model to read;
+- **The tool output follows the UI language**: the copied config carries `CODEATLAS_LANG`, so answers come back in
+  the same language as your interface (the env var wins; delete it and the engine speaks Chinese);
 - The bundle is a snapshot and can go stale. Before every call the server checks mtime and **switches to a
   freshly scanned bundle automatically**; it will not answer from yesterday's data;
 - **The AI learns the boundaries on connect**: `initialize` carries an `instructions` field (how to use this
@@ -524,3 +533,4 @@ so the whole file does not vanish from the map; their members (functions/variabl
 - [x] First-run wizard (pick project → draft grouping rules → pick languages → save and scan; no wizard next time)
 - [x] Incremental scanning (`--incremental`, re-parses changed files only; "Incremental" checkbox in the launcher)
 - [x] AI interface hardening: one-click MCP config copy · `map(budget)` skeleton export · `impact` blast radius (multi-hop + honest caveats)
+- [x] UI language: 中文 / English across the launcher, the engine's output, all MCP tools and the web map (switching needs no re-scan)
