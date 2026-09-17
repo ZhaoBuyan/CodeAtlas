@@ -151,7 +151,7 @@ runtime (about 30 MB).
   .NET 9 + Node), so scanning `.jar` there still needs a Java runtime.
 - Development mode is unaffected: when `src/cli.mjs` sits next to the exe (e.g. the exe was copied into the
   repo), the repo engine is used instead of the bundled one.
-- **Release flow**: tag and push — `git tag v1.0.0 && git push --tags`. CI runs the tests, builds both exes
+- **Release flow**: tag and push — `git tag v1.1.0 && git push --tags`. CI runs the tests, builds both exes
   and attaches them to a GitHub Release (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 ## Scanning without source (ingest)
@@ -163,7 +163,7 @@ node src/cli.mjs ingest "bin/Release/net9.0-windows10.0.19041.0/win-x64/App.dll"
 # A directory: source is scanned directly; if it only holds build output, assemblies are picked by directory name
 node src/cli.mjs ingest "C:/path/to/published-app" --out dist-app --dll "MyApp*.dll"
 
-# Java jar (needs a Java runtime + cfr/vineflower)
+# Java jar (the full build ships the runtime + cfr; --decompiler overrides it)
 node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
 ```
 
@@ -371,10 +371,11 @@ MIT (see [LICENSE](LICENSE)).
 | --- | --- | --- |
 | **Directory with source** | Scans it; mixed languages in one pass | ✅ |
 | **A single source file** | There is no "map of one file", so it scans the **containing directory** and tells you | ✅ |
-| **.dll / .exe (.NET assembly)** | ILSpy decompile to .cs, then scan | ✅ measured |
-| **.exe (.NET single-file publish)** | extract with SingleFileExtractor → decompile → scan | ✅ measured |
+| **.dll / .exe (.NET assembly)** | The launcher's **built-in decompiler** (ILSpy's library; only falls back to `ilspycmd` if you run the engine directly) → `.cs` → scan | ✅ measured |
+| **.exe (.NET single-file publish)** | Unpacked by the built-in SingleFileExtractor → decompile → scan | ✅ measured |
 | **Directory with build output only** | Finds assemblies by directory name; `--dll "App*.dll"` to be explicit | ✅ |
-| **.jar (Java)** | Needs a Java runtime + cfr/vineflower (or `--decompiler`) | ⚠️ implemented, not yet measured end-to-end |
+| **.jar (Java)** | The full build ships a **trimmed JRE + cfr** in `vendor/` — nothing to install → `.java` → scan (the lite build still needs Java on the machine) | ✅ measured (a 2.1 MB jar → 732 files / 1,015 types / 9,751 edges) |
+| **Anything else** | Native binaries (`.so`/`.dylib`, or an exe/dll built from C/C++/Go/Rust) and archives (`.zip`/`.nupkg`/`.apk`) → refused, with a message listing the three kinds it does support | ❌ |
 
 In the launcher you can drag in a folder, or a `.dll / .exe / .jar` — **you do not have to say which it is**.
 

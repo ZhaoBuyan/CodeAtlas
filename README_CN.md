@@ -121,7 +121,7 @@ npm run publish:lite   # 只出精简版
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - **反编译在完全版里无需安装**：扫 `.dll` / `.exe` 用链接进启动器的反编译器（ILSpy 引擎）；扫 `.jar` 用自带的裁剪版 Java 运行时 + cfr.jar —— 都不需要先装 ilspycmd / sfextract / Java。精简版不带 Java 运行时（它本来就要求 .NET 9 + Node），扫 `.jar` 仍需自己装 Java。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
-- **发版流程**：打 tag 推上去就行 —— `git tag v1.0.0 && git push --tags`。CI 会先跑测试，
+- **发版流程**：打 tag 推上去就行 —— `git tag v1.1.0 && git push --tags`。CI 会先跑测试，
   然后打两个 exe 并挂到 GitHub Release 当下载资产（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
 
 ## 没有源码也能扫（ingest）
@@ -133,7 +133,7 @@ node src/cli.mjs ingest "bin/Release/net9.0-windows10.0.19041.0/win-x64/App.dll"
 # 目录：里面有源码就直接扫；只有发行产物就按目录名找程序集
 node src/cli.mjs ingest "C:/path/to/published-app" --out dist-app --dll "MyApp*.dll"
 
-# Java jar（需要 java + cfr/vineflower）
+# Java jar（完全版自带运行时 + cfr；--decompiler 可覆盖）
 node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
 ```
 
@@ -298,10 +298,11 @@ MIT（见 [LICENSE](LICENSE)）。
 | --- | --- | --- |
 | **目录（有源码）** | 直接扫；多语言混排一次扫完 | ✅ |
 | **单个源码文件** | 没有"单文件的图"这回事，会扫它**所在的目录**并告知 | ✅ |
-| **.dll / .exe（.NET 程序集）** | ILSpy 反编译成 .cs 再扫 | ✅ 实测 |
-| **.exe（.NET 单文件发行版）** | sfextract 解包 → 反编译 → 扫 | ✅ 实测 |
+| **.dll / .exe（.NET 程序集）** | 启动器**内置的反编译器**（ILSpy 的库；直接跑引擎才回退到 `ilspycmd`）→ .cs → 扫 | ✅ 实测 |
+| **.exe（.NET 单文件发行版）** | 内置 SingleFileExtractor 解包 → 反编译 → 扫 | ✅ 实测 |
 | **目录（只有发行产物）** | 按目录名找程序集；也可 `--dll "App*.dll"` 指定 | ✅ |
-| **.jar（Java）** | 需 Java 运行时 + cfr/vineflower（`--decompiler` 指定） | ⚠️ 已实现未实测 |
+| **.jar（Java）** | 完全版 `vendor/` 里**自带裁剪版 Java 运行时 + cfr**，不需要装任何东西 → .java → 扫（精简版仍需机器上有 Java） | ✅ 实测（2.1 MB 的 jar → 732 文件 / 1,015 类型 / 9,751 条边） |
+| **其它** | 原生可执行文件（C/C++/Go/Rust 编出来的 exe/dll、`.so`/`.dylib`）、压缩包（`.zip`/`.nupkg`/`.apk`）→ 明确拒绝，并告诉你它支持哪三类 | ❌ |
 
 文字说明：启动器里拖文件夹进来，或者把 `.dll / .exe / .jar` 拖进来都行，**不用告诉它这是哪种**。
 
