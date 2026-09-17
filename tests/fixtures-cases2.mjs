@@ -209,7 +209,7 @@ export const EXTRA_CASES = [
     extends: ['Circle -> Shape'],
     importsMin: 2,     // require 'json' + include Walkable
     docs: 2,           // 类上一条注释 + initialize 上一条
-    membersMin: 6,     // 实际 8（Shape 4 / Circle 2 / sample 2），留点余量
+    membersMin: 10,    // Shape 4 / Circle 4（含 attr_accessor 的两个）/ sample 2；写死数字，少一个就报错
     errorsMax: 0,
   },
 ];

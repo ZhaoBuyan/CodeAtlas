@@ -434,6 +434,18 @@ function extractFile(source, tree, lang) {
       return;
     }
 
+    // 一个节点可能产出多个成员：Ruby 的 `attr_accessor :a, :b` 就是一句 call 带两个符号。
+    // membersOf 钩子优先；返回空就继续往下走静态表。
+    if (lang.membersOf) {
+      const many = lang.membersOf(node);
+      if (many && many.length) {
+        const mdoc = docFor(comments, node.startPosition.row, lines) || (lang.docstring ? docstringOf(node) : null);
+        for (const m of many) bumpMember(m.kind, m.name, node.startPosition.row + 1, mdoc);
+        for (const c of node.namedChildren) walk(c);
+        return;
+      }
+    }
+
     const memberKind = lang.memberKindOf ? lang.memberKindOf(node) : lang.members[type];
     if (memberKind) {
       const name = nameOf(node, lang);

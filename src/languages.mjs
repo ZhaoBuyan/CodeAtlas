@@ -16,6 +16,11 @@
  *   decisions   复杂度估算要数的分支节点
  *   decisionOps 只有这些运算符的 binary_expression 才算分支
  *
+ * 可选钩子（节点名表达不了的写法才用得上）：nameOf / kindOf / typeKindFn / memberKindOf /
+ *   membersOf（一个节点→多个成员，如 Ruby 的 attr_accessor :a, :b）/ importKindOf / importTextOf /
+ *   isDecision / skipNameNodes / docstring。注意：memberKindOf 一旦存在就**完全接管**成员判定，
+ *   不再回退静态表（踩过这个坑）——需要两者兼得就用 membersOf 自己兜底。
+ *
  * status: 'ok' 已实测过 / 'wip' 配置写好但未验证
  * 注意：每种语言的语法节点名要以实际语法为准（tests/fixtures 会跑回归）。
  */
@@ -146,15 +151,23 @@ const TS_SHAPE = {
 //   class / module / method / singleton_method / superclass / call / if / unless / case / while / until / for
 // Ruby 的“钩子”只需要两处：属性（attr_* 是一句 call）和导入（require / include 也都是 call）。
 
-/** attr_reader :a, :b → 两个成员（属性）；其余交给静态表（注意：这个钩子一旦存在就会完全接管 memberKindOf 判定，得自己兜底） */
-const rubyMemberKind = (node) => {
+/**
+ * 一个节点 → 多个成员。为什么需要它：`attr_accessor :a, :b` 在语法树里**一句 call 带两个符号**，
+ * 而成员路径上是“一个节点一个成员”，不特殊处理就会只记到第一个（2026-09-17 复查时实测到：b 丢了）。
+ * （Ruby 里 attr_accessor 一次声明好几个属性是很常见的写法。）
+ */
+const rubyMembersOf = (node) => {
   if (node.type === 'call') {
     const m = node.childForFieldName('method');
     if (!m || !/^attr_(reader|writer|accessor)$/.test(m.text)) return null;
     const args = node.childForFieldName('arguments');
-    return args && args.namedChildren.some((a) => a.type === 'simple_symbol') ? 'property' : null;
+    const names = (args ? args.namedChildren : [])
+      .filter((a) => a.type === 'simple_symbol')
+      .map((a) => a.text.replace(/^:/, ''));
+    return names.length ? names.map((n) => ({ kind: 'property', name: n })) : null;
   }
-  return { method: 'method', singleton_method: 'method' }[node.type] || null;
+  const kind = { method: 'method', singleton_method: 'method' }[node.type];
+  return kind ? [{ kind, name: rubyName(node) }] : null;
 };
 
 /** 属性名在参数里（不是 name 字段），所以得单独取：attr_accessor :size → size */
@@ -778,7 +791,7 @@ export const LANGUAGES = {
     imports: {},
     baseFields: ['superclass'],
     baseNodes: [],
-    memberKindOf: rubyMemberKind,
+    membersOf: rubyMembersOf,
     nameOf: rubyName,
     importKindOf: rubyImportKind,
     importTextOf: rubyImportText,

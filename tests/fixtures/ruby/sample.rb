@@ -27,6 +27,9 @@ end
 class Circle < Shape
   include Walkable
 
+  # 一次声明多个属性：必须两个都进成员表（曾经只记到第一个）
+  attr_accessor :radius, :color
+
   def initialize(radius)
     super('circle')
     @radius = radius
