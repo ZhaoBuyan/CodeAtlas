@@ -1,183 +1,225 @@
 # Code Atlas
 
-把**任意源码目录**扫成一份可读的中间数据（`bundle.json`），然后用浏览器翻图。
-目标：一份数据同时服务两种消费者 —— 人（探索、建立心智模型）和 AI（查询、省 token）。
+Turn **any source-code directory** into readable intermediate data (`bundle.json`), then browse it as a map in your browser.
+Goal: one dataset serving two consumers — humans (explore, build a mental model) and AI (query it, save tokens).
 
-形态：**CLI + 本地网页**（零上传，代码不出本机）。
+Shape: **CLI + local web page** (nothing is uploaded; your code never leaves the machine).
 
-## 它和同名的那些"代码 Atlas"有什么不一样
+> 中文版见 [README_CN.md](README_CN.md)（Chinese version）
 
-GitHub 上叫 Code Atlas 的项目不止一个（最像的三个：Visual Studio 插件的 `league1991/CodeAtlasVsix`、
-依赖图可视化的 `lucyb0207/CodeAtlas`、带 MCP 的 `giauphan/codeatlas-platform`）。这个项目想做的组合是：
+## How it differs from the other projects named "Code Atlas"
 
-- **本地优先**：不注册、不上传、不调云服务；断网照用，代码不出机器；
-- **免安装**：一个单文件 exe（完全版自带 Node 运行时），双击就用，不用装 Node、不用配环境；
-- **一份数据两个消费者**：同一份 `bundle.json`，**人**用浏览器翻图（树形图 / 树状列表 / 依赖图 / 依赖矩阵），
-  **AI** 用 MCP 查（8 个工具，含 token 预算导出与影响面分析）——不用为了给 AI 用再跑一遍解析；
-- **诚实优先**：不确定的地方一律标注（依赖边是静态名字匹配、未匹配/歧义引用各有计数、反编译产物注明"无源码注释"），
-  宁可显示"不知道"，也不假装权威。
+There is more than one project called Code Atlas on GitHub (the three closest: the Visual Studio extension
+`league1991/CodeAtlasVsix`, the dependency-graph visualizer `lucyb0207/CodeAtlas`, and the MCP-enabled
+`giauphan/codeatlas-platform`). The combination this project aims for:
 
-## 灵感来源
+- **Local-first**: no sign-up, no upload, no cloud calls; works offline, your code stays on your machine;
+- **Install-free**: one single-file exe (the full edition bundles a Node runtime) — double-click and go,
+  no Node install, no environment setup;
+- **One dataset, two consumers**: the same `bundle.json` — **humans** browse it in the browser
+  (tree map / tree list / dependency graph / dependency matrix), **AI** queries it over MCP
+  (8 tools, including token-budgeted export and impact analysis). You never re-parse just to feed an AI;
+- **Honesty first**: whatever is uncertain is labelled (dependency edges are static name matching;
+  unmatched and ambiguous references are counted; decompiled output is marked as having no source comments).
+  It would rather show "I don't know" than pretend to be authoritative.
+
+## Inspiration
 
 [kolulu23/Zedema](https://github.com/kolulu23/Zedema)
 
-## 快速开始
+## Quick start
 
-**方式一：启动器（日常用这个）**
+**Option 1: the launcher (what you use day to day)**
 
-双击仓库根目录的 `CodeAtlas.exe` → 把文件夹或文件拖进输入框（或点「文件夹…」「文件…」）→ 点「扫描」。
+Double-click `CodeAtlas.exe` in the repo root → drop a folder or file onto the input box
+(or click "Folder…" / "File…") → click **Scan**.
 
-- **地图直接嵌在窗口里**（WebView2，Edge 内核）：和浏览器里看的是同一套页面、同一份观感；
-- 扫描过程的日志就在地图下方（点「看日志」/「看地图」切换）；
-- 「在浏览器打开」按钮留给想开第二个窗口对照的时候；
-- 关窗口 = 停服务。
+- **The map is embedded in the window** (WebView2, Edge engine): same pages, same look as in a browser;
+- Scan logs sit right below the map (toggle between "Show log" / "Show map");
+- The "Open in browser" button is there for when you want a second window side by side;
+- Closing the window stops the server.
 
-启动器需要机器上有 **WebView2 运行时**（Win11 自带；Win10 装了新版 Edge 也有）。没有的话不会报错，会自动用系统浏览器打开页面。
+The launcher needs the **WebView2 runtime** (built into Win11; present on Win10 with a recent Edge).
+If it is missing you get no error — the page opens in your system browser instead.
 
 ```bash
-CodeAtlas.exe                                # 图形界面
-CodeAtlas.exe --auto "C:/path/to/repo"       # 开窗后直接跑（可做成快捷方式）
-CodeAtlas.exe --headless --path <目标> --out dist-test --log launcher-test.log   # 无界面自检
+CodeAtlas.exe                                # GUI
+CodeAtlas.exe --auto "C:/path/to/repo"       # open the window and scan immediately (handy for a shortcut)
+CodeAtlas.exe --headless --path <target> --out dist-test --log launcher-test.log   # headless self-check
 ```
 
-**方式二：命令行（零配置）**
+**Option 2: command line (zero configuration)**
 
 ```bash
 npm install
 
-# 把路径丢进来就行：源码目录 / 程序集 / jar 都认；完事自动开浏览器
+# Just hand it a path: source dir / assembly / jar all work; the browser opens when it's done
 node src/cli.mjs "C:/path/to/your/repo"
 node src/cli.mjs "C:/path/to/App.dll"
 ```
 
-**方式三：细分命令**
+**Option 3: the individual commands**
 
 ```bash
-node src/cli.mjs scan   <目录...> [--out dist] [--lang auto] [--maxkb 1024] [--exclude a,b] [--facets 规则.json] [--open]
-node src/cli.mjs ingest <目录|.dll|.exe|.jar> [--out dist] [--work ingest/<名>] [--dll "App*.dll"] [--decompiler cfr.jar] [--open]
-node src/cli.mjs serve  [--out dist] [--port 5173] [--host 0.0.0.0]   # 默认只绑 127.0.0.1
-node src/cli.mjs langs                      # 看支持哪些语言（--json 给程序读）
-node src/cli.mjs draft-facets <目录> [--out 规则.json]   # 按目录结构草拟一份系统分组规则
-node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服务
+node src/cli.mjs scan   <dir...> [--out dist] [--lang auto] [--maxkb 1024] [--exclude a,b] [--facets rules.json] [--open]
+node src/cli.mjs ingest <dir|.dll|.exe|.jar> [--out dist] [--work ingest/<name>] [--dll "App*.dll"] [--decompiler cfr.jar] [--open]
+node src/cli.mjs serve  [--out dist] [--port 5173] [--host 0.0.0.0]   # binds 127.0.0.1 by default
+node src/cli.mjs langs                      # list supported languages (--json for machines)
+node src/cli.mjs draft-facets <dir> [--out rules.json]   # draft a system-grouping rule file from the directory layout
+node src/cli.mjs mcp    [--out dist] [--print-config]    # MCP server for AI clients
 ```
 
-- `--no-open` 不自动开浏览器；`--port` 端口被占用会自动往后找
-- `--lang` 只扫指定语言：`--lang csharp` / `--lang typescript,lua`
-- `--exclude` 追加要跳过的目录名（默认已跳过 node_modules / bin / obj / dist / build / target / vendor / .git 等）
-- `--maxkb` 单文件大小上限
+- `--no-open` does not open the browser; if `--port` is taken, the next free port is used
+- `--lang` scans only the given languages: `--lang csharp` / `--lang typescript,lua`
+- `--exclude` adds directory names to skip (node_modules / bin / obj / dist / build / target / vendor / .git … are already skipped)
+- `--maxkb` per-file size limit
 
-## 启动器（`CodeAtlas.exe`）
+## The launcher (`CodeAtlas.exe`)
 
-- 是个 .NET 9 WinForms 小外壳：只负责找到引擎（`node` + `src/cli.mjs`）、把路径递过去、把日志和网址给你。
-- **首次配置一个项目（项目设置向导）**：工具栏「项目设置…」→ 三步走完就行：
-  ① 选目标（目录 / `.dll` / `.exe` / `.jar`） ② 选语言 ③ **按目录结构自动草拟一套「系统分组规则」**（可取消勾选、改名、换色）→ 保存并扫描。
-  规则默认写到 `%LocalAppData%\CodeAtlas\configs\<项目名>.facets.json`（**私有**，不进你的项目）；勾上「写进项目目录」就写 `<项目>/atlas.facets.json`（跟项目走、能共享）。
-  配过的项目会记住（语言 + 规则），**下次打开不再弹向导、也不用重配**（再打开 = 零操作）。
-  CLI 等价物：`node src/cli.mjs draft-facets <目录> [--out 文件]`——只看目录结构、不解析代码，秒出。
-- **不会再弹防火墙**：本地服务只绑 `127.0.0.1`（回环流量不走 Windows 防火墙），所以"是否允许 Node.js 通信"那个系统弹窗不会出现。
-  想让局域网 / 手机也能看：`atlas serve --host 0.0.0.0`（那种情况下 Windows 正常问你一次，允许即可）。
-- **两个顺手的开关**：工具栏「**增量**」勾选框（默认关＝每次全量；勾上只重新解析改过的文件）、
-  「**MCP 配置**」按钮（一键把"让 AI 读这个项目"的配置复制到剪贴板——粘进客户端即可，见 [使用说明.md](使用说明.md) 第五节）。
-  语言表由引擎提供（`node src/cli.mjs langs`），启动器不自己维护一份——加语言只要改 `languages.mjs`。
-  选的语言写进 `launcher.config.json` 的 `Langs`（逗号分隔；空 = 自动）。注意这是**全局设置**，不跟项目走。
-- 需要装了 **Node.js**（引擎是 Node 写的）；不需要 .NET SDK（但需要 .NET 9 运行时，.NET 9 SDK 自带）。
-- 配置在 `launcher.config.json`（node 路径 / 端口 / 输出目录 / 上次的路径），首次运行自动生成——node 不在 PATH 里就改这个文件。
-- 重新构建：`dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -o .`
-- 自检（无界面跑一遍引擎，看接线对不对）：`CodeAtlas.exe --headless --path <目标> --out dist-test --log launcher-test.log`
-  （加 `--extract` 可以只验证内置引擎的释放；加 `--list-langs` 只验证语言表接线）
+- A small .NET 9 WinForms shell: it finds the engine (`node` + `src/cli.mjs`), hands over the path,
+  and shows you the log and the URL.
+- **Configuring a project for the first time (project wizard)**: toolbar → "Project setup…", three steps:
+  ① pick the target (dir / `.dll` / `.exe` / `.jar`) ② pick languages ③ **auto-draft a set of
+  "system grouping rules" from the directory layout** (uncheck, rename, recolor as you like) → save and scan.
+  Rules go to `%LocalAppData%\CodeAtlas\configs\<project>.facets.json` (**private**, never written into your
+  project) unless you tick "write into the project directory", which writes `<project>/atlas.facets.json`
+  (travels with the project, shareable).
+  A configured project is remembered (languages + rules): **the next time you open it there is no wizard and
+  nothing to re-configure**.
+  CLI equivalent: `node src/cli.mjs draft-facets <dir> [--out file]` — reads the directory layout only,
+  no parsing, instant.
+- **No more firewall prompts**: the local server binds `127.0.0.1` only (loopback traffic bypasses the Windows
+  firewall), so the "allow Node.js to communicate" dialog never appears.
+  To view it from your LAN / phone: `atlas serve --host 0.0.0.0` (Windows will ask once; allow it).
+- **Two convenient switches**: the toolbar "**Incremental**" checkbox (off by default = full scan every time;
+  on = only re-parse changed files) and the "**MCP config**" button (copies the "let an AI read this project"
+  configuration to your clipboard — paste it into your client, see
+  [使用说明.md](使用说明.md) section 5).
+  The language list comes from the engine (`node src/cli.mjs langs`); the launcher does not keep its own copy —
+  adding a language only touches `languages.mjs`.
+  Selected languages are stored in `launcher.config.json` under `Langs` (comma separated; empty = auto).
+  Note this is a **global** setting, not per project.
+- Requires **Node.js** (the engine is written in Node); no .NET SDK needed (but the .NET 9 runtime is,
+  which the .NET 9 SDK includes).
+- Configuration lives in `launcher.config.json` (node path / port / output dir / last path), created on first
+  run — edit it if `node` is not on your PATH.
+- Rebuilding: `dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -o .`
+- Self-check (runs the engine headlessly to verify the wiring):
+  `CodeAtlas.exe --headless --path <target> --out dist-test --log launcher-test.log`
+  (add `--extract` to only verify extraction of the bundled engine; add `--list-langs` to only verify the
+  language-table wiring)
 
-## 打包发行（两个版本）
+## Packaging and releases (two editions)
 
-没有安装器，就是一个 exe，想放哪放哪。
+No installer — just an exe you can put anywhere.
 
-| 版本 | 构建产物 | 体积 | 机器上要先有什么 |
+| Edition | Build output | Size | What the machine needs first |
 | --- | --- | --- | --- |
-| **完全版** | `publish-sc/CodeAtlas.exe` | 82.8 MB | 什么都不用装（内置 Node 24 + 引擎） |
-| **精简版** | `publish-lite/CodeAtlas-lite.exe` | 5.1 MB | .NET 9 桌面运行时 + Node.js |
+| **Full** | `publish-sc/CodeAtlas.exe` | 104.1 MB | nothing (bundles Node 24, the engine, and a trimmed Java runtime) |
+| **Lite** | `publish-lite/CodeAtlas-lite.exe` | 9.9 MB | .NET 9 desktop runtime + Node.js |
 
 ```bash
-npm run publish        # 两个版本都出（= publish:sc + publish:lite）
-npm run publish:sc     # 只出完全版
-npm run publish:lite   # 只出精简版
+npm run publish        # both editions (= publish:sc + publish:lite)
+npm run publish:sc     # full only
+npm run publish:lite   # lite only
 ```
 
-原理一句话：引擎（`src` / `web` / `configs` / 29 个语法包 wasm / d3）先由 `tools/build-payload.mjs`
-打成 zip，构建时作为 `<EmbeddedResource>` 整个嵌进 exe；**首次运行**解到
-`%LocalAppData%\CodeAtlas\engine\<版本-包大小>\`，之后直接用，不再重复解。
-完全版比精简版多出来的就是包里的 `node.exe`（88 MB）。
+One line on how it works: the engine (`src` / `web` / `configs` / 28 grammar wasm files / d3) is zipped by
+`tools/build-payload.mjs` and embedded into the exe as an `<EmbeddedResource>`; on **first run** it is
+extracted to `%LocalAppData%\CodeAtlas\engine\<version-payloadfingerprint>\` and reused from there.
+What the full edition has beyond the lite one: `node.exe` in the payload (88 MB) plus the trimmed Java
+runtime (about 30 MB).
 
-- 解包目录：完全版约 120 MB / 精简版约 32 MB（删掉它会自动重新释放）；
-  超过 7 天没动过的旧解包目录会在下次启动时顺手清掉，免得换个版本就多留 120 MB。
-- `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
-- **更新方式：换 exe**。新 exe 的版本/包大小不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 26 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去；SystemRDL 待补）。
-- 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
-- 反编译工具（`ilspycmd` / `sfextract` / `cfr.jar`）**不打进包**，用到时按提示装。
-- 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
-- **发版流程**：打 tag 推上去就行 —— `git tag v1.0.0 && git push --tags`。CI 会先跑测试，
-  然后打两个 exe 并挂到 GitHub Release 当下载资产（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+- Extracted size: about 161 MB (full) / 43 MB (lite); delete it and it is re-extracted automatically.
+  Caches untouched for more than 7 days are cleaned up on the next start, so switching versions does not
+  leave ~160 MB behind per version.
+- `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
+  goes in there).
+- **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
+- The payload ships wasm only for the **26 code languages + 5 file-level formats** we support
+  (SystemRDL pending).
+- Third-party components and licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+  (a copy also ships in the extracted engine directory).
+- **Decompilation is install-free in the full edition**: `.dll` / `.exe` are decompiled by a decompiler
+  linked into the launcher (ILSpy engine), `.jar` by the bundled trimmed Java runtime + cfr.jar —
+  no ilspycmd / sfextract / Java to install. The lite edition carries no Java runtime (it already requires
+  .NET 9 + Node), so scanning `.jar` there still needs a Java runtime.
+- Development mode is unaffected: when `src/cli.mjs` sits next to the exe (e.g. the exe was copied into the
+  repo), the repo engine is used instead of the bundled one.
+- **Release flow**: tag and push — `git tag v1.0.0 && git push --tags`. CI runs the tests, builds both exes
+  and attaches them to a GitHub Release (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
-## 没有源码也能扫（ingest）
+## Scanning without source (ingest)
 
 ```bash
-# .NET 程序集 -> ILSpy 反编译 -> 扫描
+# .NET assembly -> ILSpy decompile -> scan
 node src/cli.mjs ingest "bin/Release/net9.0-windows10.0.19041.0/win-x64/App.dll" --out dist-app --open
 
-# 目录：里面有源码就直接扫；只有发行产物就按目录名找程序集
+# A directory: source is scanned directly; if it only holds build output, assemblies are picked by directory name
 node src/cli.mjs ingest "C:/path/to/published-app" --out dist-app --dll "MyApp*.dll"
 
-# Java jar（需要 java + cfr/vineflower）
+# Java jar (needs a Java runtime + cfr/vineflower)
 node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
 ```
 
-已知限制：
+Known limits:
 
-- **原生可执行文件（C/C++ 编译）反编译不了**：它们没有 CLR 头，不是 .NET 程序集，里面也没有类型名 / 命名空间 / 方法签名，只有机器码；要出这种图得先反汇编成近似 C 再解释（IDA / Ghidra 那个量级的活），不在本工具的能力范围内。
-  指到这类文件时会直接说明「这不是 .NET 程序集」，并列出能扫的三类。
-  **例外：Unity 游戏**——`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指那个目录或那个 dll 就能扫。
-- **反编译不用装东西（完全版）**：扫 `.dll` / `.exe` 用启动器**内置**的反编译器（ILSpy 引擎链接进 exe）；
-  扫 `.jar` 用**自带的裁剪版 Java 运行时 + cfr**——都不需要你先去装 ilspycmd / sfextract / Java。
-  精简版不带 Java 运行时（它本来就要求机器上有 .NET 9 + Node），所以扫 `.jar` 仍需自己装 Java；
-  直接跑引擎（`node src/cli.mjs`）也仍是开发模式：扫 `.dll` / `.jar` 需要自己装工具。
-- 反编译产物没有源码注释，所以“说明”是空的；行数含语法糖展开（实测比源码高 ~6%），界面上会明确标出来。
-- **编译器生成物自动识别**：形如 `<PrivateImplementationDetails>`、`_003C...`（ILSpy 转义）、`__InlineArray`、`__DisplayClass` 的类型会自动打上 `compiler-generated` 标签，反编译产物默认在界面里隐藏（可取消勾选看）。
+- **Native executables (C/C++ builds) cannot be decompiled**: no CLR header, not a .NET assembly, and no type
+  names / namespaces / method signatures inside — only machine code. Producing a map from that would require
+  disassembling into approximate C first (the IDA / Ghidra class of work), which is out of scope.
+  Pointing at such a file says "this is not a .NET assembly" and lists the three kinds that do work.
+  **Exception: Unity games** — `<game>_Data\Managed\*.dll` *is* a .NET assembly; point at that directory or
+  dll and it scans fine.
+- **Decompiling needs no installs in the full edition**: `.dll` / `.exe` go through the decompiler **built into
+  the launcher** (the ILSpy engine linked into the exe); `.jar` uses the **bundled trimmed Java runtime + cfr**.
+  Running the engine directly (`node src/cli.mjs`) stays in development mode, where `.dll` / `.jar` need
+  ilspycmd / java installed.
+- Decompiled output has no source comments, so "description" is empty; line counts include expanded
+  syntactic sugar (measured ~6% above source), and the UI says so.
+- **Compiler-generated types are detected**: names like `<PrivateImplementationDetails>`, `_003C…`
+  (ILSpy escaping), `__InlineArray`, `__DisplayClass` are tagged `compiler-generated` and hidden in the UI by
+  default (there is a checkbox to show them).
 
-## C# 语法（不再需要预处理了）
+## C# parsing (no preprocessing needed any more)
 
-以前内置的 tree-sitter-c_sharp 是 2023 年版，不认 C# 11/12 的部分新语法，会把整段标成 ERROR，
-所以 `src/preprocess.mjs` 会在解析前做等值改写（行号/行数不变，不碰字符串与注释）。
+The bundled tree-sitter-c_sharp used to be a 2023 build that did not understand parts of C# 11/12 syntax and
+marked whole regions as ERROR, so `src/preprocess.mjs` rewrote them into equivalent forms before parsing
+(keeping line numbers and line counts identical, never touching strings or comments).
 
-**2026-09-17 升级语法包后这套改写已停用**：新的 C# 语法自己就认得那些写法，实测 12 项（原始字符串、
-主构造函数、`file` 修饰符、`void*`、集合表达式、`required` 成员、`scoped ref`、静态抽象成员、
-lambda 默认参数、raw 插值字符串、变量名叫 `required`…）**全是 0 个 ERROR**；而旧的改写还会把名叫
-`required` 的变量改成 `required_`，反而把名字弄错。`src/preprocess.mjs` 作为通用机制留在仓库里
-（哪门语言的语法包又落后于语言版本时，在 profile 里加一行 `preprocess: 'xxx'` 就能重新挂上），目前没有语言用它。
+**That rewriting has been disabled since the 2026-09-17 grammar upgrade**: the new C# grammar understands
+those constructs itself — 12 cases measured (raw strings, primary constructors, the `file` modifier, `void*`,
+collection expressions, `required` members, `scoped ref`, static abstract members, lambda default parameters,
+raw interpolated strings, a local variable named `required`, …) all parse with **zero ERROR nodes**. The old
+rewrite even renamed a variable called `required` to `required_`, i.e. it got names wrong.
+`src/preprocess.mjs` stays in the repo as a generic mechanism (if some language's grammar falls behind its
+language version again, add `preprocess: 'xxx'` to that profile) — right now no language uses it.
 
-## 给 AI 用：MCP 查询层
+## For AI: the MCP query layer
 
-> **接入步骤（哪个按钮、各客户端粘在哪、8 个工具分别什么时候用、排错）见 [使用说明.md](使用说明.md) 第五节。**
-> 懒人版：启动器里扫一次 → 点工具栏「MCP 配置」→ 粘进 AI 客户端即可。
+> **Setup steps (which button, where each client pastes the config, when to use each of the 8 tools,
+> troubleshooting) are in [使用说明.md](使用说明.md) section 5.**
+> Lazy path: scan once in the launcher → click "MCP config" → paste into your AI client.
 
-扫完之后，AI 不需要把源码/bundle 塞进上下文，而是**按需问一小块**：
+After a scan, the AI does not need the source or the bundle in its context — it asks for small slices on demand:
 
 ```bash
-node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
+node src/cli.mjs mcp --out dist        # stdio JSON-RPC for MCP clients
 ```
 
-提供的工具：
+Tools provided:
 
-| 工具 | 干什么 |
+| Tool | What it does |
 | --- | --- |
-| `overview()` | 项目概览：规模、系统划分、被依赖最多的符号、最大的文件 |
-| `search(query, scope?, kind?)` | 按名字找符号：**默认连成员名一起搜**（搜 `OnPaint` 能找到“谁定义了这个方法”）；`scope=type\|member` 只看一边。返回 id 供后续工具用 |
-| `symbol(name)` | 一个类型的全部细节：说明、文件:行、成员清单、基类、依赖数、所属系统 |
-| `refs(name, in/out)` | 谁引用它 / 它引用谁（改代码前的影响面） |
-| `subgraph(name, depth)` | 依赖子图（“改这里会牵连什么”） |
-| `file(path)` | 一个文件的类型、导入、行数（**有解析异常时标注**） |
-| `map(budget)` | 按 token 预算导出**骨架**（系统 → 关键类型 → 关键成员）——让 AI 先拿到全局，省 token |
-| `impact(name, depth)` | **影响面分析**：沿“谁引用它”多跳展开，并说明哪些看不见（动态调用/反射） |
+| `overview()` | Project overview: size, system breakdown, most-depended-on symbols, largest files |
+| `search(query, scope?, kind?)` | Find symbols by name; **member names are included by default** (searching `OnPaint` finds "who defines this method"); `scope=type\|member` narrows it. Returns ids for the other tools |
+| `symbol(name)` | Everything about one type: description, file:line, member list, base types, dependency counts, its system |
+| `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code) |
+| `subgraph(name, depth)` | Dependency subgraph ("what does changing this drag along") |
+| `file(path)` | A file's types, imports, line counts (**parse errors are called out when present**) |
+| `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply |
+| `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus an explicit list of what is invisible (dynamic calls / reflection) |
 
-接入客户端（以 Chatbox / Claude Desktop 这类配置为例，路径用绝对路径）：
+Client configuration (Chatbox / Claude Desktop style, use absolute paths):
 
 ```json
 {
@@ -190,229 +232,295 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 }
 ```
 
-两个细节：
+Three details:
 
-- 输出是**紧凑文本**而不是 JSON —— 同样的问题 token 更少，AI 也更好读；
-- bundle 是快照，会过时。MCP 每次调用前会查 mtime，**重新扫描过就自动换新的**，不会拿隔夜数据回答；
-- **接上就知道边界**：`initialize` 会带一段 `instructions`（这份数据怎么用、哪里不可信）；
-  `overview` 的第一屏还直接给出**扫描根目录**（AI 自己拼绝对路径去读源文件用）、**数据快照**（生成时间 / 语言范围 / 单文件上限 / 是否增量）
-  和**可信度前提**（依赖边是名字匹配，并报未匹配与同名歧义的数量）。
+- Output is **compact text, not JSON** — fewer tokens for the same question, and easier for a model to read;
+- The bundle is a snapshot and can go stale. Before every call the server checks mtime and **switches to a
+  freshly scanned bundle automatically**; it will not answer from yesterday's data;
+- **The AI learns the boundaries on connect**: `initialize` carries an `instructions` field (how to use this
+  data, and where it is not trustworthy), and the first screen of `overview` gives the **scan root**
+  (so the AI can build absolute paths and read source itself), a **data snapshot** (generation time /
+  language scope / per-file limit / incremental or not) and the **confidence caveat** (dependency edges are
+  name matching, with unmatched and ambiguous counts).
 
-自检：`node tests/mcp-selftest.mjs [dist]`（用真实 stdio 协议把每个工具跑一遍）。
+Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the real stdio protocol).
 
-## 调试工具
+## Debugging tools
 
 ```bash
-npm test                                          # 语言 fixtures 回归（26 门，各自独立进程）
-npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
-node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
-node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
-node tests/probe-grammars.mjs [--release] [--gc]   # 语法包内存探针（多语法包崩在哪儿，逐行落盘）
-node src/cli.mjs langs [--json]                    # 看支持哪些语言（--json 给程序读）
+npm test                                          # language fixtures regression (26 languages, one process each)
+npm run probe                                     # print the node names tree-sitter actually produces per language
+node tests/probe-file.mjs <file> [--lang csharp]   # single-file probe: where the ERRORs are, which declarations are recognized
+node tests/probe-abi.mjs                           # grammar smoke test (load + parse every wasm from both sources)
+node tests/probe-grammars.mjs [--release] [--gc]   # grammar memory probe (where loading many grammars breaks, line by line)
+node src/cli.mjs langs [--json]                    # list supported languages (--json for machines)
 ```
 
-## 界面能干什么
+## What the UI can do
 
-- **分组方式**（左侧）：系统 / 模块（按规则）· 目录 · 命名空间 · **文件** · 平铺。
-- **分组层级**：1/2/3/4 层或全部 —— 层级越深，分组越细，色块和分组数跟着变多（目录/命名空间分组专用）。
-- **着色**：**按文件**（默认，颜色多、同文件的类型同色）· 按分组（系统分组时用规则里配的颜色）· 按类型类别。颜色由色相 hash 生成，不限于 10 色，同一项每次打开都是同一颜色。
-- **视图**：树形图（面积）· 树状列表（可折叠、带比例条）· **依赖图（力导向）** · **依赖矩阵（模块间）**
-  - **依赖图**：点和线看“谁和谁连在一起”；点大小=代码量、颜色跟着色方式；拖动调位、滚轮缩放、悬停高亮邻居；节点超过 120 个时自动隐藏无依赖的、超过 400 个只画连接最多的（顶部会写明）
-  - **依赖矩阵**：行/列=当前分组（目录/系统…），格子颜色深浅=两个组之间的依赖条数，对角线=组内耦合；抬头直接告诉你“耦合最紧的是 A → B（N 条）”
-- **面积代表**：代码行 / 总行数 / 复杂度 / 成员数 / fanIn。
-- **着色**：按分组（系统配色来自规则文件）或按类型类别。
-- **下钻**：点分组名、边框或左侧图例 → 只看这一组；面包屑返回。
-- **说明**：从源码注释（C# 的 `/// summary`、Java/TS 的块注释）抽出来的说明，**类型级和成员级都抽**，显示在检查器和悬停提示里；注释与声明之间必须只有空行（否则会被判成上一个声明的注释）；没有注释会明说"源码里没有注释说明"，不编。
-- **依赖高亮**：悬停或选中一个类型，会立刻把它引用了谁、被谁引用提亮，并用连线指出来（引用边蓝线、继承边橙线，线粗=次数），其余色块压暗。
-- **依赖聚焦**（勾选框）：只看选中类型 + 它的关联项，关系网本身变大变清楚（左上角会提示还在显示多少个）。
-- **抬头一行**写着当前图表的编码含义（分组方式/层级/面积代表什么/怎么着色），选中时还显示该类型的引用计数；边指向当前分组之外时也会提示。
-- **检查器**：类型详情 + 说明 + 文件:行（可复制）+ 成员 + 被谁引用 / 引用了谁（可点击跳转，会自动回到能看到它的分组）。
-- **筛选**：类型类别勾选 · **语言勾选**（本次扫到的语言，只列实际存在的；只有一种语言时这个面板不出现）· 最小代码行滑块（滤掉小碎片）。
-- **搜索（类型 + 成员）**：输入框连**成员名**一起搜（例：搜 `OnPaint` 能找到“谁定义了这个方法”，连 `OnPaintBackground` 这种带前缀的也命中）；命中成员时结果里会写清“命中成员 X（method）· 文件:行”和“命中类型名”的区别。搜索内容本身也在 permalink 里（`q=`）。
-- **permalink**：视图状态在地址栏（`#by=&v=&g=&t=&m=&c=&q=&l=`，`v=graph`/`v=matrix` 可直接分享依赖图/矩阵，`q=`/`l=` 分享搜到的词和语言筛选），可分享、可复现。
+- **Grouping** (left panel): system / module (by rules) · directory · namespace · **file** · flat.
+- **Group depth**: 1/2/3/4 levels or all — deeper means finer groups and more color blocks (for directory /
+  namespace grouping).
+- **Coloring**: **by file** (default: many colors, types from the same file share one) · by group (system
+  grouping uses the colors configured in the rules) · by type kind. Colors come from a hue hash, so it is not
+  limited to 10 colors and an item keeps the same color every time you open it.
+- **Views**: tree map (areas) · tree list (collapsible, with proportion bars) · **dependency graph
+  (force-directed)** · **dependency matrix (between modules)**
+  - **Dependency graph**: dots and lines show what is connected to what; dot size = code volume, color follows
+    the coloring mode; drag to reposition, wheel to zoom, hover to highlight neighbors; above 120 nodes it
+    hides isolated ones, above 400 it draws only the most connected (the header says so)
+  - **Dependency matrix**: rows/columns are the current grouping (directory / system …), cell darkness = number
+    of edges between the two groups, the diagonal = internal coupling; the header tells you
+    "the tightest coupling is A → B (N edges)"
+- **Area metric**: code lines / total lines / complexity / member count / fanIn.
+- **Drill-down**: click a group name, its border, or the legend on the left to see only that group; the
+  breadcrumb takes you back.
+- **Descriptions**: extracted from source comments (C# `/// summary`, Java/TS block comments) at both type and
+  member level, shown in the inspector and tooltips; only blank lines may sit between a comment and its
+  declaration (otherwise the comment belongs to the previous declaration); when there is no comment it says
+  "no comment in the source" rather than inventing one.
+- **Dependency highlight**: hovering or selecting a type immediately lights up what it references and what
+  references it, with connecting lines (blue for references, orange for inheritance, thickness = count) and
+  dims everything else.
+- **Dependency focus** (checkbox): show only the selected type plus its relatives, with the relationship web
+  drawn larger and clearer (the top-left corner tells you how many items are still shown).
+- **A header line** states what the current chart encodes (grouping / depth / what area means / how it is
+  colored); with a selection it also shows that type's reference counts, and warns when edges point outside
+  the current grouping.
+- **Inspector**: type details + description + file:line (copyable) + members + who references it / what it
+  references (clickable, jumping back to a grouping where the target is visible).
+- **Filters**: type-kind checkboxes · **language checkboxes** (only languages actually present in this scan;
+  the panel is absent when there is just one) · a minimum code-lines slider to hide small fragments.
+- **Search (types + members)**: the input searches **member names too** (searching `OnPaint` finds "who defines
+  this method", including prefixed ones like `OnPaintBackground`); results distinguish
+  "matched member X (method) · file:line" from "matched type name". The query is part of the permalink (`q=`).
+- **Permalinks**: view state lives in the URL (`#by=&v=&g=&t=&m=&c=&q=&l=`; `v=graph` / `v=matrix` share the
+  graph or the matrix directly; `q=` / `l=` carry the search term and the language filter) — shareable and
+  reproducible.
 
-## 分组规则（facets）
+## Grouping rules (facets)
 
-"按系统 / 模块看"靠一份规则文件，默认按顺序自动找：
+"View by system / module" is driven by a rule file, looked up automatically in this order:
 
-1. `--facets <文件>` 指定
-2. `<扫描根>/atlas.facets.json`
-3. 本项目 `configs/<扫描目录名>.facets.json`
+1. `--facets <file>`
+2. `<scan root>/atlas.facets.json`
+3. `configs/<scanned dir name>.facets.json` in this repo
 
-懒得手写？**让工具草拟一份**：启动器「项目设置…」向导的第三步，或者
-`node src/cli.mjs draft-facets <目录> --out 输出.json`（只看目录结构、不解析代码，秒出；结果里有 `_comment` 说明格式，直接改就行）。
+Too lazy to write one? **Let the tool draft it**: step 3 of the launcher's "Project setup…" wizard, or
+`node src/cli.mjs draft-facets <dir> --out rules.json` (reads the directory layout only, no parsing, instant;
+the output contains a `_comment` explaining the format — edit away).
 
 ```json
 {
   "exclude": ["third_party"],
   "systems": [
-    { "name": "界面层", "color": "#f778ba", "files": ["*Form.cs"] },
-    { "name": "业务模块", "color": "#58a6ff", "paths": ["Modules/**", "Services/**"] },
-    { "name": "工具与基础设施", "color": "#bc8cff", "paths": ["Utils/**"], "namespaces": ["YourApp.Utils*"] }
+    { "name": "UI layer", "color": "#f778ba", "files": ["*Form.cs"] },
+    { "name": "Business modules", "color": "#58a6ff", "paths": ["Modules/**", "Services/**"] },
+    { "name": "Utilities & infra", "color": "#bc8cff", "paths": ["Utils/**"], "namespaces": ["YourApp.Utils*"] }
   ]
 }
 ```
 
-- 规则按顺序匹配，**第一条命中生效**；没命中的进 `(未分类)`。
-- `paths` / `files` / `namespaces` 都是 glob（`**` 跨层级），匹配对象 = 文件相对路径 / 文件名 / 命名空间 / 完整限定名。
-- `exclude` 追加要跳过的目录（在默认忽略表之外）。
+- Rules are matched in order, **the first hit wins**; anything unmatched lands in `(uncategorized)`.
+- `paths` / `files` / `namespaces` are globs (`**` crosses levels) matched against the file's relative path /
+  file name / namespace / fully qualified name.
+- `exclude` adds directories to skip (on top of the default ignore list).
 
-## bundle 结构（schema `code-atlas/1`）
+## bundle structure (schema `code-atlas/1`)
 
-| 字段 | 内容 |
+| Field | Contents |
 | --- | --- |
-| `source` | 扫描根、文件数、**版本戳**（git commit + 是否有未提交改动；非 git 时用时间戳）、扫描耗时 |
-| `languages` | 每种语言的文件数 / 行数 |
-| `files[]` | 路径、语言、LOC / 代码 / 注释 / 空行、导入列表、所属命名空间 |
-| `types[]` | 名称、`fqn`、类别、命名空间、`dir`、`system` + `systemRule`（命中的分组规则）、**`doc`**（源码注释里的说明）、文件 + 行号、LOC、成员统计与列表、基类、复杂度、fanIn / fanOut |
-| `namespaces` | 包树（含自底向上的汇总：行数 / 类型数） |
-| `edges[]` | 类型级依赖边：`ref`（引用）/ `inherit`（继承）+ 权重 |
-| `nsEdges[]` | 命名空间级依赖边（给包依赖图用） |
-| `unresolved` | 名字解析失败的计数（unknown / ambiguous）——**置信度信号** |
-| `facets` | 系统分组结果：用了哪个规则文件、每个系统的类型数 / 行数 / 文件数、未分类计数 |
+| `source` | scan roots, file count, **version stamp** (git commit + whether the tree was dirty; a timestamp when not a git repo), scan duration |
+| `languages` | file count / line count per language |
+| `files[]` | path, language, LOC / code / comment / blank lines, import list, namespace |
+| `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), file + line, LOC, member stats and list, base types, complexity, fanIn / fanOut |
+| `namespaces` | package tree (with bottom-up totals: lines / type counts) |
+| `edges[]` | type-level dependency edges: `ref` (reference) / `inherit` (inheritance), plus weight |
+| `nsEdges[]` | namespace-level edges (used by the package dependency view) |
+| `unresolved` | failed name resolutions (unknown / ambiguous) — the **confidence signal** |
+| `facets` | system grouping result: which rule file was used, type/line/file counts per system, uncategorized count |
 
-## 设计原则
+## Design principles
 
-1. **结构 = 解析结果，依赖 = 统计推断**。类型 / 成员 / LOC 来自 tree-sitter 语法树，可信；引用边来自标识符匹配，会漏会错，界面上明确标注，不假装一样权威。
-2. **带版本戳**。bundle 记下源头 commit 和生成时间，人和 AI 都能知道这是哪一版的数据。
-3. **本地优先**。源码不出本机，bundle 也在本地；工具只处理数据，不分发任何被扫代码。
-4. **引擎与宿主解耦**。引擎只产出 `bundle.json`；浏览器 / 未来的 MCP / 编辑器扩展都是消费者，换宿主不动引擎。
+1. **Structure comes from parsing; dependencies are statistical inference.** Types / members / LOC come from
+   the tree-sitter syntax tree and are trustworthy; reference edges come from identifier matching and will miss
+   or mislink things — the UI labels this clearly instead of pretending both are equally authoritative.
+2. **Version-stamped.** The bundle records the source commit and generation time, so humans and AI both know
+   which revision they are looking at.
+3. **Local-first.** Source never leaves the machine, the bundle stays local, and the tool only processes data —
+   it never redistributes scanned code.
+4. **Engine and host are decoupled.** The engine only produces `bundle.json`; the browser / MCP / future
+   editor extensions are all consumers, so swapping a host does not touch the engine.
 
-## 协议
+## License
 
-MIT（见 [LICENSE](LICENSE)）。
+MIT (see [LICENSE](LICENSE)).
 
-## 支持读什么（输入）
+## What it can read (input)
 
-| 你给它什么 | 它做什么 | 状态 |
+| What you give it | What it does | Status |
 | --- | --- | --- |
-| **目录（有源码）** | 直接扫；多语言混排一次扫完 | ✅ |
-| **单个源码文件** | 没有"单文件的图"这回事，会扫它**所在的目录**并告知 | ✅ |
-| **.dll / .exe（.NET 程序集）** | ILSpy 反编译成 .cs 再扫 | ✅ 实测 |
-| **.exe（.NET 单文件发行版）** | sfextract 解包 → 反编译 → 扫 | ✅ 实测 |
-| **目录（只有发行产物）** | 按目录名找程序集；也可 `--dll "App*.dll"` 指定 | ✅ |
-| **.jar（Java）** | 需 Java 运行时 + cfr/vineflower（`--decompiler` 指定） | ⚠️ 已实现未实测 |
+| **Directory with source** | Scans it; mixed languages in one pass | ✅ |
+| **A single source file** | There is no "map of one file", so it scans the **containing directory** and tells you | ✅ |
+| **.dll / .exe (.NET assembly)** | ILSpy decompile to .cs, then scan | ✅ measured |
+| **.exe (.NET single-file publish)** | extract with SingleFileExtractor → decompile → scan | ✅ measured |
+| **Directory with build output only** | Finds assemblies by directory name; `--dll "App*.dll"` to be explicit | ✅ |
+| **.jar (Java)** | Needs a Java runtime + cfr/vineflower (or `--decompiler`) | ⚠️ implemented, not yet measured end-to-end |
 
-文字说明：启动器里拖文件夹进来，或者把 `.dll / .exe / .jar` 拖进来都行，**不用告诉它这是哪种**。
+In the launcher you can drag in a folder, or a `.dll / .exe / .jar` — **you do not have to say which it is**.
 
-**读不了的**：原生可执行文件（C/C++ 编译出来的 exe/dll —— 很多软件、游戏本体都是这类）。
-它没有 CLR 头、不是 .NET 程序集，里面也没有类型名 / 命名空间 / 方法签名这些元数据，只认机器码；
-反编译只支持三类：**.NET 程序集**、**.NET 单文件发行版**、**Java .jar**（详见下面「没有源码也能扫」的已知限制）。
-Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指它就能扫。
+**What it cannot read**: native executables (C/C++-built exe/dll — most applications and game binaries).
+No CLR header, not a .NET assembly, no type names / namespaces / method signatures, only machine code.
+Decompilation supports three things: **.NET assemblies**, **.NET single-file publishes**, **Java .jar**
+(see the known limits under "Scanning without source" above).
+Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, point at it and it scans.
 
-### 认识的语言（26 门代码语言，另有 SystemRDL 待补）
+### Supported languages (26 code languages; SystemRDL pending)
 
-| 语言 | 后缀 | 状态 |
+| Language | Extensions | Status |
 | --- | --- | --- |
-| C# | `.cs` | ✅ 实测（一个 54 文件 / 106 类型的项目） |
-| TypeScript | `.ts` `.mts` `.cts` | ✅ 实测（一个 114 文件 / 367 类型的项目） |
-| TSX | `.tsx` | ✅ 实测（JSX 必须用单独的 tsx 语法） |
-| JavaScript | `.js` `.mjs` `.cjs` `.jsx` | ✅ 实测 |
-| Java | `.java` | ✅ fixtures 回归 |
-| Python | `.py` | ✅ fixtures（含 docstring） |
+| C# | `.cs` | ✅ measured (a 54-file / 106-type project) |
+| TypeScript | `.ts` `.mts` `.cts` | ✅ measured (a 114-file / 367-type project) |
+| TSX | `.tsx` | ✅ measured (JSX needs the separate tsx grammar) |
+| JavaScript | `.js` `.mjs` `.cjs` `.jsx` | ✅ measured |
+| Java | `.java` | ✅ fixtures regression |
+| Python | `.py` | ✅ fixtures (docstrings included) |
 | Kotlin | `.kt` `.kts` | ✅ fixtures |
-| Lua | `.lua` | ✅ fixtures（无类型声明 → 合成 module 节点） |
-| Go | `.go` | ✅ fixtures（struct / interface 区分） |
-| Rust | `.rs` | ✅ fixtures（trait/struct/enum/impl） |
-| C | `.c` `.h` | ✅ fixtures（typedef 不重复计数） |
-| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hxx` | ✅ fixtures（含继承） |
-| PHP | `.php` | ✅ fixtures（class/interface/trait/enum + extends/implements） |
-| Swift | `.swift` | ✅ fixtures（class/struct/enum/protocol 分开认） |
-| Scala | `.scala` `.sc` | ✅ fixtures（class/object/trait） |
-| Shell | `.sh` `.bash` `.zsh` | ✅ fixtures（无类型 → module 节点） |
-| Zig | `.zig` | ✅ fixtures（const X = struct/enum） |
-| Solidity | `.sol` | ✅ fixtures（contract/interface + 继承） |
-| OCaml | `.ml` `.mli` | ✅ fixtures（module/type；顶层 let 会合成 module 节点） |
-| ReScript | `.res` | ✅ fixtures（module / type / variant） |
-| Ruby | `.rb` `.rake` `.gemspec` | ✅ fixtures（class/module；`module` 当命名空间；`attr_*` 认成属性；`require`/`include` 连成依赖边） |
-| HCL / Terraform | `.tf` `.tfvars` `.hcl` `.nomad` | ✅ fixtures（节点是 block：resource / data / module / variable / output / locals；成员是 attribute；引用连成依赖边） |
-| GraphQL | `.graphql` `.graphqls` `.gql` | ✅ fixtures（type / interface / union / enum / scalar / input / schema / directive；字段是成员、参数单独算 argument；`implements` 与 union 成员连成继承边、`"""描述"""` 当"说明"） |
-| TLA+ | `.tla` | ✅ fixtures（module + operator / variable） |
-| SystemRDL | `.rdl` | ⏸️ 暂时缺席（旧语法包与当前运行时不吃；新的要自己用 emscripten 编，正在补 —— 见 ROADMAP 附录 A.12） |
-| Emacs Lisp | `.el` | ✅ fixtures（无类型概念 → 顶层函数/变量挂在合成的 module 节点上） |
-| Elixir | `.ex` `.exs` | ✅ fixtures（module / function / struct；注：`defmodule`/`def` 在语法树里是 call 节点，靠专属钩子识别；`alias` 会计入导入，但暂不连成依赖边） |
+| Lua | `.lua` | ✅ fixtures (no type declarations → synthetic module node) |
+| Go | `.go` | ✅ fixtures (struct / interface distinguished) |
+| Rust | `.rs` | ✅ fixtures (trait/struct/enum/impl) |
+| C | `.c` `.h` | ✅ fixtures (typedefs not double counted) |
+| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hxx` | ✅ fixtures (inheritance included) |
+| PHP | `.php` | ✅ fixtures (class/interface/trait/enum + extends/implements) |
+| Swift | `.swift` | ✅ fixtures (class/struct/enum/protocol distinguished) |
+| Scala | `.scala` `.sc` | ✅ fixtures (class/object/trait) |
+| Shell | `.sh` `.bash` `.zsh` | ✅ fixtures (no types → module node) |
+| Zig | `.zig` | ✅ fixtures (const X = struct/enum) |
+| Solidity | `.sol` | ✅ fixtures (contract/interface + inheritance) |
+| OCaml | `.ml` `.mli` | ✅ fixtures (module/type; top-level lets get a synthetic module node) |
+| ReScript | `.res` | ✅ fixtures (module / type / variant) |
+| Ruby | `.rb` `.rake` `.gemspec` | ✅ fixtures (class/module; `module` acts as a namespace; `attr_*` become properties; `require`/`include` become edges) |
+| HCL / Terraform | `.tf` `.tfvars` `.hcl` `.nomad` | ✅ fixtures (nodes are blocks: resource / data / module / variable / output / locals; members are attributes; references become edges) |
+| GraphQL | `.graphql` `.graphqls` `.gql` | ✅ fixtures (type / interface / union / enum / scalar / input / schema / directive; fields are members, function arguments count as arguments; `implements` and union members become inheritance edges; `"""descriptions"""` become the "description") |
+| TLA+ | `.tla` | ✅ fixtures (module + operator / variable) |
+| SystemRDL | `.rdl` | ⏸️ temporarily absent (the old grammar doesn't fit the current runtime; a new one must be compiled with emscripten — see ROADMAP appendix A.12) |
+| Emacs Lisp | `.el` | ✅ fixtures (no type concept → top-level functions/variables hang off a synthetic module node) |
+| Elixir | `.ex` `.exs` | ✅ fixtures (module / function / struct; note `defmodule`/`def` are `call` nodes in the tree, recognized by dedicated hooks; `alias` counts as an import but is not linked into an edge yet) |
 
-**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`Dart`、`Elm`、`QL`、`Haskell`、`PowerShell`、`Julia`、`Vue`、`Svelte`…
-`Vue` 单文件组件要先解决“解析内嵌 `<script>`”，`Objective-C` 的 `.m` 与 MATLAB 扩名冲突（只能靠开关指定），这两个是刻意先不做。
-`TLA+` 的上游没有可直接用的 wasm，放在 `vendor/wasm/` 自己维护；`SystemRDL` 暂时缺席（同样原因，要自己用 emscripten 编一份，详见 ROADMAP）。
-审计命令：`node tests/probe-abi.mjs`（把每个语法包真加载 + 真解析一遍，分清能用 / 用不了）。
+**No profile yet** (the grammar loads; what's missing is our layer): `Dart`, `Elm`, `QL`, `Haskell`,
+`PowerShell`, `Julia`, `Vue`, `Svelte`…
+`Vue` single-file components first need "parse the embedded `<script>`", and `Objective-C`'s `.m` clashes with
+MATLAB — those two are deliberately deferred.
+`TLA+` has no usable upstream wasm, so it is maintained in `vendor/wasm/`; `SystemRDL` is temporarily absent
+(same reason — it has to be compiled with emscripten, see ROADMAP).
+Audit command: `node tests/probe-abi.mjs` (loads and parses every grammar from both sources, telling usable
+from unusable).
 
-**文件级格式（默认不开，要看就显式指定）**：`JSON` `.json` · `YAML` `.yaml .yml` · `TOML` `.toml` · `CSS` `.css` · `HTML` `.html .htm` —— 这些没有"类型"可言，只会以文件为单位出现在图上（合成 module 节点）：
+**File-level formats (off by default, opt in explicitly)**: `JSON` `.json` · `YAML` `.yaml .yml` ·
+`TOML` `.toml` · `CSS` `.css` · `HTML` `.html .htm` — they have no "types", so they only appear as files
+(synthetic module nodes):
 
 ```bash
-node src/cli.mjs scan ./repo --lang auto,json,yaml   # 代码语言 + JSON/YAML
-node src/cli.mjs scan ./repo --lang json,yaml        # 只看配置文件
-node src/cli.mjs scan ./repo --lang cs               # 只看 C#
+node src/cli.mjs scan ./repo --lang auto,json,yaml   # code languages + JSON/YAML
+node src/cli.mjs scan ./repo --lang json,yaml        # config files only
+node src/cli.mjs scan ./repo --lang cs               # C# only
 ```
 
-**语法包与“分进程解析”**：升到 `web-tree-sitter` 0.27.0 之后，单门语法包加载后常驻约 **11 MB**（曾经是 150–180 MB），同进程里装 105 门也只是 1.2 GB 级别（实测：20 门共 104 MB、自然退出 exit=0）。
-分进程**仍然保留**，但理由换成了**崩溃隔离**：语法包在特定输入上硬崩（wasm 层 abort，JS 拦不住）时，
-只丢那一门、其余照常进地图。参考实测：老运行时同进程装 9 门必崩（退出码 `0xC0000409`），1~3 门正常。
-注意这**不是“内存不够”**：本机 Node 能分配到 50 GB+ 才叫不够。
+**Grammars and "per-language child processes"**: with `web-tree-sitter` 0.27.0 a loaded grammar now occupies
+about **11 MB** (it used to be 150–180 MB), and 105 grammars in one process stay in the 1.2 GB range
+(measured: 20 grammars = 104 MB, and a natural exit with code 0). The per-language child process **remains**,
+but for a different reason: **crash isolation** — when a grammar hard-aborts on some input (a wasm-level abort
+that JS cannot catch), only that language is lost and the rest still make it into the map. For reference, the
+old runtime crashed with 9 grammars in one process (exit code `0xC0000409`), while 1–3 were fine.
+Note this is **not** "not enough memory": on this machine Node can allocate 50 GB+ before that becomes the
+story.
 
-**所以扫描是这么跑的**：父进程只负责收集文件 / 建索引 / 写 bundle，**每门语言的解析都在自己的子进程里做**（每个子进程只装一门语法包）。
+**So this is how a scan runs**: the parent process only collects files, builds indexes and writes the bundle —
+**each language is parsed in its own child process** (one grammar per child).
 
-- 内存峰值 = 一门（约 50 MB），不再随语言数叠加上去；
-- 某个子进程挂掉，只丢那一门（报告里会明说），其余语言照常进地图；
-- 父进程不装 wasm，所以**退出干净、退出码正确** —— Swift/Scala 那类“退出时崩”也一并消失；
-- 代价：多几次进程启动（每门约 0.2 s）。
+- Peak memory = one language (about 50 MB), and it no longer stacks up with the number of languages;
+- If a child dies, only that language is lost (the report says so) and the others still land in the map;
+- The parent never loads wasm, so it **exits cleanly with a correct exit code** — the old "crashes on exit"
+  class (Swift/Scala) is gone;
+- The cost: a few extra process starts (about 0.2 s per language).
 
-调这个可以用：`npm run probe:mem`（语法包内存探针，逐行落盘）。
+Tuning it: `npm run probe:mem` (grammar memory probe, written line by line to disk).
 
-**语法包来源与规模**（用哪个就在 `src/languages.mjs` 里加 profile，一般 5~10 行）：
+**Grammar sources and scale** (to add one, write a profile in `src/languages.mjs` — usually 5–10 lines):
 
-- 主来源：npm 包 `tree-sitter-wasm`（**105 个语法包**；当前运行时 `web-tree-sitter` 0.27.0，兼容语法 ABI 13~15）；
-- 自己补的：`vendor/wasm/`（目前有 TLA+；SystemRDL 待编）；
-- 全量冒烟：`npm run probe:abi` → 实测两个来源里的 wasm 全部能加载并解析。
+- Primary source: the npm package `tree-sitter-wasm` (**105 grammars**; current runtime `web-tree-sitter`
+  0.27.0, compatible with grammar ABI 13–15);
+- Maintained by us: `vendor/wasm/` (TLA+ today; SystemRDL to be compiled);
+- Full smoke test: `npm run probe:abi` → every wasm from both sources loads and parses.
 
-加一门语言 = 在 `src/languages.mjs` 加一份 profile（节点类型 + 继承字段 + 复杂度分支表），
-再往 `tests/fixtures/<语言>/` 丢一个样例、在 `tests/run-fixtures.mjs` 写期望值，然后 `npm test`。
-节点名拿不准就先跑 `npm run probe`（打印 tree-sitter 实际解析出的节点名，别猜）。
+Adding a language = add a profile in `src/languages.mjs` (node types + inheritance fields + complexity branch
+table), drop a sample into `tests/fixtures/<language>/`, write the expectations in
+`tests/run-fixtures.mjs`, then `npm test`. When unsure about node names, run `npm run probe` first
+(it prints the node names tree-sitter actually produces — do not guess).
 
-**没有类型声明的文件**（脚本、顶层函数、Lua 模块）会自动合成一个 `module` 节点，
-免得整份文件在图上消失；它的成员（函数/变量）挂在模块节点下。
+**Files without type declarations** (scripts, top-level functions, Lua modules) get a synthetic `module` node
+so the whole file does not vanish from the map; their members (functions/variables) hang off that module node.
 
-### 默认跳过什么
+### What is skipped by default
 
-- **目录**：`.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor` `packages` `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`；
-- **文件**：`*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts` `*.freezed.dart`；
-- **单个文件 > 1MB**（`--maxkb` 可调）；
-- **项目规则里写的**：`facets.json` 的 `exclude` 可以追加要忽略的目录（比如上游参考代码）。
+- **Directories**: `.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor`
+  `packages` `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`;
+- **Files**: `*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts` `*.freezed.dart`;
+- **Any file > 1 MB** (`--maxkb` to change);
+- **Whatever your project rules say**: `facets.json`'s `exclude` adds directories to ignore (upstream
+  reference code, for instance).
 
-### 扫描时要注意什么
+### What to watch out for when scanning
 
-- **语言选对，结果才干净**：默认 `auto` = 所有代码语言都扫、`JSON/YAML/TOML/CSS/HTML` 这类文件级格式**不扫**（要看就显式写 `--lang auto,json`）。
-  只勾项目真正用的语言明显更快，也不会把依赖目录里别的语言混进图里（启动器里有勾选框，写进全局的 `Langs`）。
-- **文件编码按 UTF-8 读**：GBK 等其它编码的文件可能解析异常（报告里会单独列出来）。整库是别的编码时，先转成 UTF-8 再扫更准。
-- **增量扫描的前提**：`--incremental` 靠引擎指纹（版本 + `scan.mjs`/`languages.mjs`/`preprocess.mjs` 的 mtime）判断缓存能不能用。
-  换了版本或改了这几处，缓存自动作废、本次按全量扫 —— 不会拿旧规则的结果骗你。
-- **先看 `unknown` / `ambiguous` 两个数**：依赖边是**名字匹配**级别的，同名符号在多个作用域里会匹配不上或误连，这两个计数就是「这里我不敢确定」的信号。
-  报告、界面和 `bundle.json` 里都带着；看结论前先看一眼这两个数大不大。
-- **解析失败不静默**：某个文件解析出 ERROR、某门语言的语法包这次没跑起来，都只影响那一块，并且会在报告里点名。
-- **大仓库建议**：① 先限定语言；② 单文件默认 1 MB 上限（`--maxkb` 可调），巨文件直接跳过；③ 跑第二遍时开增量。
-- **源码不出机器**：本地服务只绑 `127.0.0.1`，MCP 走本地 stdio，扫描全程不联网（要局域网看图才用 `--host 0.0.0.0`）。
-- **`dist/` 和 `ingest/` 落在 exe 旁边**：引擎解包目录（`%LocalAppData%\CodeAtlas\engine\<版本-指纹>\`）是缓存，删了会自动重新释放；超过 7 天没动过的旧缓存会在下次启动时顺手清掉。
+- **Pick the right languages for a clean result**: the default `auto` scans all code languages and **skips**
+  file-level formats like `JSON/YAML/TOML/CSS/HTML` (name them explicitly as `--lang auto,json` to include
+  them). Ticking only the languages your project actually uses is markedly faster and keeps foreign languages
+  from dependency directories out of the map (there is a checkbox panel in the launcher, stored globally in
+  `Langs`).
+- **Files are read as UTF-8**: files in other encodings (GBK, …) may produce parse errors (listed separately in
+  the report). If the whole repo uses another encoding, converting it to UTF-8 first gives better results.
+- **What incremental scanning relies on**: `--incremental` decides cache validity from an engine fingerprint
+  (version + mtimes of `scan.mjs`/`languages.mjs`/`preprocess.mjs`). Change the version or those files and the
+  cache is discarded and a full scan runs — it will not quietly answer with results produced by old rules.
+- **Look at `unknown` / `ambiguous` first**: dependency edges are **name-matching** level, so same-named
+  symbols in different scopes may stay unmatched or be mislinked; those two counts are the "I am not sure here"
+  signal. They appear in the report, in the UI and in `bundle.json` — check them before trusting conclusions.
+- **Parse failures are not silent**: a file with ERROR nodes or a grammar that failed to run this time only
+  affects that slice, and the report names it (the bundle also records `source.failedLanguages`).
+- **Large repos**: ① restrict languages first; ② the default 1 MB per-file limit (`--maxkb`) skips huge files
+  outright; ③ turn on incremental for the second pass.
+- **Source never leaves the machine**: the local server binds `127.0.0.1`, MCP runs over local stdio, and
+  scanning never goes online (use `--host 0.0.0.0` only to view the map from your LAN).
+- **`dist/` and `ingest/` land next to the exe**: the engine extraction directory
+  (`%LocalAppData%\CodeAtlas\engine\<version-fingerprint>\`) is a cache — delete it and it is re-extracted;
+  caches untouched for over 7 days are cleaned up on the next start.
 
-### 读不了什么（边界，说清楚）
+### What it cannot read (the boundaries, stated plainly)
 
-1. **没支持的语言**（Dart / Vue / Haskell…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.dart 2 · .vue 1 …）」；
-   还有一种容易误会的：「我们支持、但这次没在扫描范围内」的文件（没勾那门语言，或者 JSON/YAML 这类默认不扫的格式），会单独报成「**语言范围外** N 个文件没扫」，不会被算成“不支持”；
-2. **反编译产物**：没有源码注释（所以"说明"是空的）、行数比源码高（语法糖被展开）、会多出编译器生成物（已自动打标签并在界面默认隐藏）；
-3. **静态分析的边界**：反射、动态 `import`、拼字符串调出来的方法**拿不到**；依赖边是名字匹配级别的，重名符号会误连（界面标着 unknown / ambiguous 计数）；
-4. **不读**：二进制资源、图片、配置文件内容、运行时行为、git 历史。
+1. **Unsupported languages** (Dart / Vue / Haskell…) are skipped, but **not silently** — the report and the UI
+   both show "unsupported languages: N files (.dart 2 · .vue 1 …)". There is also an easily confused case:
+   files in a language we *do* support but that were outside this scan (that language was not ticked, or a
+   file-level format like JSON/YAML that is off by default) are reported separately as
+   "**out of language scope**: N files not scanned", never counted as unsupported;
+2. **Decompiled output**: no source comments (so "description" is empty), line counts higher than source
+   (syntactic sugar is expanded), plus compiler-generated types (auto-tagged and hidden in the UI by default);
+3. **The limits of static analysis**: reflection, dynamic `import`, and methods invoked through concatenated
+   strings **are not visible**; dependency edges are name-matching level and same-named symbols can be
+   mislinked (the UI shows the unknown / ambiguous counts);
+4. **Not read**: binary assets, images, config file contents, runtime behaviour, git history.
 
-## 路线
+## Roadmap
 
-（这份 README 只写功能本身。）
+(This README only covers the feature set itself.)
 
-- [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
-- [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
-- [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：26 门代码语言 + 5 种文件级格式（SystemRDL 待补）
-- [x] 依赖图视图（力导向）+ 包级依赖矩阵
-- [x] 启动器里勾选要扫的语言（界面 + `--lang`）
-- [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤
-- [x] 打包：完全版（内置 Node）/ 精简版（要求系统 Node）两个单文件 exe，不做安装器
-- [x] 首次运行向导（选项目 → 草拟分组规则 → 勾语言 → 保存并扫描；配过的项目再打开=零操作）
-- [x] 增量扫描（`--incremental`，只重解析改过的文件；启动器有「增量」勾选框）
-- [x] AI 接口补强：一键复制 MCP 配置 · `map(budget)` 骨架导出 · `impact` 影响面（多跳 + 诚实说明）
+- [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
+- [x] Grouping layer: system rules (facets config) + directory / namespace / flat
+- [x] MCP server (search symbols / find references / export subgraphs) for AI
+- [x] Language coverage: 26 code languages + 5 file-level formats (SystemRDL pending)
+- [x] Dependency graph view (force-directed) + package-level dependency matrix
+- [x] Pick languages to scan in the launcher (UI + `--lang`)
+- [x] Search improvements: type names + member names (web and MCP) · per-language filtering in the map
+- [x] Packaging: two single-file exes — full (bundled Node) / lite (system Node), no installer
+- [x] First-run wizard (pick project → draft grouping rules → pick languages → save and scan; no wizard next time)
+- [x] Incremental scanning (`--incremental`, re-parses changed files only; "Incremental" checkbox in the launcher)
+- [x] AI interface hardening: one-click MCP config copy · `map(budget)` skeleton export · `impact` blast radius (multi-hop + honest caveats)
