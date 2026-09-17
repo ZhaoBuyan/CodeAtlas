@@ -17,76 +17,76 @@
     <aside id="sidebar">
       <div class="panel">
         <label class="field">
-          <span>分组方式</span>
+          <span data-en="Group by">分组方式</span>
           <select id="groupBy"></select>
           <span id="groupHint" class="hintline"></span>
         </label>
         <label class="field" id="depthField">
-          <span>分组层级</span>
+          <span data-en="Group depth">分组层级</span>
           <select id="groupDepth">
-            <option value="1">1 层</option>
-            <option value="2">2 层</option>
-            <option value="3">3 层</option>
-            <option value="4">4 层</option>
-            <option value="0">全部（最细）</option>
+            <option value="1" data-en="1 level">1 层</option>
+            <option value="2" data-en="2 levels">2 层</option>
+            <option value="3" data-en="3 levels">3 层</option>
+            <option value="4" data-en="4 levels">4 层</option>
+            <option value="0" data-en="All (finest)">全部（最细）</option>
           </select>
         </label>
         <label class="field">
-          <span>视图</span>
+          <span data-en="View">视图</span>
           <select id="view">
-            <option value="treemap">树形图（面积）</option>
-            <option value="tree">树状列表</option>
-            <option value="graph">依赖图（力导向）</option>
-            <option value="matrix">依赖矩阵（模块间）</option>
+            <option value="treemap" data-en="Treemap (area)">树形图（面积）</option>
+            <option value="tree" data-en="Tree list">树状列表</option>
+            <option value="graph" data-en="Dependency graph (force-directed)">依赖图（力导向）</option>
+            <option value="matrix" data-en="Dependency matrix (between modules)">依赖矩阵（模块间）</option>
           </select>
         </label>
         <label class="field">
-          <span>面积代表</span>
+          <span data-en="Area means">面积代表</span>
           <select id="metric"></select>
         </label>
         <label class="field">
-          <span>着色</span>
+          <span data-en="Color by">着色</span>
           <select id="colorMode">
-            <option value="file">按文件（色多）</option>
-            <option value="group">按分组</option>
-            <option value="kind">按类型类别</option>
+            <option value="file" data-en="By file (many colors)">按文件（色多）</option>
+            <option value="group" data-en="By group">按分组</option>
+            <option value="kind" data-en="By kind">按类型类别</option>
           </select>
         </label>
         <label class="field">
-          <span>搜索</span>
-          <input id="q" type="search" placeholder="类型 / 成员 / 命名空间" />
+          <span data-en="Search">搜索</span>
+          <input id="q" type="search" placeholder="类型 / 成员 / 命名空间" data-en-ph="type / member / namespace" />
         </label>
         <label class="field check">
           <input id="depFocus" type="checkbox" />
-          <span>依赖聚焦（只看选中项及其关联）</span>
+          <span data-en="Dependency focus (only the selection and its neighbours)">依赖聚焦（只看选中项及其关联）</span>
         </label>
         <label class="field check" id="hideGenField">
           <input id="hideGen" type="checkbox" />
-          <span>隐藏编译器生成物 <b id="genCount"></b></span>
+          <span><span data-en="Hide compiler-generated">隐藏编译器生成物</span> <b id="genCount"></b></span>
         </label>
         <label class="field">
-          <span>最小代码行 <b id="minCodeVal">0</b></span>
+          <span><span data-en="Min code lines">最小代码行</span> <b id="minCodeVal">0</b></span>
           <input id="minCode" type="range" min="0" max="300" step="10" value="0" />
         </label>
       </div>
 
       <div class="panel">
-        <div class="panel-title">类型类别</div>
+        <div class="panel-title" data-en="Type kinds">类型类别</div>
         <div id="kinds" class="kinds"></div>
       </div>
 
       <div class="panel" id="langPanel">
-        <div class="panel-title">语言</div>
+        <div class="panel-title" data-en="Languages">语言</div>
         <div id="langs" class="kinds"></div>
       </div>
 
       <div class="panel">
-        <div class="panel-title" id="legendTitle">分组</div>
+        <div class="panel-title" id="legendTitle" data-en="Group">分组</div>
         <ul id="legend" class="legend"></ul>
       </div>
 
       <div class="panel">
-        <div class="panel-title" id="topTitle">最大的类型</div>
+        <div class="panel-title" id="topTitle" data-en="Largest types">最大的类型</div>
         <ol id="topList" class="toplist"></ol>
       </div>
     </aside>

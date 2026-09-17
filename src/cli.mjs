@@ -14,7 +14,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { t, sysLabel, isUnclassified } from './i18n.mjs';
+import { t, sysLabel, isUnclassified, LANG } from './i18n.mjs';
 import { scanToDisk, workerExtract, draftFacets, VERSION } from './scan.mjs';
 import { LANGUAGES } from './languages.mjs';
 import { ingest } from './ingest.mjs';
@@ -184,7 +184,15 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
   const server = http.createServer((req, res) => {
     const url = decodeURIComponent((req.url || '/').split('?')[0]);
     let file;
-    if (url === '/' || url === '/index.html') file = path.join(WEB_DIR, 'index.html');
+    if (url === '/' || url === '/index.html') {
+      // 把语言注入页面：前端靠 window.CODEATLAS_LANG 决定显示哪一套文案
+      //（同一份 bundle，切语言只改显示、不用重扫）
+      const html = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8')
+        .replace('</head>', `<script>window.CODEATLAS_LANG = ${JSON.stringify(LANG)};</script>\n</head>`);
+      res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
+      res.end(html);
+      return;
+    }
     else if (url === '/data/bundle.json') file = bundlePath;
     else if (url === '/vendor/d3.js') file = path.join(HERE, '..', 'node_modules', 'd3', 'dist', 'd3.min.js');
     else if (url.startsWith('/web/')) file = path.join(WEB_DIR, url.slice(5));

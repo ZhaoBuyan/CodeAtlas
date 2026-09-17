@@ -1,12 +1,28 @@
 /* Code Atlas 前端：吃 bundle.json，画树形图 / 树状列表 + 检查器。
  * 只依赖 d3（全局）。数据全在 /data/bundle.json，前端不含被扫描项目的代码。 */
 
+// 语言由本地服务注入（window.CODEATLAS_LANG，取值同启动器/引擎的 CODEATLAS_LANG）；
+// 直接用 file:// 打开或别的方式打开就是中文（默认）。
+const LANG = String(window.CODEATLAS_LANG || 'zh').toLowerCase().startsWith('en') ? 'en' : 'zh';
+// 本文件用 T(...) 而不是 t(...)：app.js 里到处是「类型对象」的局部名 t（箭头参数、const t = ...），
+// 同名会静默遮住翻译函数。（和 src/mcp.mjs 同一个原因）
+const T = (zh, en) => (LANG === 'en' ? en : zh);
+
+// index.html 里带 data-en 的元素：英文模式下换成 data-en 的文本（中文原样留在 HTML 里，JS 不跑也能看）
+function applyHtmlLang() {
+  if (LANG !== 'en') return;
+  for (const el of document.querySelectorAll('[data-en]')) el.textContent = el.getAttribute('data-en');
+  for (const el of document.querySelectorAll('[data-en-ph]')) el.setAttribute('placeholder', el.getAttribute('data-en-ph'));
+  document.documentElement.lang = 'en';
+}
+applyHtmlLang();   // module 脚本在文档解析完才跑，这里 DOM 已经就绪
+
 const METRICS = {
-  code: '代码行',
-  loc: '总行数',
-  complexity: '复杂度（估）',
-  members: '成员数',
-  fanIn: '被依赖 fanIn',
+  code: T('代码行', 'Code lines'),
+  loc: T('总行数', 'Total lines'),
+  complexity: T('复杂度（估）', 'Complexity (est.)'),
+  members: T('成员数', 'Members'),
+  fanIn: T('被依赖 fanIn', 'Depended-on (fanIn)'),
 };
 
 const KIND_COLOR = {
@@ -32,17 +48,17 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 // 数据里的哨兵值 → 网页显示文案（映射表的源头在 src/i18n.mjs；网页目前只有中文，这里先做显示兜底）：
 // bundle 里存的是中性值 '(unclassified)'，老 bundle 里是 '(未分类)'，两种都认。
 const SENTINELS = {
-  '(unclassified)': '(未分类)', '(未分类)': '(未分类)',
-  '(root)': '(根目录)', '(根目录)': '(根目录)',
-  'Other': '其他', '其他': '其他', 'Top level': '顶层', '顶层': '顶层',
-  'root': '根目录', '根目录': '根目录',
+  '(unclassified)': ['(未分类)', '(unclassified)'], '(未分类)': ['(未分类)', '(unclassified)'],
+  '(root)': ['(根目录)', '(root)'], '(根目录)': ['(根目录)', '(root)'],
+  'Other': ['其他', 'Other'], '其他': ['其他', 'Other'], 'Top level': ['顶层', 'Top level'], '顶层': ['顶层', 'Top level'],
+  'root': ['根目录', 'root'], '根目录': ['根目录', 'root'],
 };
-const sysLabel = (n) => SENTINELS[n] || n;
+const sysLabel = (n) => { const m = SENTINELS[n]; return m ? (LANG === 'en' ? m[1] : m[0]) : n; };
 
 fetch('/data/bundle.json')
   .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
   .then(boot)
-  .catch((err) => { $('#chart').innerHTML = `<div class="empty">读取 bundle 失败：${esc(err.message)}<br>先跑 <code>npm run scan -- &lt;目录&gt;</code></div>`; });
+  .catch((err) => { $('#chart').innerHTML = T(`<div class="empty">读取 bundle 失败：${esc(err.message)}<br>先跑 <code>npm run scan -- &lt;目录&gt;</code></div>`, `<div class="empty">Failed to load the bundle: ${esc(err.message)}<br>run <code>npm run scan -- &lt;dir&gt;</code> first</div>`); });
 
 // ---------------------------------------------------------------------------
 // 启动
@@ -88,33 +104,33 @@ function renderMeta() {
     ? b.source.ingest.original.split(/[\\/]/).pop()
     : s.labels.join(', ');
   const facets = b.facets?.configFile
-    ? `<span class="chip">分组规则 <b>${esc(b.facets.configFile)}</b> · ${b.facets.systems.length} 个系统</span>`
+    ? T(`<span class="chip">分组规则 <b>${esc(b.facets.configFile)}</b> · ${b.facets.systems.length} 个系统</span>`, `<span class="chip">rules <b>${esc(b.facets.configFile)}</b> · ${b.facets.systems.length} systems</span>`)
     : '';
   const chips = [
-    `<span class="chip">来源 <b>${esc(fromLabel)}</b></span>`,
+    T(`<span class="chip">来源 <b>${esc(fromLabel)}</b></span>`, `<span class="chip">from <b>${esc(fromLabel)}</b></span>`),
     s.git
-      ? `<span class="chip">版本 <b>${esc(s.git.commit)}</b>${s.git.dirty ? ' · 有未提交改动' : ''}</span>`
-      : `<span class="chip">快照 <b>${new Date(s.newestMtime || 0).toLocaleString()}</b></span>`,
-    `<span class="chip">生成 <b>${new Date(b.generated).toLocaleString()}</b></span>`,
-    `<span class="chip">文件 <b>${fmt(b.totals.files)}</b> · 类型 <b>${fmt(b.totals.types)}</b> · 依赖边 <b>${fmt(b.totals.edges)}</b></span>`,
+      ? T(`<span class="chip">版本 <b>${esc(s.git.commit)}</b>${s.git.dirty ? ' · 有未提交改动' : ''}</span>`, `<span class="chip">revision <b>${esc(s.git.commit)}</b>${s.git.dirty ? ' · uncommitted changes' : ''}</span>`)
+      : T(`<span class="chip">快照 <b>${new Date(s.newestMtime || 0).toLocaleString()}</b></span>`, `<span class="chip">snapshot <b>${new Date(s.newestMtime || 0).toLocaleString()}</b></span>`),
+    T(`<span class="chip">生成 <b>${new Date(b.generated).toLocaleString()}</b></span>`, `<span class="chip">generated <b>${new Date(b.generated).toLocaleString()}</b></span>`),
+    T(`<span class="chip">文件 <b>${fmt(b.totals.files)}</b> · 类型 <b>${fmt(b.totals.types)}</b> · 依赖边 <b>${fmt(b.totals.edges)}</b></span>`, `<span class="chip">files <b>${fmt(b.totals.files)}</b> · types <b>${fmt(b.totals.types)}</b> · edges <b>${fmt(b.totals.edges)}</b></span>`),
     facets,
     b.totals.compilerGenerated
-      ? `<span class="chip">编译器生成物 <b>${fmt(b.totals.compilerGenerated)}</b>${state.hideGenerated ? '（已隐藏）' : ''}</span>`
+      ? T(`<span class="chip">编译器生成物 <b>${fmt(b.totals.compilerGenerated)}</b>${state.hideGenerated ? '（已隐藏）' : ''}</span>`, `<span class="chip">compiler-generated <b>${fmt(b.totals.compilerGenerated)}</b>${state.hideGenerated ? ' (hidden)' : ''}</span>`)
       : '',
     b.source.ingest?.tool
-      ? `<span class="chip">反编译产物 · 无源码注释 · 行数含语法糖展开</span>`
+      ? T(`<span class="chip">反编译产物 · 无源码注释 · 行数含语法糖展开</span>`, `<span class="chip">decompiled artifacts · no source comments · line counts include sugar</span>`)
       : '',
     b.totals.parseErrors
-      ? `<span class="chip warn">解析异常 <b>${fmt(b.totals.parseErrors)}</b> 处 / ${fmt(b.totals.parseErrorFiles)} 个文件</span>`
+      ? T(`<span class="chip warn">解析异常 <b>${fmt(b.totals.parseErrors)}</b> 处 / ${fmt(b.totals.parseErrorFiles)} 个文件</span>`, `<span class="chip warn">parse errors <b>${fmt(b.totals.parseErrors)}</b> spots / ${fmt(b.totals.parseErrorFiles)} files</span>`)
       : '',
     (() => {
       const u = b.stats?.skipped?.unsupported || {};
       const total = Object.values(u).reduce((a, c) => a + c, 0);
       if (!total) return '';
       const top = Object.entries(u).sort((a, c) => c[1] - a[1]).slice(0, 4).map(([e, c]) => `${e} ${c}`).join(' · ');
-      return `<span class="chip warn" title="这些后缀的文件被跳过了：${esc(top)}">未支持语言 <b>${fmt(total)}</b> 个文件</span>`;
+      return T(`<span class="chip warn" title="这些后缀的文件被跳过了：${esc(top)}">未支持语言 <b>${fmt(total)}</b> 个文件</span>`, `<span class="chip warn" title="files with these extensions were skipped: ${esc(top)}">unsupported language <b>${fmt(total)}</b> files</span>`);
     })(),
-    `<span class="chip warn">结构 = tree-sitter 解析 · 依赖边 = 静态推断，可能漏 / 错</span>`,
+    T(`<span class="chip warn">结构 = tree-sitter 解析 · 依赖边 = 静态推断，可能漏 / 错</span>`, `<span class="chip warn">structure = tree-sitter parse · edges = static inference, may miss / be wrong</span>`),
   ];
   $('#meta').innerHTML = chips.filter(Boolean).join('');
 }
@@ -129,19 +145,19 @@ function renderControls() {
   const canSystem = state.hasFacets;
   const canNs = nsCount > 1;
   const items = [
-    ['system', canSystem ? '系统 / 模块（规则）' : '系统 / 模块（需要规则文件）', canSystem ? '' : '需要 configs/<项目名>.facets.json；没有规则时用「目录」或「文件」代替最直观', !canSystem],
-    ['dir', '目录', '', false],
-    ['ns', canNs ? `命名空间（${nsCount} 个）` : '命名空间（这类语言没有）', canNs ? '' : 'C#/Java/Kotlin/Go/Scala 有 namespace/package 声明；TS/JS/Python 靠文件与目录组织代码（文件本身就是模块），扫不到命名空间。看「目录」或「文件」即可，目录在这类项目里通常就是模块边界。', !canNs],
-    ['file', '文件', '', false],
-    ['flat', '平铺（不分层）', '', false],
+    ['system', canSystem ? T('系统 / 模块（规则）', 'System / module (rules)') : T('系统 / 模块（需要规则文件）', 'System / module (needs a rules file)'), canSystem ? '' : T('需要 configs/<项目名>.facets.json；没有规则时用「目录」或「文件」代替最直观', 'needs configs/<project>.facets.json; without rules, grouping by directory or file is the most useful'), !canSystem],
+    ['dir', T('目录', 'Directory'), '', false],
+    ['ns', canNs ? T(`命名空间（${nsCount} 个）`, `Namespaces (${nsCount})`) : T('命名空间（这类语言没有）', 'Namespaces (none in this language)'), canNs ? '' : T('C#/Java/Kotlin/Go/Scala 有 namespace/package 声明；TS/JS/Python 靠文件与目录组织代码（文件本身就是模块），扫不到命名空间。看「目录」或「文件」即可，目录在这类项目里通常就是模块边界。', 'C#/Java/Kotlin/Go/Scala declare namespaces/packages; TS/JS/Python organise code by file and directory (a file is itself a module), so there is no namespace to scan. Group by directory or file instead — there a directory usually is the module boundary.'), !canNs],
+    ['file', T('文件', 'File'), '', false],
+    ['flat', T('平铺（不分层）', 'Flat (no nesting)'), '', false],
   ];
   $('#groupBy').innerHTML = items
     .map(([v, label, why, disabled]) => `<option value="${v}"${disabled ? ' disabled' : ''} title="${esc(why)}">${esc(label)}</option>`)
     .join('');
   $('#groupBy').value = state.groupBy;
   const hint = $('#groupHint');
-  if (hint) hint.textContent = canSystem ? '' : '小提示：没有规则文件时用「目录」或「文件」分组最直观；「命名空间」需 C#/Java 这类有 namespace/package 声明的语言。';
-  if (hint) hint.textContent = canSystem ? '' : '没有规则文件时，「目录」或「文件」分组最直观';
+  if (hint) hint.textContent = canSystem ? '' : T('小提示：没有规则文件时用「目录」或「文件」分组最直观；「命名空间」需 C#/Java 这类有 namespace/package 声明的语言。', 'Tip: without a rules file, grouping by directory or file is the most useful; Namespaces needs a language that declares namespaces/packages (C#/Java…).');
+  if (hint) hint.textContent = canSystem ? '' : T('没有规则文件时，「目录」或「文件」分组最直观', 'Without a rules file, grouping by directory or file is the most useful');
   $('#groupBy').onchange = (e) => { state.groupBy = e.target.value; state.focus = ''; state.selected = null; writeHash(); renderControls(); draw(); };
 
   $('#groupDepth').value = String(state.groupDepth);
@@ -202,7 +218,7 @@ function renderLangs() {
   $('#langPanel').style.display = '';
   if (!state.langs) state.langs = new Set(langs.map(([id]) => id));
   $('#langs').innerHTML = langs.map(([id, s]) => `
-    <label title="${fmt(s.loc)} 行 · ${fmt(s.types || 0)} 个类型">
+    <label title="${fmt(s.loc)}${T(' 行 · ', ' lines · ')}${fmt(s.types || 0)}${T(' 个类型', ' types')}">
       <input type="checkbox" value="${esc(id)}" ${state.langs.has(id) ? 'checked' : ''} />
       <span>${esc(s.label || id)}</span><span class="muted">${fmt(s.files)}</span></label>`).join('');
   $('#langs').onchange = () => {
@@ -222,16 +238,16 @@ function renderTopList() {
   const q = state.q;
   if (q) {
     const byMember = pool.filter((t) => memberHitOf(t)).length;
-    $('#topTitle').textContent = `搜索结果（共 ${pool.length} 个类型${byMember ? ` · 其中 ${byMember} 个是成员命中` : ''}）`;
+    $('#topTitle').textContent = T(`搜索结果（共 ${pool.length} 个类型${byMember ? ` · 其中 ${byMember} 个是成员命中` : ''}）`, `Search results (${pool.length} types${byMember ? ` · ${byMember} of them member hits` : ''})`);
   } else {
-    $('#topTitle').textContent = `最大的类型（${METRICS[state.metric]}）`;
+    $('#topTitle').textContent = T(`最大的类型（${METRICS[state.metric]}）`, `Largest types (${METRICS[state.metric]})`);
   }
   const list = pool.slice(0, 12);
   $('#topList').innerHTML = list.map((t) => {
     const m = q ? memberHitOf(t) : null;
     const f = state.fileById.get(t.file);
     // 搜索时多一行“为什么命中”：搜成员名时如果不说清楚，很容易让人以为类型名里含这个词
-    const sub = !q ? '' : `<span class="sub">${m ? `命中成员 ${esc(m.n)}${m.k ? `（${esc(m.k)}）` : ''}` : '命中类型名'}${f ? ` · ${esc(f.path)}:${m ? m.l : t.line}` : ''}</span>`;
+    const sub = !q ? '' : `<span class="sub">${m ? `${T('命中成员', 'member hit')} ${esc(m.n)}${m.k ? T(`（${esc(m.k)}）`, ` (${esc(m.k)})`) : ''}` : T('命中类型名', 'type-name hit')}${f ? ` · ${esc(f.path)}:${m ? m.l : t.line}` : ''}</span>`;
     return `
     <li data-id="${t.id}" title="${esc(t.fqn)}">
       <span>${esc(truncate(t.name, 18))}</span><span class="v">${fmt(metricOf(t))}</span>
@@ -300,11 +316,11 @@ function matchType(t) {
 function groupPath(t) {
   const cut = (segs) => (state.groupDepth > 0 ? segs.slice(0, state.groupDepth) : segs);
   switch (state.groupBy) {
-    case 'ns': return cut((t.ns || '(全局)').split('.'));
+    case 'ns': return cut((t.ns || T('(全局)', '(global)')).split('.'));
     case 'dir': {
       const f = state.fileById.get(t.file);
       const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
-      return cut(dir ? dir.split('/') : ['(根目录)']);
+      return cut(dir ? dir.split('/') : [T('(根目录)', '(root)')]);
     }
     case 'file': {
       const f = state.fileById.get(t.file);
@@ -317,7 +333,7 @@ function groupPath(t) {
 
 /** 用分组路径搭一棵层级树（已应用筛选） */
 function buildTree() {
-  const root = { isGroup: true, name: '全部', path: '', children: [], lookup: new Map() };
+  const root = { isGroup: true, name: T('全部', 'All'), path: '', children: [], lookup: new Map() };
   for (const t of state.bundle.types) {
     if (!matchType(t)) continue;
     const segs = groupPath(t);
@@ -364,9 +380,9 @@ function colorKeyOf(d) {
     const f = t && state.fileById.get(t.file);
     return f ? `file:${f.path}` : '';
   }
-  if (!d.data.isType) return d.data.path || '(全部)';
+  if (!d.data.isType) return d.data.path || T('(全部)', '(all)');
   const parent = d.ancestors()[1];
-  return (!parent || parent.depth === 0) ? '(全部)' : (parent.data.path || '(全部)');
+  return (!parent || parent.depth === 0) ? T('(全部)', '(all)') : (parent.data.path || T('(全部)', '(all)'));
 }
 
 function keyLabel(key) {
@@ -396,9 +412,9 @@ function colorFor(d) {
 
 function renderLegend(target) {
   const root = d3.hierarchy(target).sum((d) => d.value || 0).sort((a, b) => b.value - a.value);
-  const names = { system: '系统 / 模块', dir: '目录', ns: '命名空间', file: '文件', flat: '（未分组）' };
-  const modes = { file: '按文件', group: '按分组', kind: '按类型类别' };
-  $('#legendTitle').textContent = `${names[state.groupBy] || '分组'} · ${modes[state.colorMode] || ''}`;
+  const names = { system: T('系统 / 模块', 'System / module'), dir: T('目录', 'Directory'), ns: T('命名空间', 'Namespace'), file: T('文件', 'File'), flat: T('（未分组）', '(ungrouped)') };
+  const modes = { file: T('按文件', 'By file'), group: T('按分组', 'By group'), kind: T('按类型类别', 'By kind') };
+  $('#legendTitle').textContent = `${names[state.groupBy] || T('分组', 'Group')} · ${modes[state.colorMode] || ''}`;
 
   const map = new Map();
   for (const leaf of root.leaves()) {
@@ -411,19 +427,19 @@ function renderLegend(target) {
     map.set(key, e);
   }
   const items = [...map.values()].sort((a, b) => b.loc - a.loc);
-  if (!items.length) { $('#legend').innerHTML = '<li class="muted">无</li>'; return; }
+  if (!items.length) { $('#legend').innerHTML = '<li class="muted">' + T('无', 'none') + '</li>'; return; }
   $('#legend').innerHTML = items.slice(0, 60).map((g) => `
     <li data-key="${esc(g.key)}" data-id="${g.id ?? ''}" title="${esc(g.key.replace(/^(file|kind):/, ''))}">
       <span class="p"><i style="background:${hashColor(g.key)}"></i>${esc(truncate(keyLabel(g.key), 22))}</span>
       <span class="v">${fmt(g.loc)} · ${g.types}</span>
-    </li>`).join('') + (items.length > 60 ? `<li class="muted">…另有 ${items.length - 60} 项</li>` : '');
+    </li>`).join('') + (items.length > 60 ? T(`<li class="muted">…另有 ${items.length - 60} 项</li>`, `<li class="muted">…${items.length - 60} more</li>`) : '');
   $('#legend').onclick = (e) => {
     const li = e.target.closest('li');
     if (!li || !li.dataset.key) return;
     const key = li.dataset.key;
     if (key.startsWith('kind:')) return;
     if (key.startsWith('file:')) { if (li.dataset.id) select(Number(li.dataset.id)); return; }
-    state.focus = key === '(全部)' ? '' : key;
+    state.focus = key === T('(全部)', '(all)') ? '' : key;
     state.selected = null;
     writeHash(); draw();
   };
@@ -442,8 +458,8 @@ function draw() {
   renderCrumbs();
 
   if (!target) {
-    chart.innerHTML = '<div class="empty">没有符合筛选的类型（放开类别 / 调小最小代码行 / 清空搜索）。</div>';
-    $('#legend').innerHTML = '<li class="muted">无</li>';
+    chart.innerHTML = T('<div class="empty">没有符合筛选的类型（放开类别 / 调小最小代码行 / 清空搜索）。</div>', '<div class="empty">No types match the current filters (loosen the kinds / lower min code lines / clear the search).</div>');
+    $('#legend').innerHTML = '<li class="muted">' + T('无', 'none') + '</li>';
     renderStatus(0, 0, w, h);
     renderInspector();
     return;
@@ -492,7 +508,7 @@ function drawTreemap(target, chart, w, h) {
   svg.append('g').selectAll('text').data(groups.filter((d) => d.x1 - d.x0 > 60 && d.y1 - d.y0 > 16)).join('text')
     .attr('class', 'group-label')
     .attr('x', (d) => d.x0 + 5).attr('y', (d) => d.y0 + 11.5)
-    .text((d) => truncate(`${d.data.name} · ${d.leaves().length}类型 · ${fmt(d.value)}`,
+    .text((d) => truncate(`${d.data.name} · ${d.leaves().length}${T('类型', ' types')} · ${fmt(d.value)}`,
       Math.max(6, Math.floor((d.x1 - d.x0 - 8) / 6.2))));
 
   // 叶子
@@ -572,7 +588,7 @@ function drawTreeList(target, chart) {
       return `<div class="tree-row leaf${sel}" data-id="${d.data.id}" style="padding-left:${indent}px" title="${esc(t.fqn)}${t.doc ? '\n' + esc(t.doc) : ''}">
         <span class="bar" style="width:${barW}%;background:${color}"></span>
         <span class="name">${esc(d.data.name)}</span>
-        <span class="kind" style="color:${KIND_COLOR[d.data.kind] || '#8b949e'}">${esc(d.data.kind)}</span>${isGenerated(t) ? '<span class="kind" style="color:#6e7681">生成物</span>' : ''}
+        <span class="kind" style="color:${KIND_COLOR[d.data.kind] || '#8b949e'}">${esc(d.data.kind)}</span>${isGenerated(t) ? '<span class="kind" style="color:#6e7681">' + T('生成物', 'generated') + '</span>' : ''}
         <span class="num">${fmt(val)}</span></div>`;
     }
     const collapsed = state.collapsed.has(d.data.path);
@@ -580,7 +596,7 @@ function drawTreeList(target, chart) {
       <span class="bar" style="width:${barW}%;background:${color};opacity:.32"></span>
       <span class="caret" data-toggle="1">${depth === 0 ? '⌂' : collapsed ? '▸' : '▾'}</span>
       <span class="name"><i style="background:${color}"></i>${esc(d.data.name)}</span>
-      <span class="kind muted">${d.leaves().length} 类型</span>
+      <span class="kind muted">${d.leaves().length}${T(' 类型', ' types')}</span>
       <span class="num">${fmt(val)}</span></div>`;
   }).join('');
 
@@ -608,7 +624,7 @@ function drawTreeList(target, chart) {
 
 function renderCrumbs() {
   const segs = state.focus ? state.focus.split('⁄') : [];
-  const parts = ['<a data-path="">全部</a>'];
+  const parts = ['<a data-path="">' + T('全部', 'All') + '</a>'];
   const acc = [];
   segs.forEach((s, i) => {
     acc.push(s);
@@ -631,20 +647,20 @@ function renderCrumbs() {
 function updateChartInfo(extra) {
   const el = $('#chartInfo');
   if (!el) return;
-  const modes = { file: '按文件', group: '按分组', kind: '按类型类别' };
-  const groups = { system: '系统', dir: '目录', ns: '命名空间', file: '文件', flat: '平铺' };
-  const depth = ['dir', 'ns'].includes(state.groupBy) ? ` ${state.groupDepth || '全部'}层` : '';
-  let t = `${groups[state.groupBy] || ''}${depth} · 面积=${METRICS[state.metric]} · 着色=${modes[state.colorMode]}`;
+  const modes = { file: T('按文件', 'By file'), group: T('按分组', 'By group'), kind: T('按类型类别', 'By kind') };
+  const groups = { system: T('系统', 'System'), dir: T('目录', 'Directory'), ns: T('命名空间', 'Namespace'), file: T('文件', 'File'), flat: T('平铺', 'Flat') };
+  const depth = ['dir', 'ns'].includes(state.groupBy) ? T(` ${state.groupDepth || '全部'}层`, ` ${state.groupDepth || 'all'} levels`) : '';
+  let t = T(`${groups[state.groupBy] || ''}${depth} · 面积=${METRICS[state.metric]} · 着色=${modes[state.colorMode]}`, `${groups[state.groupBy] || ''}${depth} · area=${METRICS[state.metric]} · color=${modes[state.colorMode]}`);
   if (state.depFocus) {
     t += state.selected != null && state.typeById.has(state.selected)
-      ? ` · 依赖聚焦：仅显示该类型 + 关联 ${depNeighbors().size} 个`
-      : ' · 依赖聚焦：还没选中类型（点一个色块）';
+      ? T(` · 依赖聚焦：仅显示该类型 + 关联 ${depNeighbors().size} 个`, ` · dependency focus: showing this type + ${depNeighbors().size} related`)
+      : T(' · 依赖聚焦：还没选中类型（点一个色块）', ' · dependency focus: no type selected yet (click a block)');
   }
   if (state.selected != null && state.typeById.has(state.selected)) {
     const ty = state.typeById.get(state.selected);
     const ins = (state.ins.get(state.selected) || []).length;
     const outs = (state.outs.get(state.selected) || []).length;
-    t += ` · 选中 ${ty.name}：被引用 ${ins} / 引用 ${outs}（已在地图上高亮）`;
+    t += T(` · 选中 ${ty.name}：被引用 ${ins} / 引用 ${outs}（已在地图上高亮）`, ` · selected ${ty.name}: referenced by ${ins} / references ${outs} (highlighted on the map)`);
   }
   if (extra) t += ` · ${extra}`;
   el.textContent = `　${t}`;
@@ -652,15 +668,15 @@ function updateChartInfo(extra) {
 
 function renderStatus(shown, _total, w = 0, h = 0) {
   const b = state.bundle;
-  const ls = Object.entries(b.languages).map(([id, s]) => `${id} ${fmt(s.loc)} 行`).join(' · ');
+  const ls = Object.entries(b.languages).map(([id, s]) => `${id} ${fmt(s.loc)}${T(' 行', ' lines')}`).join(' · ');
   $('#statusbar').innerHTML = [
-    `<span>显示 <b style="color:var(--text)">${fmt(shown)}</b> ${state.view === 'graph' ? '个节点' : state.view === 'matrix' ? '个分组' : '个类型'}</span>`,
-    `<span>图区 ${w}×${h}</span>`,
+    T(`<span>显示 <b style="color:var(--text)">${fmt(shown)}</b> ${state.view === 'graph' ? '个节点' : state.view === 'matrix' ? '个分组' : '个类型'}</span>`, `<span>showing <b style="color:var(--text)">${fmt(shown)}</b> ${state.view === 'graph' ? 'nodes' : state.view === 'matrix' ? 'groups' : 'types'}</span>`),
+    T(`<span>图区 ${w}×${h}</span>`, `<span>canvas ${w}×${h}</span>`),
     `<span>${ls}</span>`,
-    `<span>未解析引用 unknown ${fmt(b.unresolved.unknown)} · ambiguous ${fmt(b.unresolved.ambiguous)}</span>`,
-    b.totals.parseErrors ? `<span style="color:var(--warn)">解析异常 ${fmt(b.totals.parseErrors)} 处（这些文件的数据可能不全）</span>` : '',
-    `<span>扫描耗时 ${(b.source.scanMs / 1000).toFixed(2)}s</span>`,
-    `<span>点色块看详情 · 悬停看依赖高亮 · 点分组框只看这一组</span>`,
+    T(`<span>未解析引用 unknown ${fmt(b.unresolved.unknown)} · ambiguous ${fmt(b.unresolved.ambiguous)}</span>`, `<span>unresolved unknown ${fmt(b.unresolved.unknown)} · ambiguous ${fmt(b.unresolved.ambiguous)}</span>`),
+    b.totals.parseErrors ? T(`<span style="color:var(--warn)">解析异常 ${fmt(b.totals.parseErrors)} 处（这些文件的数据可能不全）</span>`, `<span style="color:var(--warn)">parse errors ${fmt(b.totals.parseErrors)} spots (data in those files may be incomplete)</span>`) : '',
+    T(`<span>扫描耗时 ${(b.source.scanMs / 1000).toFixed(2)}s</span>`, `<span>scan took ${(b.source.scanMs / 1000).toFixed(2)}s</span>`),
+    T(`<span>点色块看详情 · 悬停看依赖高亮 · 点分组框只看这一组</span>`, `<span>click a block for detail · hover to highlight dependencies · click a group box to focus it</span>`),
   ].join('');
 }
 
@@ -730,7 +746,7 @@ function applyEmphasis(focusId) {
     .attr('cx', (l) => l.tx).attr('cy', (l) => l.ty).attr('r', 2.5)
     .attr('fill', (l) => (l.kind === 'inherit' ? '#d29922' : '#58a6ff'));
 
-  if (outside) updateChartInfo(`另有 ${outside} 条边指向当前分组之外`);
+  if (outside) updateChartInfo(T(`另有 ${outside} 条边指向当前分组之外`, `${outside} more edges point outside the current group`));
   else updateChartInfo();
 }
 
@@ -762,7 +778,7 @@ function showTip(ev, d) {
   tip.classList.remove('hidden');
   tip.innerHTML = `<b>${esc(t.name)}</b> <span class="muted">${esc(t.kind)}${t.system ? ' · ' + esc(sysLabel(t.system)) : ''}</span>
 ${esc(f.path)}:${t.line}
-代码 ${fmt(t.code)} 行 · 复杂度 ${t.complexity} · fanIn ${t.fanIn} / fanOut ${t.fanOut}${t.doc ? `\n\n${esc(t.doc)}` : ''}`;
+${T(`代码 ${fmt(t.code)} 行`, `${fmt(t.code)} lines of code`)}${T(' · 复杂度 ', ' · complexity ')}${t.complexity} · fanIn ${t.fanIn} / fanOut ${t.fanOut}${t.doc ? `\n\n${esc(t.doc)}` : ''}`;
   tip.style.left = Math.min(ev.clientX + 14, innerWidth - 400) + 'px';
   tip.style.top = Math.min(ev.clientY + 14, innerHeight - 90) + 'px';
 }
@@ -850,7 +866,7 @@ function drawGraph(chart, w, h) {
     for (const e of edges) { linked.add(e.from); linked.add(e.to); }
     const kept = nodes.filter((t) => linked.has(t.id));
     if (kept.length < nodes.length) {
-      note = `已隐藏 ${nodes.length - kept.length} 个没有依赖关系的类型`;
+      note = T(`已隐藏 ${nodes.length - kept.length} 个没有依赖关系的类型`, `hid ${nodes.length - kept.length} types with no dependencies`);
       nodes = kept;
     }
   }
@@ -863,9 +879,9 @@ function drawGraph(chart, w, h) {
     nodes = types.slice().sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0)).slice(0, MAX);
     const keep = new Set(nodes.map((t) => t.id));
     edges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
-    note = `${note}${note ? ' · ' : ''}节点太多，只画连接最多的前 ${MAX} 个`;
+    note = `${note}${note ? ' · ' : ''}${T('节点太多，只画连接最多的前 ', 'too many nodes — drawing only the top ')}${MAX}${T(' 个', ' by connections')}`;
   }
-  if (!nodes.length) { chart.innerHTML = '<div class="empty">没有符合条件的类型。</div>'; return 0; }
+  if (!nodes.length) { chart.innerHTML = T('<div class="empty">没有符合条件的类型。</div>', '<div class="empty">No types match.</div>'); return 0; }
 
   const svg = d3.select(chart).append('svg').attr('width', w).attr('height', h);
   const root = svg.append('g');
@@ -931,7 +947,7 @@ function drawGraph(chart, w, h) {
       .on('drag', (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
       .on('end', (ev, d) => { graphSim.alphaTarget(0); d.fx = null; d.fy = null; }));
 
-  updateChartInfo(note || `${nodes.length} 个节点 · ${edges.length} 条边（拖动可调位、滚轮缩放、点节点看详情）`);
+  updateChartInfo(note || T(`${nodes.length} 个节点 · ${edges.length} 条边（拖动可调位、滚轮缩放、点节点看详情）`, `${nodes.length} nodes · ${edges.length} edges (drag to move, wheel to zoom, click a node for detail)`));
   return nodes.length;
 }
 
@@ -946,8 +962,8 @@ function drawMatrix(target, chart, w, h) {
     groups.get(key).ids.push(t.id);
   }
   let list = [...groups.values()].sort((a, b) => b.ids.length - a.ids.length);
-  if (!list.length) { chart.innerHTML = '<div class="empty">没有符合筛选的类型。</div>'; return 0; }
-  if (list.length > MAXG) list = list.slice(0, MAXG).concat([{ key: '(其他)', color: '#484f58', ids: list.slice(MAXG).flatMap((g) => g.ids) }]);
+  if (!list.length) { chart.innerHTML = T('<div class="empty">没有符合筛选的类型。</div>', '<div class="empty">No types match the filters.</div>'); return 0; }
+  if (list.length > MAXG) list = list.slice(0, MAXG).concat([{ key: T('(其他)', '(other)'), color: '#484f58', ids: list.slice(MAXG).flatMap((g) => g.ids) }]);
   const n = list.length;
   const idx = new Map(list.map((g, i) => [g.key, i]));
   const groupOf = new Map();
@@ -975,7 +991,7 @@ function drawMatrix(target, chart, w, h) {
         .style('cursor', v ? 'pointer' : 'default')
         .on('mouseenter', (ev) => {
           if (!v) return;
-          showTipText(ev, `${list[i].key}\n→ ${list[j].key}\n${v} 条依赖${i === j ? '（组内）' : ''}`);
+          showTipText(ev, T(`${list[i].key}\n→ ${list[j].key}\n${v} 条依赖${i === j ? '（组内）' : ''}`, `${list[i].key}\n→ ${list[j].key}\n${v} dependencies${i === j ? ' (within group)' : ''}`));
         })
         .on('mousemove', moveTip)
         .on('mouseleave', hideTip);
@@ -991,8 +1007,8 @@ function drawMatrix(target, chart, w, h) {
   let best = { v: 0, i: 0, j: 0 };
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (i !== j && m[i * n + j] > best.v) best = { v: m[i * n + j], i, j };
   const info = best.v
-    ? `耦合最紧：${list[best.i].key.replace(/\u2044/g, '/')} → ${list[best.j].key.replace(/\u2044/g, '/')}（${best.v} 条）· 对角线=组内耦合 · 悬停看具体数量`
-    : '分组之间暂时没有依赖边 · 悬停看具体数量';
+    ? T(`耦合最紧：${list[best.i].key.replace(/\u2044/g, '/')} → ${list[best.j].key.replace(/\u2044/g, '/')}（${best.v} 条）· 对角线=组内耦合 · 悬停看具体数量`, `tightest coupling: ${list[best.i].key.replace(/\u2044/g, '/')} → ${list[best.j].key.replace(/\u2044/g, '/')} (${best.v}) · diagonal = within group · hover for numbers`)
+    : T('分组之间暂时没有依赖边 · 悬停看具体数量', 'no dependency edges between groups yet · hover for numbers');
   updateChartInfo(info);
   return n;
 }
@@ -1002,9 +1018,9 @@ function renderInspector() {
   const id = state.selected;
   if (id == null || !state.typeById.has(id)) {
     const b = state.bundle;
-    host.innerHTML = `<div class="muted">点一个色块看详情。
+    host.innerHTML = `<div class="muted">${T('点一个色块看详情。', 'Click a block for details.')}
 
-这个 bundle 里有 <b>${fmt(b.totals.types)}</b> 个类型、<b>${fmt(b.stats.namespaces)}</b> 个命名空间、<b>${fmt(b.totals.edges)}</b> 条依赖边${b.facets?.systems?.length ? `，分成 <b>${b.facets.systems.length}</b> 个系统` : ''}。</div>`;
+${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${T(' 个类型、', ' types, ')}<b>${fmt(b.stats.namespaces)}</b>${T(' 个命名空间、', ' namespaces, ')}<b>${fmt(b.totals.edges)}</b>${T(' 条依赖边', ' dependency edges')}${b.facets?.systems?.length ? T(`，分成 <b>${b.facets.systems.length}</b> 个系统`, `, split into <b>${b.facets.systems.length}</b> systems`) : ''}${T('。', '.')}</div>`;
     return;
   }
   const t = state.typeById.get(id);
@@ -1017,29 +1033,29 @@ function renderInspector() {
     <div class="insp-title">${esc(t.name)}</div>
     <div class="insp-sub">${esc(t.fqn)}
       <span class="badge" style="border-color:${KIND_COLOR[t.kind] || '#8b949e'};color:${KIND_COLOR[t.kind] || '#8b949e'}">${esc(t.kind)}</span>
-      ${t.system ? `<span class="badge" title="分组规则：${esc(t.systemRule || '—')}">${esc(sysLabel(t.system))}</span>` : ''}
-      ${isGenerated(t) ? '<span class="badge" style="border-color:#6e7681;color:#8b949e">编译器生成物</span>' : ''}</div>
-    ${t.doc ? `<div class="doc">${esc(t.doc)}</div>` : '<div class="doc muted">（源码里没有注释说明）</div>'}
-    ${f.errors ? `<div class="doc warn-doc">这个文件有 ${f.errors} 处语法树解析异常，此类型的数据可能不全。</div>` : ''}
+      ${t.system ? `<span class="badge" title="${T('分组规则：', 'grouping rule: ')}${esc(t.systemRule || '—')}">${esc(sysLabel(t.system))}</span>` : ''}
+      ${isGenerated(t) ? '<span class="badge" style="border-color:#6e7681;color:#8b949e">' + T('编译器生成物', 'compiler-generated') + '</span>' : ''}</div>
+    ${t.doc ? `<div class="doc">${esc(t.doc)}</div>` : T('<div class="doc muted">（源码里没有注释说明）</div>', '<div class="doc muted">(no doc comment in the source)</div>')}
+    ${f.errors ? T(`<div class="doc warn-doc">这个文件有 ${f.errors} 处语法树解析异常，此类型的数据可能不全。</div>`, `<div class="doc warn-doc">this file has ${f.errors} parse errors — data for this type may be incomplete.</div>`) : ''}
     <div class="kv">
-      <dt>文件</dt><dd>${esc(f.path)}:${t.line}
-        <button class="mini" id="copyPath">复制</button></dd>
-      <dt>行数</dt><dd>${fmt(t.loc)}（代码 ${fmt(t.code)} / 注释 ${fmt(t.comment)}）</dd>
-      <dt>复杂度</dt><dd>${t.complexity} <span class="muted">估算</span></dd>
-      <dt>成员</dt><dd>${memberRows.length ? memberRows.map(([k, v]) => `${esc(k)} ${v}`).join(' · ') : '—'}</dd>
-      <dt>依赖</dt><dd>fanIn ${t.fanIn} · fanOut ${t.fanOut}</dd>
-      <dt>基类</dt><dd>${t.bases.length ? t.bases.map(esc).join(', ') : '—'}</dd>
+      <dt>${T('文件', 'File')}</dt><dd>${esc(f.path)}:${t.line}
+        <button class="mini" id="copyPath">${T('复制', 'Copy')}</button></dd>
+      <dt>${T('行数', 'Lines')}</dt><dd>${fmt(t.loc)}${T('（代码 ', ' (code ')}${fmt(t.code)}${T(' / 注释 ', ' / comment ')}${fmt(t.comment)}${T('）', ')')}</dd>
+      <dt>${T('复杂度', 'Complexity')}</dt><dd>${t.complexity} <span class="muted">${T('估算', 'estimated')}</span></dd>
+      <dt>${T('成员', 'Members')}</dt><dd>${memberRows.length ? memberRows.map(([k, v]) => `${esc(k)} ${v}`).join(' · ') : '—'}</dd>
+      <dt>${T('依赖', 'Dependencies')}</dt><dd>fanIn ${t.fanIn} · fanOut ${t.fanOut}</dd>
+      <dt>${T('基类', 'Base types')}</dt><dd>${t.bases.length ? t.bases.map(esc).join(', ') : '—'}</dd>
     </div>
-    ${depsSection('被谁引用（fanIn）', ins, 'from')}
-    ${depsSection('引用了谁（fanOut）', outs, 'to')}
-    ${t.memberList.length ? `<div class="sect"><h4>成员（前 ${Math.min(t.memberList.length, 40)}）</h4>
+    ${depsSection(T('被谁引用（fanIn）', 'Referenced by (fanIn)'), ins, 'from')}
+    ${depsSection(T('引用了谁（fanOut）', 'References (fanOut)'), outs, 'to')}
+    ${t.memberList.length ? `<div class="sect"><h4>${T('成员（前 ', 'Members (first ')}${Math.min(t.memberList.length, 40)}${T('）', ')')}</h4>
       ${t.memberList.slice(0, 40).map((m) => `<div class="dep${state.q && (m.n || '').toLowerCase().includes(state.q) ? ' hit' : ''}" title="${esc(m.d || '')}"><span class="n">${esc(m.n)}</span><span class="w">${esc(m.k)} · ${m.l}</span></div>${m.d ? `<div class="m-doc">${esc(truncate(m.d, 110))}</div>` : ''}`).join('')}</div>` : ''}
   `;
   $('#copyPath')?.addEventListener('click', () => {
     navigator.clipboard?.writeText(`${f.path}:${t.line}`);
     const el = $('#copyPath');
-    el.textContent = '已复制';
-    setTimeout(() => { el.textContent = '复制'; }, 1200);
+    el.textContent = T('已复制', 'Copied');
+    setTimeout(() => { el.textContent = T('复制', 'Copy'); }, 1200);
   });
   host.querySelectorAll('.dep[data-id]').forEach((el) => {
     el.addEventListener('click', () => select(Number(el.dataset.id)));
@@ -1047,12 +1063,12 @@ function renderInspector() {
 }
 
 function depsSection(title, list, dir) {
-  if (!list.length) return `<div class="sect"><h4>${title}</h4><div class="muted">无</div></div>`;
+  if (!list.length) return `<div class="sect"><h4>${title}</h4><div class="muted">${T('无', 'none')}</div></div>`;
   return `<div class="sect"><h4>${title}（${list.length}）</h4>
     ${list.slice(0, 30).map((e) => {
       const o = state.typeById.get(e[dir]);
       if (!o) return '';
       return `<div class="dep ${e.kind === 'inherit' ? 'inherit' : ''}" data-id="${o.id}" title="${esc(o.fqn)}">
-        <span class="n">${esc(o.name)}</span><span class="w">${e.kind === 'inherit' ? '继承 · ' : ''}${e.w}</span></div>`;
+        <span class="n">${esc(o.name)}</span><span class="w">${e.kind === 'inherit' ? T('继承 · ', 'inherits · ') : ''}${e.w}</span></div>`;
     }).join('')}</div>`;
 }
