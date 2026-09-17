@@ -78,6 +78,10 @@ function printScanReport(b, out) {
   console.log(`  未解析引用 unknown ${nf(b.unresolved.unknown)} / ambiguous ${nf(b.unresolved.ambiguous)}`);
   if (b.totals.parseErrors) console.log(`  解析异常  ${nf(b.totals.parseErrors)} 处 / ${nf(b.totals.parseErrorFiles)} 个文件（语法树没解析干净，这些文件的数据可能不全）`);
   if (b.source.failures.length) console.log(`  解析失败  ${b.source.failures.length} 个文件`);
+  if (b.source.failedLanguages && b.source.failedLanguages.length) {
+    const fl = b.source.failedLanguages.map((x) => x.lang).join('、');
+    console.log(`  ⚠ 语言未解析  ${fl}（这一门这次没进地图：${b.source.failedLanguages[0].reason.slice(0, 60)}）`);
+  }
   console.log(`\n  输出      ${out}  ${bytes(fs.statSync(out).size)}\n`);
 
   const hubs = [...b.types].sort((a, c) => c.fanIn - a.fanIn).slice(0, 5);

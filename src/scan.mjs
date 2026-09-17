@@ -1102,6 +1102,7 @@ export async function scan(opts) {
   }
 
   const freshParts = [];
+  const failedLanguages = [];   // 整门语言没抽出来（子进程崩了等）——要记进 bundle，不能只飘一行日志
   if (freshFiles.length) {
     const langsWithFiles = [...new Set(freshFiles.map((f) => f.lang.id))];
     console.log(`  开始解析：${freshFiles.length} 个文件（${langsWithFiles.join(', ')}）`);
@@ -1114,7 +1115,13 @@ export async function scan(opts) {
     let n = 0;
     for (const langId of langsWithFiles) {
       const emit = path.join(tmp, `part-${n++}.json`);
-      const r = spawnSync(NODE, [CLI_PATH, '__extract', '--work', work, '--lang', langId, '--emit', emit], {
+      const r = spawnSync(NODE, [
+        // 我们的语法树遍历是递归的，深度 = 文件嵌套深度；V8 默认栈实测在约 3000 层就爆
+        // （Maximum call stack size exceeded），而生成代码 / 极端嵌套的配置完全能到这个量级。
+        // 加大到 8000 KB（实测过 1 万层）。再深照样会爆——但那时会记 failedLanguages、汇总里也会明说。
+        '--stack-size=8000',
+        CLI_PATH, '__extract', '--work', work, '--lang', langId, '--emit', emit,
+      ], {
         stdio: ['ignore', 'inherit', 'pipe'],   // 进度直接透传，stderr 收起来（免得崩溃刷屏）
         timeout: 30 * 60 * 1000,
         windowsHide: true,
@@ -1126,6 +1133,7 @@ export async function scan(opts) {
       if (!ok) {
         const tail = String(r.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
         console.log(`  ⚠ ${langId} 没解析成功（子进程退出码 ${r.status}）—— 这门语言这次不进地图。${tail ? `子进程最后一句：${tail.slice(0, 200)}` : ''}`);
+        failedLanguages.push({ lang: langId, files: (byLang.get(langId) || []).length, reason: tail || `子进程退出码 ${r.status}` });
       }
       // 注意：子进程是 SIGKILL 硬退的（绕开退出阶段的 libuv 断言），所以**成功时退出码也是 1**。
       // 不要用“退出码非 0”去判定失败，也不要据此打日志（否则每门语言都会刷一行）——成败只看 emit。
@@ -1299,6 +1307,9 @@ export async function scan(opts) {
       },
       skipped,
       failures,
+      // 整门语言没抽出来（如子进程崩了）——以前只在终端飘一行 ⚠，bundle 里什么都没有，
+      // 结果"整门语言消失"看起来像"扫完了、就是空的"（实测：3000 层嵌套触发爆栈）。
+      failedLanguages,
       ingest: opts.ingest || null,
     },
     languages: langStats,
