@@ -536,9 +536,9 @@ so the whole file does not vanish from the map; their members (functions/variabl
    mislinked (the UI shows the unknown / ambiguous counts);
 4. **Not read**: binary assets, images, config file contents, runtime behaviour, git history.
 
-## Roadmap
+## Features (everything listed here is shipped — no wishlist)
 
-(This README only covers the feature set itself.)
+Every item below is in the current build; what changed in each version lives in [CHANGELOG.md](CHANGELOG.md).
 
 - [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
 - [x] Grouping layer: system rules (facets config) + directory / namespace / flat
@@ -550,8 +550,12 @@ so the whole file does not vanish from the map; their members (functions/variabl
 - [x] Packaging: two single-file exes — full (bundled Node) / lite (system Node), no installer
 - [x] First-run wizard (pick project → draft grouping rules → pick languages → save and scan; no wizard next time)
 - [x] Incremental scanning (`--incremental`, re-parses changed files only; "Incremental" checkbox in the launcher)
+- [x] **Scanning without source**: `.dll / .exe` (including .NET single-file publishes) via the launcher's built-in decompiler · `.jar` via the bundled trimmed JRE + cfr — the full build needs nothing installed
+- [x] **Parser upgrade**: web-tree-sitter 0.20 → 0.27 with 105 grammar packages (one grammar used to cost 150–180 MB; now ~11 MB)
+- [x] **Honesty as a feature**: unknown / ambiguous edge counts, files that are not UTF-8, unsupported languages and "supported but out of the scanned range" files are each reported separately — nothing is dropped silently
+- [x] Headless self-check and diagnostics in the same exe (`--headless --path <dir> --log <file>`, `--list-langs`, `draft-facets`) — useful when somebody reports a problem
 - [x] AI interface hardening: one-click MCP config copy · `map(budget)` skeleton export · `impact` blast radius (multi-hop + honest caveats)
-- [x] UI language: 中文 / English across the launcher, the engine's output, all MCP tools and the web map (switching needs no re-scan)
+- [x] UI language: 中文 / English across the launcher, the engine's output, all MCP tools and the web map (switching needs no re-scan) — the docs come in both languages too ([README_CN.md](README_CN.md) · [USAGE.md](USAGE.md))
 
 ## License
 
