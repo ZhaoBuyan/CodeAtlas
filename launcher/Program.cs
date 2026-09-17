@@ -606,12 +606,13 @@ namespace CodeAtlas
         {
             foreach (var (c, zh, en) in _relang) c.Text = L.T(zh, en);
             foreach (var (c, zh, en) in _retip) _tips.SetToolTip(c, L.T(zh, en));
-            _inc.Text = L.T("增量", "Incremental");   // 这几个不在登记表里，手动刷
-            _autoSwitch.Text = L.T("跑完自动切到地图", "Switch to map when done");
-            _ui.Text = UiLangButtonText();
             _langs.Text = LangsButtonText();
+            _ui.Text = UiLangButtonText();
             RefreshToggleText();
             _status.Text = L.T("就绪", "Ready");
+            // 必须重排：按钮宽度是按文字算的（PreferredSize），英文文案更长——
+            // 只改 Text 不重排就会出现“Incremental 被下一个按钮压住 / 右边按钮被挤出窗口”（实测截图证实）。
+            ApplyLayout();
         }
 
         /// <summary>「看日志 / 看地图」按钮的字：随当前视图变</summary>
@@ -678,20 +679,20 @@ namespace CodeAtlas
             SetTip(_toggle, "在地图与运行日志之间切换", "Toggle between the map and the run log");
             SetTip(_browser, "用系统浏览器另外开一个窗口看（方便左右对照）", "Open the map in your system browser (handy for side-by-side)");
 
-            SetText(_hint, "提示：源码目录直接扫，.dll / .exe / .jar 先反编译；也可以直接把文件夹拖进来", "Tip: source directories are scanned directly; .dll / .exe / .jar are decompiled first. You can also drag a folder in.");
+            SetText(_hint, "提示：源码目录直接扫，.dll / .exe / .jar 先反编译；也可以直接把文件夹拖进来", "Tip: source dirs are scanned directly; .dll / .exe / .jar get decompiled first.");
             _hint.ForeColor = Dim;
             _hint.AutoSize = false;
             _hint.AutoEllipsis = true;
             _hint.TextAlign = ContentAlignment.MiddleLeft;
 
-            SetText(_autoSwitch, "跑完自动切到地图", "Switch to map when done");
+            SetText(_autoSwitch, "跑完自动切到地图", "Auto-switch to map");
             _autoSwitch.Checked = true;
             _autoSwitch.ForeColor = Fg;
             _autoSwitch.AutoSize = true;
             _autoSwitch.Click += (s, e) => { if (_autoSwitch.Checked && _url != null) ShowMap(); };
 
             // 增量扫描（默认关）：只重新解析改过的文件；跨文件索引仍会整体重算
-            _inc.Text = L.T("增量", "Incremental");
+            SetText(_inc, "增量", "Incremental");
             _inc.Checked = _cfg.Incremental;
             _inc.ForeColor = Fg;
             _inc.AutoSize = true;
@@ -715,7 +716,7 @@ namespace CodeAtlas
             Style(_toggle);
             SetBtn(_toggle, false);
             _toggle.Click += (s, e) => { if (IsOn(_toggle)) ToggleView(); };
-            SetText(_browser, "在浏览器打开", "Open in browser");
+            SetText(_browser, "在浏览器打开", "Browser");
             Style(_browser);
             SetBtn(_browser, false);
             _browser.Click += (s, e) => { if (_url != null && IsOn(_browser)) OpenUrl(_url); };
@@ -728,7 +729,7 @@ namespace CodeAtlas
             _tips.SetToolTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
-            SetText(_wiz, "项目设置…", "Project setup…");
+            SetText(_wiz, "项目设置…", "Setup…");
             Style(_wiz);
             SetBtn(_wiz, true);
             _wiz.Click += (s, e) => { if (IsOn(_wiz)) OpenWizard(_path.Text.Trim().Trim('"')); };
@@ -1081,9 +1082,9 @@ namespace CodeAtlas
 
         private string LangsButtonText()
         {
-            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("语言：自动", "Languages: auto");
+            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("语言：自动", "Langs: auto");
             int n = _cfg.Langs.Split(',').Count((s) => s.Trim().Length > 0);
-            return L.En ? $"Languages: {n}" : $"语言：{n} 种";
+            return L.En ? $"Langs: {n}" : $"语言：{n} 种";
         }
 
         /// <summary>日志 / 状态区里的人类可读描述（不糊弄：没配就说清楚默认到底扫什么）</summary>
