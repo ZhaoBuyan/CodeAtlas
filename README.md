@@ -94,7 +94,7 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # MCP server for AI cli
 - **Two convenient switches**: the toolbar "**Incremental**" checkbox (off by default = full scan every time;
   on = only re-parse changed files) and the "**MCP config**" button (copies the "let an AI read this project"
   configuration to your clipboard — paste it into your client, see
-  [使用说明.md](使用说明.md) section 5).
+  [USAGE.md](USAGE.md) section 5).
   The language list comes from the engine (`node src/cli.mjs langs`); the launcher does not keep its own copy —
   adding a language only touches `languages.mjs`.
   Selected languages are stored in `launcher.config.json` under `Langs` (comma separated; empty = auto).
@@ -202,7 +202,7 @@ language version again, add `preprocess: 'xxx'` to that profile) — right now n
 ## For AI: the MCP query layer
 
 > **Setup steps (which button, where each client pastes the config, when to use each of the 8 tools,
-> troubleshooting) are in [使用说明.md](使用说明.md) section 5.**
+> troubleshooting) are in [USAGE.md](USAGE.md) section 5 (Chinese: [使用说明.md](使用说明.md)).**
 > Lazy path: scan once in the launcher → click "MCP config" → paste into your AI client.
 
 After a scan, the AI does not need the source or the bundle in its context — it asks for small slices on demand:
