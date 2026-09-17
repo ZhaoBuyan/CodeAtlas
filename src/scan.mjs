@@ -812,7 +812,8 @@ async function extractFiles(files) {
   let parsedFiles = 0;
   let lastReportAt = startedAt;
   const langsUsed = [...new Set(files.map((f) => f.lang.id))];
-  console.log(t(`  开始解析：${totalFiles} 个文件（${langsUsed.join(', ')}）`, `  Parsing ${totalFiles} files (${langsUsed.join(', ')})`));
+  // 不再在这里打“开始解析”：父进程已经报过总数（单语言时两行一模一样，看着像重复）
+  // console.log(t(`  开始解析：${totalFiles} 个文件（${langsUsed.join(', ')}）`, `  Parsing ${totalFiles} files (${langsUsed.join(', ')})`));
 
   for (const f of files) {
     let rawSource;

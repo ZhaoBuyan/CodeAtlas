@@ -63,12 +63,12 @@ namespace CodeAtlas
             string outDir = ParseOut(args);
             if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(outDir))
             {
-                Console.Error.WriteLine("用法：CodeAtlas.exe --decompile <程序集.dll|.exe> -o <输出目录>");
+                Console.Error.WriteLine(L.T("用法：CodeAtlas.exe --decompile <程序集.dll|.exe> -o <输出目录>", "Usage: CodeAtlas.exe --decompile <assembly.dll|.exe> -o <output dir>"));
                 return 2;
             }
             if (!File.Exists(input) && !Directory.Exists(input))
             {
-                Console.Error.WriteLine("找不到输入：" + input);
+                Console.Error.WriteLine(L.T("找不到输入：", "Input not found: ") + input);
                 return 2;
             }
 
@@ -78,7 +78,7 @@ namespace CodeAtlas
                 : Directory.GetFiles(input, "*.dll").Take(5).ToList();
             if (assemblies.Count == 0)
             {
-                Console.Error.WriteLine("这个目录里没有 .dll：" + input);
+                Console.Error.WriteLine(L.T("这个目录里没有 .dll：", "No .dll in this directory: ") + input);
                 return 2;
             }
 
@@ -94,16 +94,16 @@ namespace CodeAtlas
                     total += n;
                     failed += bad;
                     if (n == 0 && bad > 0)
-                        Console.Error.WriteLine("反编译失败：" + Path.GetFileName(asm));
+                        Console.Error.WriteLine(L.T("反编译失败：", "Decompile failed: ") + Path.GetFileName(asm));
                 }
                 catch (Exception ex)
                 {
                     // 单个程序集出问题不能连累其他（ingest 里还会继续试别的）
-                    Console.Error.WriteLine($"反编译失败（跳过）：{Path.GetFileName(asm)} — {ex.Message.Split('\n')[0]}");
+                    Console.Error.WriteLine(L.T($"反编译失败（跳过）：{Path.GetFileName(asm)} — {ex.Message.Split('\n')[0]}", $"Decompile failed (skipped): {Path.GetFileName(asm)} — {ex.Message.Split('\n')[0]}"));
                 }
             }
 
-            Console.WriteLine($"内置反编译器：{total} 个类型 → {outDir}" + (failed > 0 ? $"（{failed} 个类型反编译失败，已跳过）" : ""));
+            Console.WriteLine(L.T($"内置反编译器：{total} 个类型 → {outDir}", $"Built-in decompiler: {total} types → {outDir}") + (failed > 0 ? L.T($"（{failed} 个类型反编译失败，已跳过）", $" ({failed} types failed to decompile and were skipped)") : ""));
             return total > 0 ? 0 : 1;
         }
 
@@ -210,25 +210,25 @@ namespace CodeAtlas
             string outDir = ParseOut(args);
             if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(outDir))
             {
-                Console.Error.WriteLine("用法：CodeAtlas.exe --extract-bundle <.NET 单文件发行版.exe> -o <输出目录>");
+                Console.Error.WriteLine(L.T("用法：CodeAtlas.exe --extract-bundle <.NET 单文件发行版.exe> -o <输出目录>", "Usage: CodeAtlas.exe --extract-bundle <.NET single-file build.exe> -o <output dir>"));
                 return 2;
             }
             if (!File.Exists(input))
             {
-                Console.Error.WriteLine("找不到文件：" + input);
+                Console.Error.WriteLine(L.T("找不到文件：", "File not found: ") + input);
                 return 2;
             }
 
             var reader = new ExecutableReader(input);
             if (!reader.IsSingleFile)
             {
-                Console.Error.WriteLine("这不是 .NET 单文件发行版（没有 bundle 清单）：" + Path.GetFileName(input));
+                Console.Error.WriteLine(L.T("这不是 .NET 单文件发行版（没有 bundle 清单）：", "Not a .NET single-file build (no bundle manifest): ") + Path.GetFileName(input));
                 return 1;
             }
             Directory.CreateDirectory(outDir);
             RunAsync(reader.ExtractToDirectoryAsync(outDir));
             int n = Directory.GetFiles(outDir, "*.dll", SearchOption.AllDirectories).Length;
-            Console.WriteLine($"内置解包器：{Path.GetFileName(input)} → {n} 个 dll");
+            Console.WriteLine(L.T($"内置解包器：{Path.GetFileName(input)} → {n} 个 dll", $"Built-in unpacker: {Path.GetFileName(input)} → {n} dlls"));
             return 0;
         }
 

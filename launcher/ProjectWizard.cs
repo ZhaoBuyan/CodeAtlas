@@ -124,7 +124,7 @@ namespace CodeAtlas
             _stepHint.ForeColor = Palette.Dim;
             _stepHint.AutoSize = false;
 
-            var head = new Panel { Dock = DockStyle.Top, BackColor = Palette.Bg, Height = 74 };
+            var head = new Panel { Dock = DockStyle.Top, BackColor = Palette.Bg, Height = 90 };
             head.Controls.AddRange(new Control[] { _stepTitle, _stepHint });
 
             BuildStep1();
@@ -146,7 +146,7 @@ namespace CodeAtlas
             var foot = new Panel { Dock = DockStyle.Bottom, BackColor = Palette.Bg, Height = 56 };
             foot.Controls.Add(left);
             foot.Controls.Add(right);
-            foot.Controls.Add(new Label { Text = L.T("首次配置只做一次；以后打开这个项目就直接扫描。", "Set up once; later scans just run."), ForeColor = Palette.Dim, AutoSize = true, Left = 16, Top = 18 });
+            foot.Controls.Add(new Label { Text = L.T("首次配置只做一次；以后打开这个项目就直接扫描。", "You set a project up once; after that it scans straight away."), ForeColor = Palette.Dim, AutoSize = true, Left = 16, Top = 18 });
 
             Controls.Add(_body);     // Fill 先加
             Controls.Add(head);
@@ -162,23 +162,25 @@ namespace CodeAtlas
             base.OnLoad(e);
             float k = DeviceDpi / 96f;
             int pad = (int)(18 * k);
-            ClientSize = new Size(Math.Max((int)(640 * k), ClientSize.Width), Math.Max((int)(480 * k), ClientSize.Height));
-            ((Panel)_stepTitle.Parent).Height = (int)(84 * k);
+            ClientSize = new Size(Math.Max((int)(760 * k), ClientSize.Width), Math.Max((int)(500 * k), ClientSize.Height));
+            // 英文比中文长：默认宽一点，并把最小尺寸定住，免得缩小后说明文字撞到一起
+            MinimumSize = new Size((int)(780 * k), (int)(500 * k));
+            ((Panel)_stepTitle.Parent).Height = (int)(100 * k);
             _stepTitle.Location = new Point(pad, (int)(12 * k));
-            _stepHint.SetBounds(pad, (int)(38 * k), ((Panel)_stepTitle.Parent).ClientSize.Width - pad * 2, (int)(42 * k));
+            _stepHint.SetBounds(pad, (int)(38 * k), ((Panel)_stepTitle.Parent).ClientSize.Width - pad * 2, (int)(58 * k));
             ((Panel)_prev.Parent.Parent).Height = (int)(56 * k);
             foreach (var b in new[] { _next, _prev, _cancel })
                 b.Margin = new Padding(0, (int)(12 * k), (int)(10 * k), 0);
             // 第三步的排版
             int w = _body.ClientSize.Width - pad * 2;
-            _list.SetBounds(pad, (int)(64 * k), w, Math.Max(120, _body.ClientSize.Height - (int)(190 * k)));
-            _draftInfo.SetBounds(pad, (int)(64 * k) + _list.Height + (int)(8 * k), w, (int)(40 * k));
+            _list.SetBounds(pad, (int)(108 * k), w, Math.Max(120, _body.ClientSize.Height - (int)(234 * k)));
+            _draftInfo.SetBounds(pad, (int)(108 * k) + _list.Height + (int)(8 * k), w, (int)(40 * k));
             _intoProject.Location = new Point(pad, _draftInfo.Bottom + (int)(4 * k));
             int bx = _draftInfo.Right;
-            _recolor.Location = new Point(bx - _recolor.PreferredSize.Width, (int)(20 * k));
-            _rename.Location = new Point(_recolor.Left - _rename.PreferredSize.Width - (int)(8 * k), (int)(20 * k));
-            _byNs.Location = new Point(_redraft.Left - _byNs.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
-            _redraft.Location = new Point(_rename.Left - _redraft.PreferredSize.Width - (int)(8 * k), (int)(20 * k));
+            _recolor.Location = new Point(bx - _recolor.PreferredSize.Width, (int)(56 * k));
+            _rename.Location = new Point(_recolor.Left - _rename.PreferredSize.Width - (int)(8 * k), (int)(56 * k));
+            _byNs.Location = new Point(_redraft.Left - _byNs.PreferredSize.Width - (int)(8 * k), (int)(56 * k));
+            _redraft.Location = new Point(_rename.Left - _redraft.PreferredSize.Width - (int)(8 * k), (int)(56 * k));
             // 第一/二步
             _path.SetBounds(pad, (int)(70 * k), w - (int)(200 * k), (int)(30 * k));
         }
@@ -225,7 +227,7 @@ namespace CodeAtlas
             row.Controls.Add(pickFile, 2, 0);
             var note = new Label
             {
-                Text = L.T("源码目录直接扫；.dll / .exe（含单文件发行版）/ .jar 会先反编译再扫。\n这一页就是主窗口那个「目标」，在这里选完，后面两页会用到它。", "Source dirs are scanned as-is; .dll / .exe / .jar (single-file .exe too) get decompiled first.\nThis is the same target as in the main window; the next two pages build on it."),
+                Text = L.T("源码目录直接扫；.dll / .exe（含单文件发行版）/ .jar 会先反编译再扫。\n这一页就是主窗口那个「目标」，在这里选完，后面两页会用到它。", "Source directories are scanned as they are; .dll / .exe (including single-file builds) / .jar get decompiled first.\nThis is the same target as in the main window — whatever you pick here is used by the next two pages."),
                 ForeColor = Palette.Dim,
                 AutoSize = false,
             };
@@ -246,7 +248,7 @@ namespace CodeAtlas
             // 行高取按钮的自然高度（同一尺度，不用 k 自己算）
             int rowH = row.Controls.OfType<Button>().Select((b) => b.PreferredSize.Height).DefaultIfEmpty((int)(32 * k)).Max();
             row.SetBounds(pad, (int)(50 * k), w, rowH);
-            note.SetBounds(pad, row.Bottom + (int)(12 * k), w, (int)(60 * k));
+            note.SetBounds(pad, row.Bottom + (int)(12 * k), w, (int)(88 * k));
         }
 
         private void BuildStep2()
@@ -303,13 +305,13 @@ namespace CodeAtlas
             label.Location = new Point(pad, (int)(24 * k));
             int rowH = Math.Max(_pickLangs.PreferredSize.Height, (int)(32 * k));
             row.SetBounds(pad, (int)(50 * k), w, rowH);
-            note.SetBounds(pad, row.Bottom + (int)(12 * k), w, (int)(60 * k));
+            note.SetBounds(pad, row.Bottom + (int)(12 * k), w, (int)(88 * k));
         }
 
         private void BuildStep3()
         {
             var p = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Bg };
-            var label = new Label { Text = L.T("系统分组规则（按目录草拟，可改）", "Grouping rules"), ForeColor = Palette.Fg, AutoSize = true };
+            var label = new Label { Text = L.T("系统分组规则（按目录草拟，可改）", "System grouping rules (drafted from directories; editable)"), ForeColor = Palette.Fg, AutoSize = true };
             label.Name = "label";
             _list.CheckOnClick = true;
             _list.BackColor = Palette.Panel;
@@ -325,7 +327,7 @@ namespace CodeAtlas
             _rename.Text = L.T("改名", "Rename");
             _recolor.Text = L.T("换色", "Recolor");
             foreach (var b in new[] { _redraft, _rename, _recolor, _byNs }) Launcher.Style(b);
-            _byNs.Text = L.T("用命名空间重新草拟", "By namespace");
+            _byNs.Text = L.T("用命名空间重新草拟", "Re-draft by namespace");
             _byNs.ForeColor = _hasBundle ? Palette.Fg : Palette.DimInactive;
             _byNs.Cursor = _hasBundle ? Cursors.Hand : Cursors.Default;
             _byNs.Click += (s, e) =>
@@ -368,14 +370,14 @@ namespace CodeAtlas
             float k = DeviceDpi / 96f;
             int pad = (int)(18 * k);
             label.Location = new Point(pad, (int)(24 * k));
-            int listTop = (int)(52 * k);
+            int listTop = (int)(108 * k);   // 标题一行、按钮一行，列表从第三行开始
             _list.SetBounds(pad, listTop, p.ClientSize.Width - pad * 2, Math.Max(120, p.ClientSize.Height - listTop - (int)(112 * k)));
             _draftInfo.SetBounds(pad, _list.Bottom + (int)(6 * k), p.ClientSize.Width - pad * 2, (int)(42 * k));
             _intoProject.Location = new Point(pad, _draftInfo.Bottom + (int)(6 * k));
-            _recolor.Location = new Point(p.ClientSize.Width - pad - _recolor.PreferredSize.Width, (int)(16 * k));
-            _rename.Location = new Point(_recolor.Left - _rename.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
-            _byNs.Location = new Point(_redraft.Left - _byNs.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
-            _redraft.Location = new Point(_rename.Left - _redraft.PreferredSize.Width - (int)(8 * k), (int)(16 * k));
+            _recolor.Location = new Point(p.ClientSize.Width - pad - _recolor.PreferredSize.Width, (int)(56 * k));
+            _rename.Location = new Point(_recolor.Left - _rename.PreferredSize.Width - (int)(8 * k), (int)(56 * k));
+            _byNs.Location = new Point(_redraft.Left - _byNs.PreferredSize.Width - (int)(8 * k), (int)(56 * k));
+            _redraft.Location = new Point(_rename.Left - _redraft.PreferredSize.Width - (int)(8 * k), (int)(56 * k));
         }
 
         // ----------------------------------------------------------------- 流程
@@ -399,7 +401,7 @@ namespace CodeAtlas
             {
                 L.T("要分析哪个项目？源码目录、.dll / .exe / .jar 都行。", "Which project? A source directory, or a .dll / .exe / .jar."),
                 L.T("这个项目用哪些语言？默认自动（所有代码语言）。", "Which languages does it use? Auto (all code languages) by default."),
-                L.T("规则草案：不想要的取消勾选，名字/颜色可以改。保存后扫描就会用上它。", "Draft rules: untick, rename or recolor. Saved rules are used by the scan."),
+                L.T("规则草案：不想要的取消勾选，名字/颜色可以改。保存后扫描就会用上它。", "Draft rules: untick what you do not want; names and colors are editable. The scan uses them once saved."),
             };
             _stepTitle.Text = titles[_step - 1];
             _stepHint.Text = hints[_step - 1];

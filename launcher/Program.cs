@@ -59,7 +59,7 @@ namespace CodeAtlas
                 {
                     string p = Path.Combine(AppContext.BaseDirectory, "crash.log");
                     File.AppendAllText(p, DateTime.Now.ToString("s") + "  " + ex + Environment.NewLine + Environment.NewLine);
-                    MessageBox.Show("出了个意外错误，已经记到：\n" + p, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(L.T("出了个意外错误，已经记到：\n", "Something went wrong — details were written to:\n") + p, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 catch { }
             }
@@ -246,7 +246,7 @@ namespace CodeAtlas
                 using var s = typeof(Payload).Assembly.GetManifestResourceStream(ResourceName);
                 using var zip = new ZipArchive(s, ZipArchiveMode.Read);
                 Directory.CreateDirectory(dir);
-                log?.Invoke($"首次运行：正在释放内置引擎到 {dir}（{zip.Entries.Count} 个文件，只做这一次）…");
+                log?.Invoke(L.T($"首次运行：正在释放内置引擎到 {dir}（{zip.Entries.Count} 个文件，只做这一次）…", $"First run: unpacking the built-in engine into {dir} ({zip.Entries.Count} files, once only)…"));
                 string rootFull = Path.GetFullPath(dir) + Path.DirectorySeparatorChar;
                 int n = 0;
                 foreach (var e in zip.Entries)
@@ -259,7 +259,7 @@ namespace CodeAtlas
                     n++;
                 }
                 File.WriteAllText(marker, DateTime.Now.ToString("o") + Environment.NewLine + n + Environment.NewLine, Encoding.UTF8);
-                log?.Invoke($"✓ 内置引擎就绪（{n} 个文件）");
+                log?.Invoke(L.T($"✓ 内置引擎就绪（{n} 个文件）", $"✓ Built-in engine ready ({n} files)"));
                 CleanupOld(dir);
                 return dir;
             }
@@ -350,7 +350,7 @@ namespace CodeAtlas
         public static string McpConfigJson(Config cfg, string outAbs)
         {
             string root = Resolve(null);
-            if (root == null) throw new InvalidOperationException("找不到引擎，拿不到 MCP 配置。");
+            if (root == null) throw new InvalidOperationException(L.T("找不到引擎，拿不到 MCP 配置。", "Engine not found — cannot build the MCP config."));
             string script = Path.Combine(root, "src", "cli.mjs");
             var psi = new ProcessStartInfo(PickNode(cfg, root), $"\"{script}\" mcp --out \"{outAbs}\" --config-json")
             {
@@ -363,8 +363,8 @@ namespace CodeAtlas
             };
             using var p = Process.Start(psi);
             string outp = p.StandardOutput.ReadToEnd();
-            if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch { } throw new InvalidOperationException("引擎 30 秒没响应"); }
-            if (outp.Trim().Length == 0) throw new InvalidOperationException("引擎没吐出配置（node 跑不起来？）");
+            if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch { } throw new InvalidOperationException(L.T("引擎 30 秒没响应", "the engine did not answer within 30s")); }
+            if (outp.Trim().Length == 0) throw new InvalidOperationException(L.T("引擎没吐出配置（node 跑不起来？）", "the engine returned no config (node failed to start?)"));
             // 引擎写出来的配置里 command 是 "node"（靠 PATH）——但完全版自带 node.exe，这里换成实际解析到的
             // 绝对路径，否则机器上没装 Node 的人把这段粘进客户端会连不上。
             // 顺手带上 CODEATLAS_LANG：AI 侧的语言跟界面选的一致（用户也能自己在客户端里改）。
@@ -405,9 +405,9 @@ namespace CodeAtlas
         public static string DescribeEngine()
         {
             string dev = FindDevRoot();
-            if (dev != null) return $"仓库模式（旁边就有源码）：{dev}";
-            if (Payload.HasEngine) return $"内置引擎：{Payload.TargetDir()}（首次运行自动释放）";
-            return "没找到：这个 exe 没带内置引擎，旁边也没有 src\\cli.mjs";
+            if (dev != null) return L.T($"仓库模式（旁边就有源码）：{dev}", $"repo mode (source tree next to the exe): {dev}");
+            if (Payload.HasEngine) return L.T($"内置引擎：{Payload.TargetDir()}（首次运行自动释放）", $"built-in engine: {Payload.TargetDir()} (unpacked on first run)");
+            return L.T("没找到：这个 exe 没带内置引擎，旁边也没有 src\\cli.mjs", "not found: this exe carries no built-in engine and there is no src\\cli.mjs next to it");
         }
 
         /// <summary>这份启动器是什么版（构建时写进程序集，不是猜的）</summary>
@@ -417,9 +417,9 @@ namespace CodeAtlas
             {
                 string ed = typeof(Engine).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
                     .FirstOrDefault((a) => a.Key == "Edition")?.Value ?? "";
-                if (ed == "lite") return "精简版";
-                if (ed == "full") return "完全版";
-                return "开发构建";
+                if (ed == "lite") return L.T("精简版", "lite build");
+                if (ed == "full") return L.T("完全版", "full build");
+                return L.T("开发构建", "dev build");
             }
         }
 
@@ -442,7 +442,7 @@ namespace CodeAtlas
         public static LangInfo[] ListLangs(Config cfg)
         {
             string root = Resolve(null);
-            if (root == null) throw new InvalidOperationException("找不到引擎：这个 exe 没带内置引擎，旁边也没有 src\\cli.mjs。");
+            if (root == null) throw new InvalidOperationException(L.T("找不到引擎：这个 exe 没带内置引擎，旁边也没有 src\\cli.mjs。", "Engine not found: this exe carries no built-in engine and there is no src\\cli.mjs next to it."));
             string script = Path.Combine(root, "src", "cli.mjs");
             string nodeExe = PickNode(cfg, root);
             var psi = new ProcessStartInfo(nodeExe, $"\"{script}\" langs --json")
@@ -461,9 +461,9 @@ namespace CodeAtlas
             proc.Start();
             proc.BeginErrorReadLine();
             string text = proc.StandardOutput.ReadToEnd();
-            if (!proc.WaitForExit(30000)) { try { proc.Kill(true); } catch { } throw new InvalidOperationException("读语言表超时（30 秒）。"); }
+            if (!proc.WaitForExit(30000)) { try { proc.Kill(true); } catch { } throw new InvalidOperationException(L.T("读语言表超时（30 秒）。", "Timed out reading the language list (30s).")); }
             if (proc.ExitCode != 0 || string.IsNullOrWhiteSpace(text))
-                throw new InvalidOperationException("引擎没能返回语言表。" + (sb.Length > 0 ? "\n" + sb.ToString().Trim() : ""));
+                throw new InvalidOperationException(L.T("引擎没能返回语言表。", "The engine did not return a language list.") + (sb.Length > 0 ? "\n" + sb.ToString().Trim() : ""));
             return JsonSerializer.Deserialize<LangInfo[]>(text, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? Array.Empty<LangInfo>();
         }
 
@@ -471,7 +471,7 @@ namespace CodeAtlas
         public static DraftResult DraftFacets(Config cfg, string target, string langs, bool byNamespace = false, string bundleDir = null)
         {
             string root = Resolve(null);
-            if (root == null) throw new InvalidOperationException("找不到引擎，没法草拟分组规则。");
+            if (root == null) throw new InvalidOperationException(L.T("找不到引擎，没法草拟分组规则。", "Engine not found — cannot draft grouping rules."));
             string script = Path.Combine(root, "src", "cli.mjs");
             string node = PickNode(cfg, root);
             var args = new StringBuilder();
@@ -499,10 +499,10 @@ namespace CodeAtlas
             proc.Start();
             proc.BeginErrorReadLine();
             string text = proc.StandardOutput.ReadToEnd();
-            if (!proc.WaitForExit(60000)) { try { proc.Kill(true); } catch { } throw new InvalidOperationException("草拟超时（60 秒）。"); }
-            if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("草拟没有返回结果。" + (err.Length > 0 ? "\n" + err.ToString().Trim() : ""));
+            if (!proc.WaitForExit(60000)) { try { proc.Kill(true); } catch { } throw new InvalidOperationException(L.T("草拟超时（60 秒）。", "Drafting timed out (60s).")); }
+            if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException(L.T("草拟没有返回结果。", "Drafting returned nothing.") + (err.Length > 0 ? "\n" + err.ToString().Trim() : ""));
             var res = JsonSerializer.Deserialize<DraftResult>(text, FacetJson.Read);
-            if (res?.Config == null) throw new InvalidOperationException("草拟结果读不出来。");
+            if (res?.Config == null) throw new InvalidOperationException(L.T("草拟结果读不出来。", "Could not read the draft result."));
             // 把预览里的文件数贴到各系统上（向导要显示）
             for (int i = 0; i < res.Config.Systems.Count && i < res.Preview.Count; i++) res.Config.Systems[i].FileCount = res.Preview[i].Files;
             return res;
@@ -513,14 +513,14 @@ namespace CodeAtlas
             string dev = FindDevRoot();
             string root = dev ?? Payload.Ensure(null);
             if (root == null)
-                throw new InvalidOperationException("找不到引擎：这个 exe 里没带内置引擎，旁边也没有 src\\cli.mjs。" +
-                    "\n完全版（CodeAtlas.exe）自带引擎；精简版请把 exe 放进 CodeAtlas 目录，或换成完全版。");
+                throw new InvalidOperationException(L.T("找不到引擎：这个 exe 里没带内置引擎，旁边也没有 src\\cli.mjs。", "Engine not found: this exe carries no built-in engine and there is no src\\cli.mjs next to it.") +
+                    L.T("\n完全版（CodeAtlas.exe）自带引擎；精简版请把 exe 放进 CodeAtlas 目录，或换成完全版。", "\nThe full build (CodeAtlas.exe) carries the engine; for the lite build put the exe in the CodeAtlas folder, or switch to the full build."));
             string script = Path.Combine(root, "src", "cli.mjs");
             string node = PickNode(cfg, root);
             if (!NodeOk(node))
                 throw new InvalidOperationException(Payload.NodePath(root) != null
-                    ? $"内置的 node 跑不起来：{node}"
-                    : $"跑不起来：找不到 node（当前配置为 \"{node}\"）。精简版需要机器上装 Node.js；或在 launcher.config.json 里把 NodePath 改成 node.exe 的完整路径。");
+                    ? L.T($"内置的 node 跑不起来：{node}", $"the built-in node will not run: {node}")
+                    : L.T($"跑不起来：找不到 node（当前配置为 \"{node}\"）。精简版需要机器上装 Node.js；或在 launcher.config.json 里把 NodePath 改成 node.exe 的完整路径。", $"cannot start: node not found (currently configured as \"{node}\"). The lite build needs Node.js installed; or point NodePath in launcher.config.json at the full path of node.exe."));
 
             var args = new StringBuilder();
             args.Append('"').Append(script).Append('"');
@@ -699,9 +699,9 @@ namespace CodeAtlas
             _inc.Click += (s, e) => { _cfg.Incremental = _inc.Checked; Engine.SaveConfig(_cfg);
             if (Engine.ConfigSaveError != null)
             {
-                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Log(L.T("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：", "⚠ Could not save the config (exe in a read-only folder? put it on the Desktop or D:): ") + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
-            } Log(_inc.Checked ? "增量扫描：开（只重解析改过的文件）" : "增量扫描：关（每次全量）"); };
+            } Log(_inc.Checked ? L.T("增量扫描：开（只重解析改过的文件）", "Incremental scan: on (only changed files are re-parsed)") : L.T("增量扫描：关（每次全量）", "Incremental scan: off (full scan every time)")); };
             SetTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。", "Incremental scan: re-parse only the files that changed (off by default = full scan every time).\r\nIt only saves parsing; who-references-whom is still recomputed wholesale, so it only pays off on big projects.");
 
             SetText(_run, "扫描", "Scan");
@@ -726,7 +726,7 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            SetTip(_langs, "选择要扫描的语言（默认自动：23 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: 23 code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
+            SetTip(_langs, "选择要扫描的语言（默认自动：26 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: 26 code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
             SetText(_wiz, "项目设置…", "Setup…");
@@ -795,23 +795,23 @@ namespace CodeAtlas
             ApplyLayout();
 
             if (!string.IsNullOrWhiteSpace(_cfg.LastPath)) _path.Text = _cfg.LastPath;
-            Log("启动器 " + AppVer + "（" + Engine.EditionName + " · 内嵌地图）");
+            Log(L.T("启动器 ", "Launcher ") + AppVer + L.T("（", " (") + Engine.EditionName + L.T(" · 内嵌地图）", " · embedded map)"));
             if (!string.IsNullOrWhiteSpace(Engine.ConfigError))
-                Log("⚠ launcher.config.json 读不了，已用默认值（设置看着像「被重置」就是这个原因）：" + Engine.ConfigError);
-            Log("引擎：" + Engine.DescribeEngine());
-            Log($"node：{_cfg.NodePath}（值为 node 时优先用内置的，没有内置就按 PATH 找）   输出目录：{_cfg.Out}   端口：{_cfg.Port}");
-            Log("语言：" + LangsSummary());
+                Log(L.T("⚠ launcher.config.json 读不了，已用默认值（设置看着像「被重置」就是这个原因）：", "⚠ launcher.config.json could not be read — defaults are in use (this is why settings look reset): ") + Engine.ConfigError);
+            Log(L.T("引擎：", "Engine: ") + Engine.DescribeEngine());
+            Log(L.T($"node：{_cfg.NodePath}（值为 node 时优先用内置的，没有内置就按 PATH 找）   输出目录：{_cfg.Out}   端口：{_cfg.Port}", $"node: {_cfg.NodePath} (\"node\" = prefer the built-in one, else look on PATH)   out: {_cfg.Out}   port: {_cfg.Port}"));
+            Log(L.T("语言：", "Languages: ") + LangsSummary());
             Log("");
-            Log("下一步：点「扫描」开始（也可以直接把文件夹拖进上面的输入框）。");
-            Log("扫完地图会自动嵌到这个窗口里；想看扫描日志就点「看日志」。");
+            Log(L.T("下一步：点「扫描」开始（也可以直接把文件夹拖进上面的输入框）。", "Next: hit Scan to start (you can also drag a folder onto the box above)."));
+            Log(L.T("扫完地图会自动嵌到这个窗口里；想看扫描日志就点「看日志」。", "When the scan finishes the map is embedded in this window; hit Show log to watch the run."));
             if (Engine.FindDevRoot() == null && !Payload.HasEngine)
-                _status.Text = "⚠ 找不到引擎：把 CodeAtlas.exe 放进 CodeAtlas 目录（含 src\\cli.mjs）再运行";
+                _status.Text = L.T("⚠ 找不到引擎：把 CodeAtlas.exe 放进 CodeAtlas 目录（含 src\\cli.mjs）再运行", "⚠ Engine not found: put CodeAtlas.exe into the CodeAtlas folder (the one containing src\\cli.mjs) and run it again");
 
             DragEnter += (s, e) => { if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effect = DragDropEffects.Copy; };
             DragDrop += (s, e) =>
             {
                 var items = (string[])e.Data.GetData(DataFormats.FileDrop);
-                if (items != null && items.Length > 0) { _path.Text = items[0]; Log($"拖入：{items[0]}"); }
+                if (items != null && items.Length > 0) { _path.Text = items[0]; Log(L.T($"拖入：{items[0]}", $"Dropped: {items[0]}")); }
             };
             FormClosing += (s, e) =>
             {
@@ -819,7 +819,7 @@ namespace CodeAtlas
                 try { _cfg.WindowWidth = (int)(ClientSize.Width / K); _cfg.WindowHeight = (int)(ClientSize.Height / K); Engine.SaveConfig(_cfg);
             if (Engine.ConfigSaveError != null)
             {
-                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Log(L.T("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：", "⚠ Could not save the config (exe in a read-only folder? put it on the Desktop or D:): ") + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             } } catch { }
             };
@@ -895,11 +895,11 @@ namespace CodeAtlas
             // 内置引擎要释放一次（几十 MB，别占着 UI 线程）；提前放好，用户点「扫描」时就不用等
             if (Payload.HasEngine && !File.Exists(Path.Combine(Payload.TargetDir(), ".ready")))
             {
-                _status.Text = "正在释放内置引擎（首次运行，只做一次）…";
+                _status.Text = L.T("正在释放内置引擎（首次运行，只做一次）…", "Unpacking the built-in engine (first run, once only)…");
                 Task.Run(() =>
                 {
                     string dir = Payload.Ensure(Log);
-                    Ui(() => _status.Text = dir != null ? "内置引擎就绪，点「扫描」开始" : "就绪");
+                    Ui(() => _status.Text = dir != null ? L.T("内置引擎就绪，点「扫描」开始", "Engine ready — hit Scan") : L.T("就绪", "Ready"));
                 });
             }
             // 第一次碰到这个项目（没有记录）才引导；已经有记录的就不打扰（再打开=零操作）
@@ -921,7 +921,7 @@ namespace CodeAtlas
                 {
                     _webReady = false;
                     _web.Visible = false;
-                    Log("内嵌浏览器：初始化超时（15 秒）✗ → 会用系统浏览器打开页面");
+                    Log(L.T("内嵌浏览器：初始化超时（15 秒）✗ → 会用系统浏览器打开页面", "Embedded browser: init timed out (15s) ✗ → the map will open in your system browser"));
                     return;
                 }
                 await init; // 有异常就在这里抛出来，交给下面的 catch
@@ -929,18 +929,18 @@ namespace CodeAtlas
                 _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
                 _web.CoreWebView2.NavigationCompleted += (s, args) =>
                 {
-                    if (args.IsSuccess) _status.Text = "内嵌地图：" + _url;
-                    else _status.Text = "页面加载失败：" + args.WebErrorStatus + "（可以点「在浏览器打开」）";
+                    if (args.IsSuccess) _status.Text = L.T("内嵌地图：", "Embedded map: ") + _url;
+                    else _status.Text = L.T("页面加载失败：", "Page failed to load: ") + args.WebErrorStatus + L.T("（可以点「在浏览器打开」）", " (you can use Browser)");
                 };
                 _webReady = true;
-                Log("内嵌浏览器：已就绪 ✓（扫完地图显示在本窗口）");
+                Log(L.T("内嵌浏览器：已就绪 ✓（扫完地图显示在本窗口）", "Embedded browser: ready ✓ (the map will show in this window)"));
             }
             catch (Exception ex)
             {
                 _webReady = false;
                 _web.Visible = false;
-                Log("内嵌浏览器：不可用 ✗（原因：" + ex.Message + "）");
-                Log("→ 跑完会自动用系统浏览器打开页面（功能不受影响，只是不在本窗口里）");
+                Log(L.T("内嵌浏览器：不可用 ✗（原因：", "Embedded browser: unavailable ✗ (reason: ") + ex.Message + L.T("）", ")"));
+                Log(L.T("→ 跑完会自动用系统浏览器打开页面（功能不受影响，只是不在本窗口里）", "→ the page will open in your system browser when the scan finishes (nothing is lost, it just is not inside this window)"));
             }
         }
 
@@ -975,7 +975,7 @@ namespace CodeAtlas
 
         private void PickFolder()
         {
-            using var d = new FolderBrowserDialog { Description = "选一个要分析的文件夹（源码目录、或者编译产物目录都行）" };
+            using var d = new FolderBrowserDialog { Description = L.T("选一个要分析的文件夹（源码目录、或者编译产物目录都行）", "Pick a folder to analyze (a source directory, or one holding build output)") };
             if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.SelectedPath;
         }
 
@@ -983,8 +983,8 @@ namespace CodeAtlas
         {
             using var d = new OpenFileDialog
             {
-                Title = "选一个要分析的文件",
-                Filter = "程序集 / 压缩包 (*.dll;*.exe;*.jar)|*.dll;*.exe;*.jar|所有文件 (*.*)|*.*",
+                Title = L.T("选一个要分析的文件", "Pick a file to analyze"),
+                Filter = L.T("程序集 / 压缩包 (*.dll;*.exe;*.jar)|*.dll;*.exe;*.jar|所有文件 (*.*)|*.*", "Assemblies / archives (*.dll;*.exe;*.jar)|*.dll;*.exe;*.jar|All files (*.*)|*.*"),
             };
             if (d.ShowDialog(this) == DialogResult.OK) _path.Text = d.FileName;
         }
@@ -1012,12 +1012,12 @@ namespace CodeAtlas
                 string outAbs = Path.IsPathRooted(_cfg.Out) ? _cfg.Out : Path.Combine(Engine.WorkDir(), _cfg.Out);
                 string json = Engine.McpConfigJson(_cfg, outAbs);
                 Clipboard.SetText(json);
-                Log("✓ 已复制 MCP 配置到剪贴板 —— 粘进 MCP 客户端的 mcpServers 里就能让 AI 读这个项目");
-                Log("  指向的输出目录：" + outAbs + "（先扫一次，AI 才读得到）");
+                Log(L.T("✓ 已复制 MCP 配置到剪贴板 —— 粘进 MCP 客户端的 mcpServers 里就能让 AI 读这个项目", "✓ MCP config copied to the clipboard — paste it into mcpServers in your MCP client and your AI can read this project"));
+                Log(L.T("  指向的输出目录：", "  Output directory it points at: ") + outAbs + L.T("（先扫一次，AI 才读得到）", " (scan once first, otherwise your AI has nothing to read)"));
             }
             catch (Exception ex)
             {
-                Log("✗ 复制 MCP 配置失败：" + ex.Message);
+                Log(L.T("✗ 复制 MCP 配置失败：", "✗ Could not copy the MCP config: ") + ex.Message);
             }
         }
 
@@ -1028,7 +1028,7 @@ namespace CodeAtlas
             try { langs = Engine.ListLangs(_cfg); }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "读不到语言表：" + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, L.T("读不到语言表：", "Could not read the language list: ") + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             string outAbs = Path.IsPathRooted(_cfg.Out) ? _cfg.Out : Path.Combine(Engine.WorkDir(), _cfg.Out);
@@ -1046,13 +1046,13 @@ namespace CodeAtlas
             Engine.SaveConfig(_cfg);
             if (Engine.ConfigSaveError != null)
             {
-                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Log(L.T("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：", "⚠ Could not save the config (exe in a read-only folder? put it on the Desktop or D:): ") + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             }
             _langs.Text = LangsButtonText();
             ApplyLayout();
-            Log("项目设置已保存：语言 " + LangsSummary());
-            Log("  分组规则：" + (string.IsNullOrWhiteSpace(wiz.FacetsPath) ? "（这次没生成）" : wiz.FacetsPath));
+            Log(L.T("项目设置已保存：语言 ", "Project settings saved — languages: ") + LangsSummary());
+            Log(L.T("  分组规则：", "  Grouping rules: ") + (string.IsNullOrWhiteSpace(wiz.FacetsPath) ? L.T("（这次没生成）", "(none this time)") : wiz.FacetsPath));
             if (wiz.StartNow) Run();
         }
 
@@ -1063,7 +1063,7 @@ namespace CodeAtlas
             try { langs = Engine.ListLangs(_cfg); }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "读不到语言表：" + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, L.T("读不到语言表：", "Could not read the language list: ") + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             using var d = new LangPicker(langs, _cfg.Langs);
@@ -1072,12 +1072,12 @@ namespace CodeAtlas
             Engine.SaveConfig(_cfg);
             if (Engine.ConfigSaveError != null)
             {
-                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Log(L.T("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：", "⚠ Could not save the config (exe in a read-only folder? put it on the Desktop or D:): ") + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             }
             _langs.Text = LangsButtonText();
             ApplyLayout(); // 文字变了按钮宽度也变，重排一下免得压到旁边的按钮
-            Log("语言：" + LangsSummary());
+            Log(L.T("语言：", "Languages: ") + LangsSummary());
         }
 
         private string LangsButtonText()
@@ -1119,14 +1119,14 @@ namespace CodeAtlas
 
         private void Run()
         {            string target = _path.Text.Trim().Trim('"');
-            if (target.Length == 0) { MessageBox.Show(this, "先选一个文件夹或文件。", "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            if (!File.Exists(target) && !Directory.Exists(target)) { MessageBox.Show(this, "这个路径不存在：" + target, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (target.Length == 0) { MessageBox.Show(this, L.T("先选一个文件夹或文件。", "Pick a folder or file first."), "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (!File.Exists(target) && !Directory.Exists(target)) { MessageBox.Show(this, L.T("这个路径不存在：", "This path does not exist: ") + target, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
 
             _cfg.LastPath = target;
             Engine.SaveConfig(_cfg);
             if (Engine.ConfigSaveError != null)
             {
-                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Log(L.T("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：", "⚠ Could not save the config (exe in a read-only folder? put it on the Desktop or D:): ") + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             }
             _url = null;
@@ -1135,17 +1135,17 @@ namespace CodeAtlas
             RefreshToggleText();
             SetBtn(_run, false, true);
             SetBtn(_stop, true);
-            _status.Text = "运行中…（第一次扫描大项目会慢一点）";
+            _status.Text = L.T("运行中…（第一次扫描大项目会慢一点）", "Running… (the first scan of a big project takes a bit longer)");
             _log.Clear();
             ShowLog();
-            Log($"> 开始：{target}");
+            Log(L.T($"> 开始：{target}", $"> start: {target}"));
             // 记下"这个项目跑过"（下次打开就不弹向导了）
             if (!_cfg.Projects.TryGetValue(target, out var projRec)) { projRec = new ProjectRecord(); _cfg.Projects[target] = projRec; }
             projRec.LastRun = DateTime.Now.ToString("s");
             Engine.SaveConfig(_cfg);
             if (Engine.ConfigSaveError != null)
             {
-                Log("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：" + Engine.ConfigSaveError);
+                Log(L.T("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：", "⚠ Could not save the config (exe in a read-only folder? put it on the Desktop or D:): ") + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             }
 
@@ -1153,10 +1153,10 @@ namespace CodeAtlas
             {
                 // 先把引擎落实（内置的话首次会释放，日志里能看到进度），再交给引擎跑
                 var (engRoot, engNode) = Engine.ResolveAll(_cfg, Log);
-                if (engRoot != null) Log("> 引擎：" + engRoot + Environment.NewLine + "> node：" + engNode);
+                if (engRoot != null) Log(L.T("> 引擎：", "> engine: ") + engRoot + Environment.NewLine + L.T("> node：", "> node: ") + engNode);
                 string effLangs = TargetLangs(target);
                 string effFacets = TargetFacets(target);
-                if (!string.IsNullOrWhiteSpace(effFacets)) Log("> 分组规则：" + effFacets);
+                if (!string.IsNullOrWhiteSpace(effFacets)) Log(L.T("> 分组规则：", "> grouping rules: ") + effFacets);
                 _proc = Engine.Start(target, _cfg, effLangs, effFacets, false, OnLine, code =>
                 {
                     Ui(() =>
@@ -1164,10 +1164,10 @@ namespace CodeAtlas
                         SetBtn(_run, true, true);
                         SetBtn(_stop, false);
                         _status.Text = code == 0
-                            ? (_url != null ? "完成，在看地图：" + _url : "完成（没起服务）")
-                            : $"进程退出（代码 {code}），看日志。";
+                            ? (_url != null ? L.T("完成，在看地图：", "Done, showing the map: ") + _url : L.T("完成（没起服务）", "Done (no server started)"))
+                            : L.T($"进程退出（代码 {code}），看日志。", $"Process exited (code {code}) — check the log.");
                     });
-                    if (_url == null) Log("提示：这次没拿到服务地址，地图就不会出现在本窗口 —— 上面应该有报错原因（路径不存在 / 引擎没找到等）。");
+                    if (_url == null) Log(L.T("提示：这次没拿到服务地址，地图就不会出现在本窗口 —— 上面应该有报错原因（路径不存在 / 引擎没找到等）。", "Note: no server address this time, so the map will not appear in this window — the reason should be above (missing path / engine not found …)."));
                     _proc = null;
                 });
             }
@@ -1175,8 +1175,8 @@ namespace CodeAtlas
             {
                 SetBtn(_run, true, true);
                 SetBtn(_stop, false);
-                _status.Text = "起不来";
-                Log("错误：" + ex.Message);
+                _status.Text = L.T("起不来", "Failed to start");
+                Log(L.T("错误：", "Error: ") + ex.Message);
                 MessageBox.Show(this, ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -1198,7 +1198,7 @@ namespace CodeAtlas
                 {
                     SetBtn(_browser, true);
                     SetBtn(_toggle, true);
-                    _status.Text = "服务已启动：" + _url + "（关掉窗口，服务就停）";
+                    _status.Text = L.T("服务已启动：", "Server started: ") + _url + L.T("（关掉窗口，服务就停）", " (closing this window stops it)");
                     if (_autoSwitch.Checked) ShowMap(); else ShowLog();
                 });
             }
@@ -1233,7 +1233,7 @@ namespace CodeAtlas
         {
             try
             {
-                if (_proc != null && !_proc.HasExited) { _proc.Kill(entireProcessTree: true); Log("> 已停止"); }
+                if (_proc != null && !_proc.HasExited) { _proc.Kill(entireProcessTree: true); Log(L.T("> 已停止", "> stopped")); }
             }
             catch { }
             _proc = null;
@@ -1269,7 +1269,7 @@ namespace CodeAtlas
         {
             _langs = langs ?? Array.Empty<LangInfo>();
 
-            Text = "要扫描的语言";
+            Text = L.T("要扫描的语言", "Languages to scan");
             BackColor = Palette.Bg;
             ForeColor = Palette.Fg;
             Font = new Font("Microsoft YaHei UI", 10.5f);
@@ -1300,24 +1300,24 @@ namespace CodeAtlas
             {
                 var l = _langs[i];
                 string ext = (l.Exts != null && l.Exts.Length > 0) ? "   " + string.Join(" ", l.Exts) : "";
-                _list.Items.Add(l.Label + ext + (l.OptIn ? "    （文件级格式 · 默认不扫）" : ""));
+                _list.Items.Add(l.Label + ext + (l.OptIn ? L.T("    （文件级格式 · 默认不扫）", "    (file-level format · off by default)") : ""));
                 _list.SetItemChecked(i, cur.Length == 0 ? !l.OptIn : Array.IndexOf(cur, l.Id) >= 0);
             }
             // 勾选状态在 ItemCheck 之后才变，所以推到消息循环下一轮再算摘要
             _list.ItemCheck += (s, e) => BeginInvoke(new Action(UpdateHint));
 
-            _ok.Text = "确定";
+            _ok.Text = L.T("确定", "OK");
             Launcher.Style(_ok, true);
             _ok.BackColor = Palette.Accent;
             _ok.ForeColor = Palette.Bg;
             _ok.Click += (s, e) => { Result = ComputeResult(); DialogResult = DialogResult.OK; Close(); };
-            _cancel.Text = "取消";
+            _cancel.Text = L.T("取消", "Cancel");
             Launcher.Style(_cancel);
             _cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
 
-            _onlyCode.Text = "仅代码语言";
-            _allBtn.Text = "全选";
-            _noneBtn.Text = "清空";
+            _onlyCode.Text = L.T("仅代码语言", "Code languages only");
+            _allBtn.Text = L.T("全选", "All");
+            _noneBtn.Text = L.T("清空", "None");
             foreach (var b in new[] { _onlyCode, _allBtn, _noneBtn }) Launcher.Style(b);
             _onlyCode.Click += (s, e) => SetChecks((l) => !l.OptIn);
             _allBtn.Click += (s, e) => SetChecks((l) => true);
@@ -1371,14 +1371,14 @@ namespace CodeAtlas
             int codeTotal = _langs.Count((l) => !l.OptIn);
             bool isAuto = picked.Count == codeTotal && picked.All((l) => !l.OptIn);
             if (picked.Count == 0)
-                _hint.Text = "一个都没勾 —— 按「自动」算：所有代码语言都扫，配置文件格式（JSON/YAML…）不扫。";
+                _hint.Text = L.T("一个都没勾 —— 按「自动」算：所有代码语言都扫，配置文件格式（JSON/YAML…）不扫。", "Nothing ticked — that counts as auto: every code language is scanned, config formats (JSON/YAML…) are not.");
             else if (isAuto)
-                _hint.Text = "当前 = 引擎默认（自动）：所有代码语言都扫，配置文件格式不扫。";
+                _hint.Text = L.T("当前 = 引擎默认（自动）：所有代码语言都扫，配置文件格式不扫。", "Currently = engine default (auto): every code language, config formats skipped.");
             else
             {
                 var names = picked.Select((l) => l.Label).ToArray();
-                string tail = names.Length > 8 ? string.Join(" ", names.Take(8)) + " 等" : string.Join(" ", names);
-                _hint.Text = $"只扫勾中的 {names.Length} 种：" + tail;
+                string tail = names.Length > 8 ? string.Join(" ", names.Take(8)) + L.T(" 等", " and more") : string.Join(" ", names);
+                _hint.Text = L.T($"只扫勾中的 {names.Length} 种：", $"scanning the {names.Length} ticked languages: ") + tail;
             }
         }
 
@@ -1434,15 +1434,15 @@ namespace CodeAtlas
             {
                 var (engRoot, engNode) = Engine.ResolveAll(cfg, Log);
                 Log("edition = " + Engine.EditionName);
-                Log("payload = " + (Payload.HasEngine ? "内嵌（首次会释放）" : "无"));
-                Log("engine = " + (engRoot ?? "(没找到)"));
-                Log("node = " + (engNode ?? "(没找到)") + " [ok=" + (engNode != null && Engine.NodeOk(engNode)) + "]");
-                Log("devRoot = " + (Engine.FindDevRoot() ?? "(无，用的是内置引擎)"));
+                Log("payload = " + (Payload.HasEngine ? L.T("内嵌（首次会释放）", "embedded (unpacked on first run)") : L.T("无", "none")));
+                Log("engine = " + (engRoot ?? L.T("(没找到)", "(not found)")));
+                Log("node = " + (engNode ?? L.T("(没找到)", "(not found)")) + " [ok=" + (engNode != null && Engine.NodeOk(engNode)) + "]");
+                Log("devRoot = " + (Engine.FindDevRoot() ?? L.T("(无，用的是内置引擎)", "(none — using the built-in engine)")));
                 // --list-langs：只验证"启动器能不能从引擎读到语言表"这条接线
                 if (listLangs)
                 {
                     var all = Engine.ListLangs(cfg);
-                    Log("语言表 = " + all.Length + " 条：" + string.Join(", ", all.Select((l) => l.Id + (l.OptIn ? "*" : ""))));
+                    Log(L.T("语言表 = ", "languages = ") + all.Length + L.T(" 条：", ": ") + string.Join(", ", all.Select((l) => l.Id + (l.OptIn ? "*" : ""))));
                     File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
                     return;
                 }
@@ -1455,21 +1455,21 @@ namespace CodeAtlas
                 if (draftTarget != null)
                 {
                     var res = Engine.DraftFacets(cfg, draftTarget, cfg.Langs);
-                    Log("草拟：文件 " + res.Files + " · 系统 " + res.Config.Systems.Count);
-                    foreach (var pv in res.Preview) Log($"  {pv.Name}  {pv.Files} 个文件");
-                    foreach (var n in res.Notes) Log("  提示：" + n);
+                    Log(L.T("草拟：文件 ", "drafted: files ") + res.Files + L.T(" · 系统 ", " · systems ") + res.Config.Systems.Count);
+                    foreach (var pv in res.Preview) Log(L.T($"  {pv.Name}  {pv.Files} 个文件", $"  {pv.Name}  {pv.Files} files"));
+                    foreach (var n in res.Notes) Log(L.T("  提示：", "  note: ") + n);
                     if (draftOut != null)
                     {
                         File.WriteAllText(draftOut, JsonSerializer.Serialize(res.Config, FacetJson.Options), Encoding.UTF8);
-                        Log("已写出：" + draftOut);
+                        Log(L.T("已写出：", "written: ") + draftOut);
                     }
                     File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
                     return;
                 }
-                if (target == null) throw new InvalidOperationException("缺 --path");
+                if (target == null) throw new InvalidOperationException(L.T("缺 --path", "missing --path"));
                 var p = Engine.Start(target, cfg, langs ?? cfg.Langs, facets, open, Log, code => Log("exit = " + code));
                 p.WaitForExit(600000);
-                if (!p.HasExited) { p.Kill(true); Log("超时，已结束"); }
+                if (!p.HasExited) { p.Kill(true); Log(L.T("超时，已结束", "timed out — stopped")); }
             }
             catch (Exception ex) { Log("ERROR: " + ex.Message); }
             File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
