@@ -37,18 +37,20 @@ const PROTOCOL = '2024-11-05';
  * （overview 里也放了一版浓缩的，因为不是每个客户端都会把 instructions 交给模型。）
  */
 const INSTRUCTIONS = [
-  '这是 Code Atlas 生成的代码地图：由 tree-sitter 静态解析源码得到，全程本地，不联网。',
+  'This is a code map produced by Code Atlas: a static parse of the source tree via tree-sitter, entirely local, never online.',
   '',
-  '怎么用：先 overview 建立全局，再 search 找符号（返回 id），然后用 symbol / refs / subgraph / impact 往下钻；',
-  '上下文紧张时先用 map(budget) 拿骨架（系统 → 关键类型 → 关键成员）。',
+  'How to use it: start with overview for the big picture, then search for symbols (it returns ids), then drill down with',
+  'symbol / refs / subgraph / impact. When context is tight, call map(budget) first to get the skeleton',
+  '(systems -> key types -> key members).',
   '',
-  '要知道的边界（诚实优先，别把推断当事实）：',
-  '- 类型 / 成员 / 行数 / 导入来自语法树，可信；依赖边是静态**名字匹配**——动态调用、反射、字符串拼出来的名字看不见，',
-  '  未匹配与同名歧义的数量在 overview 和 impact 里会明确报出来；',
-  '- 有解析异常的文件会单独标注，那些文件的数据可能不全；',
-  '- 反编译产物（.dll / .exe / .jar 反编译出来的）没有源码注释，所以"说明"为空是正常的；',
-  '- 输出里的路径都**相对于扫描根**，扫描根在 overview 里给出（用来拼绝对路径、自己去读源文件）；',
-  '- 数据是快照：overview 里有生成时间；重新扫描后服务会自动换新，不必重启。',
+  'Boundaries you must know (honesty first — do not treat inference as fact):',
+  '- Types / members / line counts / imports come from the syntax tree and are trustworthy; dependency edges come from static',
+  '  **name matching** — dynamic calls, reflection and names built by string concatenation are invisible, and the counts of',
+  '  unmatched and ambiguous references are reported explicitly in overview and impact;',
+  '- Files with parse errors are flagged individually; their data may be incomplete;',
+  '- Decompiled output (.dll / .exe / .jar) carries no source comments, so an empty "description" is expected;',
+  '- Every path in the output is **relative to the scan root**, which overview reports (use it to build absolute paths and read source yourself);',
+  '- The data is a snapshot: overview shows the generation time, and the server picks up a freshly scanned bundle automatically, no restart needed.',
 ].join('\n');
 
 export function buildIndex(b) {
@@ -68,19 +70,19 @@ export function buildIndex(b) {
 const TOOLS = [
   {
     name: 'overview',
-    description: '项目概览：规模、系统/模块划分、被依赖最多的符号、最大的文件。先调这个建立全局印象。',
+    description: 'Project overview: size, systems/modules, most depended-on symbols, largest files. Call this first to get the big picture.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'search',
-    description: '按名字搜索：类型名 / 限定名 / 文件名片段，**默认连成员名一起搜**（例如搜 "OnPaint" 能找到“谁定义了这个方法”）。返回类型 id，供 symbol/refs 使用。',
+    description: 'Search by name: type names / qualified names / file-name fragments. **Member names are included by default** (searching "OnPaint" finds who declares that method). Returns type ids for symbol/refs.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '名字片段，例如 "Logger" / "Players" / "OnPaint"' },
-        scope: { type: 'string', enum: ['any', 'type', 'member'], description: '搜哪儿：any（默认，类型+成员）/ type（只搜类型名）/ member（只搜成员名）' },
-        kind: { type: 'string', description: '可选：只找某一类（class/interface/enum/function/module…），只对类型生效' },
-        limit: { type: 'number', description: '最多返回多少条，默认 20' },
+        query: { type: 'string', description: 'Name fragment, e.g. "Logger" / "Players" / "OnPaint"' },
+        scope: { type: 'string', enum: ['any', 'type', 'member'], description: 'Where to search: any (default, types + members) / type (type names only) / member (member names only)' },
+        kind: { type: 'string', description: 'Optional: restrict to one kind (class/interface/enum/function/module...); applies to types only' },
+        limit: { type: 'number', description: 'Maximum number of results, default 20' },
       },
       required: ['query'],
       additionalProperties: false,
@@ -88,23 +90,23 @@ const TOOLS = [
   },
   {
     name: 'symbol',
-    description: '一个符号（类型）的完整信息：说明、文件:行、成员清单、基类、被依赖/依赖数量、所属系统。',
+    description: 'Everything about one symbol (type): description, file:line, member list, base types, dependents/dependencies, owning system.',
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string', description: 'id（数字）或名字/限定名' } },
+      properties: { name: { type: 'string', description: 'id (number) or a name / qualified name' } },
       required: ['name'],
       additionalProperties: false,
     },
   },
   {
     name: 'refs',
-    description: '引用关系：谁引用了它（in）/ 它引用了谁（out）。改代码前先用它看影响面。',
+    description: 'References: who references it (in) / what it references (out). Use this before changing code to see the blast radius.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string' },
-        direction: { type: 'string', description: 'in | out | both，默认 both' },
-        limit: { type: 'number', description: '默认 30' },
+        direction: { type: 'string', description: 'in | out | both (default both)' },
+        limit: { type: 'number', description: 'Default 30' },
       },
       required: ['name'],
       additionalProperties: false,
@@ -112,12 +114,12 @@ const TOOLS = [
   },
   {
     name: 'subgraph',
-    description: '以某个符号为中心、指定深度内的依赖子图（紧凑清单），用来回答"改这里会牵连什么"。',
+    description: 'Dependency subgraph around a symbol within a depth limit (compact list); answers "what does changing this drag along".',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string' },
-        depth: { type: 'number', description: '探索层数，默认 2，最多 3' },
+        depth: { type: 'number', description: 'How many levels to expand, default 2, maximum 3' },
       },
       required: ['name'],
       additionalProperties: false,
@@ -125,32 +127,32 @@ const TOOLS = [
   },
   {
     name: 'map',
-    description: '按 token 预算导出一份"骨架地图"：系统 → 关键类型 → 关键成员，重要的排前面。用处：让 AI 在有限上下文里先拿到全局，而不是一问一答地探索。',
+    description: 'Export a \"skeleton map\" within a token budget: systems -> key types -> key members, most important first. Purpose: let an AI grasp the whole project in limited context instead of exploring one question at a time.',
     inputSchema: {
       type: 'object',
       properties: {
-        budget: { type: 'number', description: 'token 预算（估算值），默认 4000' },
+        budget: { type: 'number', description: 'Token budget (estimated), default 4000' },
       },
     },
   },
   {
     name: 'impact',
-    description: '影响面分析：改这个类型会影响谁——沿"谁引用它"多跳展开（默认 2 层），并明说哪些看不到（静态名匹配看不到动态调用/反射）。',
+    description: 'Impact analysis: who is affected if this type changes — multi-hop expansion along "who references it" (2 levels by default), plus an explicit statement of what is invisible (static name matching cannot see dynamic calls or reflection).',
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '类型名 / 限定名 / id' },
-        depth: { type: 'number', description: '展开几层，1~4，默认 2' },
+        name: { type: 'string', description: 'Type name / qualified name / id' },
+        depth: { type: 'number', description: 'How many levels, 1-4, default 2' },
       },
       required: ['name'],
     },
   },
   {
     name: 'file',
-    description: '按路径片段看一个文件：它定义了哪些类型、导入了什么、多少行、有没有解析异常。',
+    description: 'Look at one file by path fragment: which types it declares, what it imports, how many lines, whether it has parse errors.',
     inputSchema: {
       type: 'object',
-      properties: { path: { type: 'string', description: '路径片段，例如 "Utils/Loc.cs"' } },
+      properties: { path: { type: 'string', description: 'Path fragment, e.g. "Utils/Loc.cs"' } },
       required: ['path'],
       additionalProperties: false,
     },
