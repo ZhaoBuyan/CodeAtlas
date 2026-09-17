@@ -198,7 +198,9 @@ function toolOverview(idx) {
   const roots = (b.source.roots || []).join('  ');
   if (roots) lines.push(T(`扫描根：${roots}（输出里的路径都相对于它）`, `Scan root: ${roots} (paths in the output are relative to it)`));
   const so = b.source.scanOptions || {};
-  const when = String(b.generated || '').replace('T', ' ').slice(0, 19);
+  // bundle 里的 generated 是 UTC（ISO 末尾 Z）；这里不做时区换算，只如实标注是 UTC，
+  // 否则客户端会把 18:16 当成本地时间（本地其实是次日 02:16）
+  const when = String(b.generated || '').replace('T', ' ').slice(0, 19) + ' UTC';
   lines.push(T(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`, `Snapshot: ${when} · scan took ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · languages ${so.lang || 'auto'} · max file ${so.maxKb || 1024}KB · ${so.incremental ? 'incremental' : 'full'}`));
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
   if (b.totals.parseErrors) lines.push(T(`注意：${b.totals.parseErrors} 处语法树解析异常（这些文件数据可能不全）`, `Note: ${b.totals.parseErrors} parse errors (data in those files may be incomplete)`));

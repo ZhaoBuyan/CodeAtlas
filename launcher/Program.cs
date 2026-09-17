@@ -256,7 +256,7 @@ namespace CodeAtlas
                 if (!HasEngine) return null;
                 string dir = TargetDir();
                 string marker = Path.Combine(dir, ".ready");
-                if (File.Exists(marker)) return dir;
+                if (File.Exists(marker)) { CleanupOld(dir, log); return dir; }
 
                 using var s = typeof(Payload).Assembly.GetManifestResourceStream(ResourceName);
                 using var zip = new ZipArchive(s, ZipArchiveMode.Read);
@@ -275,35 +275,62 @@ namespace CodeAtlas
                 }
                 File.WriteAllText(marker, DateTime.Now.ToString("o") + Environment.NewLine + n + Environment.NewLine, Encoding.UTF8);
                 log?.Invoke(L.T($"✓ 内置引擎就绪（{n} 个文件）", $"✓ Built-in engine ready ({n} files)"));
-                CleanupOld(dir);
+                CleanupOld(dir, log);
                 return dir;
             }
         }
 
+        /// <summary>启动时（引擎已经就绪的情况）也清一次——见 OnShown</summary>
+        public static void CleanupOldEngines(Action<string> log)
+        {
+            if (!HasEngine) return;
+            CleanupOld(TargetDir(), log);
+        }
+
         /// <summary>
-        /// 顺手擦掉长期不用的旧解包目录（每次换版本大约 120 MB，不清会一直长）。
-        /// 只动 7 天没碰过的：正在用的那份绝不会被删（也可能另一份 exe 正在扫）。
+        /// 清掉不是当前指纹的旧解包目录：只留**当前在用的** + **最近用过的一个**
+        /// （可能还有另一份 exe / 一个 MCP 进程正指着它）。每换一次引擎就多一份（完全版约 160 MB）。
+        /// 安全边界：只认「版本-指纹」这种目录名；当前目录绝不碰；删不掉的（被进程占着）直接跳过，不报错。
         /// </summary>
-        private static void CleanupOld(string keep)
+        private static void CleanupOld(string keep, Action<string> log)
         {
             try
             {
                 string parent = Path.GetDirectoryName(keep);
                 if (parent == null || !Directory.Exists(parent)) return;
+                var others = new List<(string Dir, DateTime When)>();
                 foreach (var d in Directory.GetDirectories(parent))
                 {
                     if (string.Equals(Path.GetFullPath(d), Path.GetFullPath(keep), StringComparison.OrdinalIgnoreCase)) continue;
-                    try
-                    {
-                        string marker = Path.Combine(d, ".ready");
-                        if (!File.Exists(marker)) continue;
-                        if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(marker)).TotalDays < 7) continue;
-                        Directory.Delete(d, true);
-                    }
-                    catch { }
+                    if (!Regex.IsMatch(Path.GetFileName(d), @"^\d+\.\d+\.\d+-\w+$")) continue;   // 不是我们释放的目录，别动
+                    string marker = Path.Combine(d, ".ready");
+                    DateTime when = File.Exists(marker) ? File.GetLastWriteTimeUtc(marker) : Directory.GetLastWriteTimeUtc(d);
+                    others.Add((d, when));
                 }
+                int n = 0;
+                long freed = 0;
+                foreach (var o in others.OrderByDescending((x) => x.When).Skip(1))
+                {
+                    try { long sz = DirSize(o.Dir); Directory.Delete(o.Dir, true); n++; freed += sz; }
+                    catch { }   // 被别的进程占着（比如另一份正在跑的引擎）——跳过
+                }
+                if (n > 0)
+                    log?.Invoke(L.T($"✓ 清掉 {n} 个旧引擎目录，腾出 {freed / 1048576.0:F0} MB", $"✓ Removed {n} old engine folders, freed {freed / 1048576.0:F0} MB"));
             }
             catch { }
+        }
+
+        /// <summary>目录体积（只为报「腾出多少」，读不了就算 0）</summary>
+        private static long DirSize(string dir)
+        {
+            long n = 0;
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                    try { n += new FileInfo(f).Length; } catch { }
+            }
+            catch { }
+            return n;
         }
 
         /// <summary>内置 node.exe（精简版没有 = null）</summary>
@@ -913,6 +940,11 @@ namespace CodeAtlas
                     string dir = Payload.Ensure(Log);
                     Ui(() => _status.Text = dir != null ? L.T("内置引擎就绪，点「扫描」开始", "Engine ready — hit Scan") : L.T("就绪", "Ready"));
                 });
+            }
+            else if (Payload.HasEngine)
+            {
+                // 引擎已经就绪：后台顺手清掉旧指纹的解包目录（不这么做的话每换一次引擎就多约 160 MB）
+                Task.Run(() => Payload.CleanupOldEngines(Log));
             }
             // 第一次碰到这个项目（没有记录）才引导；已经有记录的就不打扰（再打开=零操作）
             string curTarget = _path.Text.Trim().Trim('"');
