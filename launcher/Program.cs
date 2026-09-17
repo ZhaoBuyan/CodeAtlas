@@ -733,7 +733,7 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            SetTip(_langs, "选择要扫描的语言（默认自动：26 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: 26 code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
+            SetTip(_langs, "选择要扫描的语言（默认自动：27 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: 27 code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
             SetText(_wiz, "项目设置…", "Setup…");
@@ -1097,7 +1097,7 @@ namespace CodeAtlas
         /// <summary>日志 / 状态区里的人类可读描述（不糊弄：没配就说清楚默认到底扫什么）</summary>
         private string LangsSummary()
         {
-            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("自动（26 门代码语言；配置文件格式默认不扫）", "auto (all 26 code languages; file-level formats are opt-in)");
+            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("自动（27 门代码语言；配置文件格式默认不扫）", "auto (all 27 code languages; file-level formats are opt-in)");
             var ids = _cfg.Langs.Split(',').Select((s) => s.Trim()).Where((s) => s.Length > 0).ToArray();
             return L.En ? $"scanning {ids.Length} languages: " + string.Join(", ", ids) : $"只扫 {ids.Length} 种：" + string.Join(", ", ids);
         }

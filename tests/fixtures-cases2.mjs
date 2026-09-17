@@ -98,21 +98,19 @@ export const EXTRA_CASES = [
     membersMin: 4,
     errorsMax: 0,
   },
-  // ⚠️ SystemRDL 暂时缺席（2026-09-17 升级时挂起）：它的 wasm 要自己用 emscripten 编，
-  // 本机三条路都被网络挡住（见 ROADMAP 附录 A.12）。wasm 放进 vendor/wasm/ 后，
-  // 把 languages.mjs 里那段注释掉的 profile 恢复，再把下面这个用例取消注释即可。
-  // {
-  //   dir: 'systemrdl',
-  //   lang: 'systemrdl',
-  //   // 内联的 reg/field 本来就是匿名的，显示为 (anonymous)（类型名不参与 names 校验）
-  //   types: 3,
-  //   names: ['my_map'],
-  //   kinds: { component: 3 },
-  //   importsMin: 0,
-  //   docs: 2,
-  //   membersMin: 2,
-  //   errorsMax: 0,
-  // },
+  // SystemRDL（2026-09-17 补回）：wasm 是我们自己用 emscripten 编的（见 vendor/wasm/ 与 languages.mjs 里的说明）
+  {
+    dir: 'systemrdl',
+    lang: 'systemrdl',
+    // 内联的 reg/field 本来就是匿名的，显示为 (anonymous)（类型名不参与 names 校验）
+    types: 3,
+    names: ['my_map'],
+    kinds: { component: 3 },
+    importsMin: 0,
+    docs: 2,
+    membersMin: 2,
+    errorsMax: 0,
+  },
   {
     dir: 'go',
     lang: 'go',

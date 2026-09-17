@@ -82,8 +82,9 @@ step towards understanding unfamiliar code.
 its source and its uncertainty, and nothing is uploaded to any server.
 
 Languages: C# / TypeScript / TSX / JavaScript / Java / Python / Kotlin / Lua / Go / Rust / C / C++ / PHP / Swift /
-Scala / Shell / Zig / Solidity / OCaml / ReScript / Ruby / HCL (Terraform) / GraphQL / TLA+ / Emacs Lisp / Elixir
-(26 in total; SystemRDL is still missing until its grammar is packaged), plus file-level formats such as JSON / YAML /
+Scala / Shell / Zig / Solidity / OCaml / ReScript / Ruby / HCL (Terraform) / GraphQL / TLA+ / SystemRDL /
+Emacs Lisp / Elixir
+(27 in total), plus file-level formats such as JSON / YAML /
 TOML / CSS / HTML (off by default — tick them explicitly under "Setup… → Languages").
 
 ---

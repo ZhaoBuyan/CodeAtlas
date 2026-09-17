@@ -608,26 +608,28 @@ export const LANGUAGES = {
     decisionOps: ['/\\', '\\/'],
   },
 
-  // ⚠️ SystemRDL 暂时缺席（2026-09-17）：上游没有任何 ABI 15 的 wasm（其 npm 包只有 C 源、
-  // GitHub 仓库 0 个 release），我们自己编需要 emscripten，而本机三条路都被网络挡住：
-  // GitHub release 资产下载被重置、Docker 镜像源对 emscripten/emsdk 返 403、emsdk 要 clone GitHub（时通时不通）。
-  // 编出来之后把下面这段恢复、并把 vendor/wasm/tree-sitter-systemrdl.wasm 放好即可（步骤见 ROADMAP 附录 A.12）。
-  //
-  // systemrdl: {
-  //   id: 'systemrdl',
-  //   label: 'SystemRDL',
-  //   status: 'ok',
-  //   exts: ['.rdl'],
-  //   wasm: 'tree-sitter-systemrdl.wasm',
-  //   namespaces: {},
-  //   types: { component_named_def: 'component', component_anon_def: 'component' },
-  //   members: { component_inst: 'instance', property_assignment: 'property', explicit_prop_assignment: 'property' },
-  //   imports: {},
-  //   baseFields: [],
-  //   baseNodes: [],
-  //   decisions: [],
-  //   decisionOps: [],
-  // },
+  // SystemRDL（2026-09-17 补回）：上游没有任何现成的 wasm（npm 包只有 C 源、GitHub 0 个 release），
+  // 所以这份是**我们自己编的**（emsdk 预编译的 clang + wasm-ld，不需要 emcc/python），放在 `vendor/wasm/`。
+  // 编法：clang --target=wasm32-unknown-emscripten -O3 -fPIC -mbulk-memory -c parser.c
+  //   → wasm-ld --no-entry --experimental-pic --shared --import-memory --import-table --allow-undefined
+  //     --export=tree_sitter_systemrdl --export=__wasm_apply_data_relocs
+  // 编出来是 ABI 13；0.27 的 MIN_COMPATIBLE 就是 13（源码实证），已实测能加载能解析
+  //（形状与包里那 105 门一致：导出 tree_sitter_X + __wasm_apply_data_relocs，只 import env 的内存/表）。
+  systemrdl: {
+    id: 'systemrdl',
+    label: 'SystemRDL',
+    status: 'ok',
+    exts: ['.rdl'],
+    wasm: 'tree-sitter-systemrdl.wasm',
+    namespaces: {},
+    types: { component_named_def: 'component', component_anon_def: 'component' },
+    members: { component_inst: 'instance', property_assignment: 'property', explicit_prop_assignment: 'property' },
+    imports: {},
+    baseFields: [],
+    baseNodes: [],
+    decisions: [],
+    decisionOps: [],
+  },
 
   // Emacs Lisp：没有“类型”这回事，顶层全是函数/变量 → 都挂到扫描器合成的 module 节点上
   elisp: {

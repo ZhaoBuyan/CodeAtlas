@@ -156,8 +156,8 @@ runtime (about 30 MB).
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
-- The payload ships wasm only for the **26 code languages + 5 file-level formats** we support
-  (SystemRDL pending).
+- The payload ships wasm only for the **27 code languages + 5 file-level formats** we support
+  and nothing else (the unused grammars in the npm package stay out).
 - Third-party components and licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
   (a copy also ships in the extracted engine directory).
 - **Decompilation is install-free in the full edition**: `.dll` / `.exe` are decompiled by a decompiler
@@ -275,7 +275,7 @@ Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the rea
 ## Debugging tools
 
 ```bash
-npm test                                          # language fixtures regression (26 languages, one process each)
+npm test                                          # language fixtures regression (27 languages, one process each)
 npm run probe                                     # print the node names tree-sitter actually produces per language
 node tests/probe-file.mjs <file> [--lang csharp]   # single-file probe: where the ERRORs are, which declarations are recognized
 node tests/probe-abi.mjs                           # grammar smoke test (load + parse every wasm from both sources)
@@ -399,7 +399,7 @@ Decompilation supports three things: **.NET assemblies**, **.NET single-file pub
 (see the known limits under "Scanning without source" above).
 Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, point at it and it scans.
 
-### Supported languages (26 code languages; SystemRDL pending)
+### Supported languages (27 code languages)
 
 | Language | Extensions | Status |
 | --- | --- | --- |
@@ -427,7 +427,7 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | HCL / Terraform | `.tf` `.tfvars` `.hcl` `.nomad` | ✅ fixtures (nodes are blocks: resource / data / module / variable / output / locals; members are attributes; references become edges) |
 | GraphQL | `.graphql` `.graphqls` `.gql` | ✅ fixtures (type / interface / union / enum / scalar / input / schema / directive; fields are members, function arguments count as arguments; `implements` and union members become inheritance edges; `"""descriptions"""` become the "description") |
 | TLA+ | `.tla` | ✅ fixtures (module + operator / variable) |
-| SystemRDL | `.rdl` | ⏸️ temporarily absent (the old grammar doesn't fit the current runtime; a new one must be compiled with emscripten — see ROADMAP appendix A.12) |
+| SystemRDL | `.rdl` | ✅ fixtures (addrmap / reg / field components; the wasm is built by us — see the note below) |
 | Emacs Lisp | `.el` | ✅ fixtures (no type concept → top-level functions/variables hang off a synthetic module node) |
 | Elixir | `.ex` `.exs` | ✅ fixtures (module / function / struct; note `defmodule`/`def` are `call` nodes in the tree, recognized by dedicated hooks; `alias` counts as an import but is not linked into an edge yet) |
 
@@ -435,8 +435,9 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 `PowerShell`, `Julia`, `Vue`, `Svelte`…
 `Vue` single-file components first need "parse the embedded `<script>`", and `Objective-C`'s `.m` clashes with
 MATLAB — those two are deliberately deferred.
-`TLA+` has no usable upstream wasm, so it is maintained in `vendor/wasm/`; `SystemRDL` is temporarily absent
-(same reason — it has to be compiled with emscripten, see ROADMAP).
+`TLA+` has no usable upstream wasm, so it is maintained in `vendor/wasm/`; the same goes for `SystemRDL` —
+we compile it ourselves with emscripten (clang + wasm-ld, no emcc needed) and keep the wasm in `vendor/wasm/`
+(recipe in `src/languages.mjs`).
 Audit command: `node tests/probe-abi.mjs` (loads and parses every grammar from both sources, telling usable
 from unusable).
 
@@ -474,7 +475,7 @@ Tuning it: `npm run probe:mem` (grammar memory probe, written line by line to di
 
 - Primary source: the npm package `tree-sitter-wasm` (**105 grammars**; current runtime `web-tree-sitter`
   0.27.0, compatible with grammar ABI 13–15);
-- Maintained by us: `vendor/wasm/` (TLA+ today; SystemRDL to be compiled);
+- Maintained by us: `vendor/wasm/` (TLA+; SystemRDL, compiled with emscripten);
 - Full smoke test: `npm run probe:abi` → every wasm from both sources loads and parses.
 
 Adding a language = add a profile in `src/languages.mjs` (node types + inheritance fields + complexity branch
@@ -540,7 +541,7 @@ so the whole file does not vanish from the map; their members (functions/variabl
 - [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
 - [x] Grouping layer: system rules (facets config) + directory / namespace / flat
 - [x] MCP server (search symbols / find references / export subgraphs) for AI
-- [x] Language coverage: 26 code languages + 5 file-level formats (SystemRDL pending)
+- [x] Language coverage: 27 code languages + 5 file-level formats
 - [x] Dependency graph view (force-directed) + package-level dependency matrix
 - [x] Pick languages to scan in the launcher (UI + `--lang`)
 - [x] Search improvements: type names + member names (web and MCP) · per-language filtering in the map
