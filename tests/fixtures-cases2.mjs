@@ -212,4 +212,16 @@ export const EXTRA_CASES = [
     membersMin: 10,    // Shape 4 / Circle 4（含 attr_accessor 的两个）/ sample 2；写死数字，少一个就报错
     errorsMax: 0,
   },
+  {
+    // HCL / Terraform（2026-09-17）：没有类概念，图上的节点是 block
+    //（kind = resource / data / module / variable / output / locals / terraform），成员是块里的 attribute。
+    // 名字取**最后一个标签**（取全地址如 aws_instance.web 会让引用侧对不上、一条边都没有——实测过）。
+    dir: 'hcl',
+    lang: 'hcl',
+    types: 7,
+    names: ['terraform', 'region', 'locals', 'web', 'ubuntu', 'network', 'ip'],
+    kinds: { resource: 1, data: 1, module: 1, variable: 1, output: 1, locals: 1, terraform: 1 },
+    membersMin: 13,   // 各块的 attribute 总数（实测 13）
+    errorsMax: 0,
+  },
 ];

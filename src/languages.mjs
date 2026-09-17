@@ -146,6 +146,43 @@ const TS_SHAPE = {
   decisionOps: ['&&', '||', '??'],
 };
 
+// ---------- HCL / Terraform ----------
+// 实测结构（2026-09-17）：
+//   block = [identifier(块类型) string_lit(标签…) block_start body block_end]
+//   attribute = [identifier(属性名) expression]
+// 注意 terraform 与 hcl 两个语法包对同一份 .tf 产出的树**一模一样**，选了 hcl（覆盖面更广：.tf/.tfvars/.hcl/.nomad）。
+const HCL_KINDS = { resource: 'resource', data: 'data', module: 'module', variable: 'variable', output: 'output', locals: 'locals', terraform: 'terraform' };
+
+/** 只有 block 算类型；块类型（resource / variable / locals …）作为类别 */
+const hclKind = (node) => {
+  if (node.type !== 'block') return null;
+  const head = node.namedChildren[0];
+  return (head && head.type === 'identifier' && HCL_KINDS[head.text]) || 'block';
+};
+
+/**
+ * 取名：block 用**最后一个标签**，attribute 用它自己的标识符。
+ *
+ * 为什么不用 `aws_instance.web` 这种全地址：引用侧（`data.aws_ami.ubuntu.id` / `aws_instance.web[0]`）
+ * 能拆出来的记号只有 `data` `aws_ami` `ubuntu` `id` 这种单段，名字带点就永远对不上 ——
+ * 实测：用全地址时 7 个块 0 条边、29 处引用没匹配；改成最后一段后边就出来了（代价：同一份配置里
+ * 如果两个块最后一个标签撞名，会算进 ambiguous 计数——那正是这个计数存在的意义）。
+ */
+const hclName = (node) => {
+  if (node.type === 'attribute') {
+    const id = node.namedChildren.find((c) => c.type === 'identifier');
+    return id ? id.text : null;
+  }
+  if (node.type !== 'block') return null;
+  const labels = node.namedChildren
+    .filter((c) => c.type === 'string_lit')
+    .map((s) => s.text.replace(/^"|"$/g, ''))
+    .filter(Boolean);
+  if (labels.length) return labels[labels.length - 1];
+  const head = node.namedChildren[0];
+  return head && head.type === 'identifier' ? head.text : null;
+};
+
 // ---------- Ruby ----------
 // 节点名都是实测出来的（2026-09-17，tests/probe-nodes.mjs + 一份特意写全各种写法的样本）：
 //   class / module / method / singleton_method / superclass / call / if / unless / case / while / until / for
@@ -802,6 +839,27 @@ export const LANGUAGES = {
       const op = node.childForFieldName('operator');
       return !!op && ['&&', '||'].includes(op.text);      // 算数比较不算复杂度
     },
+  },
+
+  // HCL / Terraform：没有类概念，图上的节点是 block（resource / variable / module / output / locals…），
+  // 成员是块里的 attribute；引用靠标识符名字匹配（`data.aws_ami.ubuntu.id` 里的 `ubuntu`
+  // 会连到 `data "aws_ami" "ubuntu"` 那个块）。
+  hcl: {
+    id: 'hcl',
+    label: 'HCL / Terraform',
+    status: 'ok',
+    exts: ['.tf', '.tfvars', '.hcl', '.nomad'],
+    wasm: 'hcl/tree-sitter-hcl.wasm',
+    namespaces: {},
+    types: { block: 'block' },
+    members: { attribute: 'attribute' },
+    imports: {},
+    baseFields: [],
+    baseNodes: [],
+    kindOf: hclKind,
+    nameOf: hclName,
+    decisions: [],
+    decisionOps: [],
   },
 
   json: {
