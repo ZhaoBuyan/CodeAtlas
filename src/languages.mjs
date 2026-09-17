@@ -824,6 +824,7 @@ export const LANGUAGES = {
     wasm: 'ruby/tree-sitter-ruby.wasm',
     namespaces: { module: 1 },
     types: { class: 'class' },
+    // 这张表实际被 membersOf 接管（后者优先）；留着是为了看表就知道 Ruby 有哪些成员声明
     members: { method: 'method', singleton_method: 'method' },
     imports: {},
     baseFields: ['superclass'],
@@ -851,6 +852,8 @@ export const LANGUAGES = {
     exts: ['.tf', '.tfvars', '.hcl', '.nomad'],
     wasm: 'hcl/tree-sitter-hcl.wasm',
     namespaces: {},
+    // 注意：kindOf 存在时 types 会被忽略（kindOf 全权决定类别）；这两项一起写只是为了
+    // 万一将来给 HCL 加 baseNodes（基类搜索会用到 types 表）时不至于缺东西。
     types: { block: 'block' },
     members: { attribute: 'attribute' },
     imports: {},

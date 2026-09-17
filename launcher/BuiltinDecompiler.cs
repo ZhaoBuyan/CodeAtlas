@@ -128,8 +128,9 @@ namespace CodeAtlas
 
             // 设置要点：
             //  - ThrowOnAssemblyResolveErrors=false：引用程序集找不到时降级继续（默认真会抛异常）
-            //  - ShowILComments=false：关掉 `//IL_004a: Unknown result type...` 这类诊断注释——
-            //    它们会被扫描器当成注释行，甚至当成"说明"抽出来，属于凭空造出来的注释，不能要
+            //  - ILSpy 的 `//IL_004a: Unknown result type...` 诊断注释：v11 已经没有 ShowILComments 这个开关了，
+            //    改为写完文件后把它们剥掉（见下面 StripIlDiagnostics）——它们会被扫描器当成注释行，
+            //    甚至当成“说明”抽出来，属于凭空造出来的注释，不能要
             var settings = new DecompilerSettings
             {
                 ThrowOnAssemblyResolveErrors = false,
