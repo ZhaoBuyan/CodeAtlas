@@ -123,6 +123,9 @@ function renderMeta() {
     b.totals.parseErrors
       ? T(`<span class="chip warn">解析异常 <b>${fmt(b.totals.parseErrors)}</b> 处 / ${fmt(b.totals.parseErrorFiles)} 个文件</span>`, `<span class="chip warn">parse errors <b>${fmt(b.totals.parseErrors)}</b> spots / ${fmt(b.totals.parseErrorFiles)} files</span>`)
       : '',
+    b.totals.nonUtf8Files
+      ? T(`<span class="chip warn">编码存疑 <b>${fmt(b.totals.nonUtf8Files)}</b> 个文件可能不是 UTF-8（注释/字符串是乱码）</span>`, `<span class="chip warn">encoding? <b>${fmt(b.totals.nonUtf8Files)}</b> files are probably not UTF-8 (their comments/strings are mojibake)</span>`)
+      : '',
     (() => {
       const u = b.stats?.skipped?.unsupported || {};
       const total = Object.values(u).reduce((a, c) => a + c, 0);

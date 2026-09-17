@@ -203,6 +203,7 @@ function toolOverview(idx) {
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
   if (b.totals.parseErrors) lines.push(T(`注意：${b.totals.parseErrors} 处语法树解析异常（这些文件数据可能不全）`, `Note: ${b.totals.parseErrors} parse errors (data in those files may be incomplete)`));
   if (b.totals.compilerGenerated) lines.push(T(`注意：${b.totals.compilerGenerated} 个编译器生成/反编译生成类型（非手写代码）`, `Note: ${b.totals.compilerGenerated} compiler-generated / decompiled types (not hand-written code)`));
+  if (b.totals.nonUtf8Files) lines.push(T(`注意：${b.totals.nonUtf8Files} 个文件可能不是 UTF-8 编码（其中的注释 / 字符串是乱码）`, `Note: ${b.totals.nonUtf8Files} files are probably not UTF-8 (their comments / strings are mojibake)`));
   // 诚实边界：把"依赖边是名字匹配"这个前提摆在第一屏——只调 overview 的 AI 也得看得到
   const un = b.unresolved || {};
   lines.push(T(`可信度：依赖边是静态名字匹配（动态调用 / 反射 / 字符串拼名看不见）——未匹配 ${fmt(un.unknown || 0)} 处 · 同名歧义 ${fmt(un.ambiguous || 0)} 处`, `Confidence: dependency edges are static name matches (dynamic calls / reflection / string-built names are invisible) — ${fmt(un.unknown || 0)} unmatched · ${fmt(un.ambiguous || 0)} ambiguous`));

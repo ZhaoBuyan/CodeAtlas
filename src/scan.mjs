@@ -828,8 +828,13 @@ async function extractFiles(files) {
 
   for (const f of files) {
     let rawSource;
+    let nonUtf8 = false;
     try {
-      rawSource = fs.readFileSync(f.abs, 'utf8');
+      // 顺手查一眼编码：非 UTF-8（GBK / ANSI 之类）会被**静默**替换成 U+FFFD —— 注释和字符串变乱码，
+      // 而语法树不报错，用户容易以为是工具的问题。统计出来，在报告 / MCP / 网页里都说一句。
+      const rawBuf = fs.readFileSync(f.abs);
+      rawSource = rawBuf.toString('utf8');
+      if (Buffer.compare(Buffer.from(rawSource, 'utf8'), rawBuf) !== 0) nonUtf8 = true;
     } catch (err) {
       failures.push({ path: f.rel, error: String(err.message || err) });
       continue;
@@ -946,6 +951,7 @@ async function extractFiles(files) {
       bytes: f.bytes,
       mtime: Math.round(f.mtime),
       errors: facts.errors,
+      nonUtf8,
       namespaces: facts.namespaces,
       imports: facts.imports,
       types: typeIds,
@@ -1300,6 +1306,7 @@ export async function scan(opts) {
     bytes: files.reduce((a, f) => a + f.bytes, 0),
     parseErrors: fileRecs.reduce((a, f) => a + (f.errors || 0), 0),
     parseErrorFiles: fileRecs.filter((f) => f.errors > 0).length,
+  nonUtf8Files: fileRecs.filter((f) => f.nonUtf8).length,
     compilerGenerated: allTypes.filter((t) => t.tags.includes('compiler-generated')).length,
   };
 

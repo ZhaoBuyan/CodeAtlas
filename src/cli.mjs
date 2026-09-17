@@ -93,6 +93,7 @@ function printScanReport(b, out) {
   console.log(`${t('  版本戳    ', '  Revision    ')}${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}${b.source.git.dirty ? t(' (有未提交改动)', ' (uncommitted changes)') : ''}` : t(' （非 git 仓库，用文件时间戳）', ' (not a git repo — using file timestamps)')}`);
   console.log(`${t('  未解析引用 ', '  Unresolved  ')}unknown ${nf(b.unresolved.unknown)} / ambiguous ${nf(b.unresolved.ambiguous)}`);
   if (b.totals.parseErrors) console.log(t(`  解析异常  ${nf(b.totals.parseErrors)} 处 / ${nf(b.totals.parseErrorFiles)} 个文件（语法树没解析干净，这些文件的数据可能不全）`, `  Parse errors ${nf(b.totals.parseErrors)} spots / ${nf(b.totals.parseErrorFiles)} files (parse tree had errors; data in those files may be incomplete)`));
+  if (b.totals.nonUtf8Files) console.log(t(`  编码存疑  ${nf(b.totals.nonUtf8Files)} 个文件可能不是 UTF-8（注释 / 字符串会显示成乱码；存成 UTF-8 再扫一次就好了）`, `  Encoding?  ${nf(b.totals.nonUtf8Files)} files are probably not UTF-8 (comments / strings will look like mojibake; save them as UTF-8 and re-scan)`));
   if (b.source.failures.length) console.log(t(`  解析失败  ${b.source.failures.length} 个文件`, `  Parse failed ${b.source.failures.length} files`));
   if (b.source.failedLanguages && b.source.failedLanguages.length) {
     const fl = b.source.failedLanguages.map((x) => x.lang).join(t('、', ', '));

@@ -110,6 +110,11 @@ namespace CodeAtlas
         public bool Incremental { get; set; }
         /// <summary>界面与引擎输出的语言："zh"（默认）或 "en"</summary>
         public string Lang { get; set; } = "zh";
+        /// <summary>我们不认识的字段：原样留着。保存时是整体重写，若不带着它们，别的版本写的字段会被抹掉
+        ///（新旧两个构建共用一份配置时就会踩 —— 跟 MuSync 当年那次“配置互踩”同一个道理）。</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, System.Text.Json.JsonElement> Extra { get; set; }
+
         /// <summary>每个项目记一份（语言 / 规则文件 / 上次跑的时间）——再打开就不用重新配</summary>
         public Dictionary<string, ProjectRecord> Projects { get; set; } = new Dictionary<string, ProjectRecord>();
     }
