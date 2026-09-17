@@ -218,15 +218,21 @@ function listExes(dir) {
   } catch { return []; }
 }
 function pickAssemblies(dir, dllPattern, baseName) {
-  const all = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.dll'));
+  let all = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.dll'));
   if (dllPattern) {
     const re = new RegExp(`^${String(dllPattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i');
-    return all.filter((n) => re.test(n)).map((n) => path.join(dir, n));
+    all = all.filter((n) => re.test(n));
+  } else {
+    const exact = all.find((n) => n.toLowerCase() === `${baseName.toLowerCase()}.dll`);
+    if (exact) all = [exact];
+    else {
+      const own = all.filter((n) => !SKIP_ASM.test(n));
+      all = own.length && own.length <= 5 ? own : [];
+    }
   }
-  const exact = all.find((n) => n.toLowerCase() === `${baseName.toLowerCase()}.dll`);
-  if (exact) return [path.join(dir, exact)];
-  const own = all.filter((n) => !SKIP_ASM.test(n));
-  return own.length && own.length <= 5 ? own.map((n) => path.join(dir, n)) : [];
+  // 只在真正的 .NET 程序集里挑。原生 dll（C/C++ 编译）挑出来只会让 ilspycmd 白跑一趟，
+  // 而且会把报错引到"装 ilspycmd"上 —— 而那种目标装了也扫不了（比如指向 WeGame 这类安装目录）。
+  return all.filter((n) => looksManaged(path.join(dir, n))).map((n) => path.join(dir, n));
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +242,10 @@ function pickAssemblies(dir, dllPattern, baseName) {
 function decompileAssemblies(assemblies, workDir, notes) {
   const ilspy = findIlspy();
   if (!ilspy) {
-    throw new Error('找不到 ilspycmd。装一个：dotnet tool install -g ilspycmd --version 9.1.0.7988');
+    throw new Error([
+      '这个目标需要反编译（.NET 程序集），但机器上没有 ilspycmd。',
+      '反编译工具不随本工具打包，用到才装：dotnet tool install -g ilspycmd --version 9.1.0.7988',
+    ].join('\n'));
   }
   notes.push(`反编译工具：ilspycmd ${ilspy.version}`);
   let csCount = 0;
@@ -360,13 +369,16 @@ export async function ingest(o) {
 
     if (!sourceDir && assemblies) sourceDir = decompileAssemblies(assemblies, workDir, notes);
     if (!sourceDir) {
+      const dlls = (() => { try { return fs.readdirSync(target).filter((n) => n.toLowerCase().endsWith('.dll')); } catch { return []; } })();
+      const nativeDlls = dlls.filter((n) => !looksManaged(path.join(target, n))).length;
       throw new Error([
         `没有什么可以分析的：${target}`,
         '目录里既没有源码，也没有可反编译的程序集。',
-        '办法：① 指向源码目录；② 指向 .dll；③ 指向 .exe（单文件发行版会自动解包，需 sfextract）；④ --dll "App*.dll" 指定。',
-        '注意：原生可执行文件（C/C++ 编译）反编译不了 —— 只支持 .NET 程序集 / .NET 单文件发行版 / Java jar。',
+        nativeDlls ? `注意：这里能找到 ${nativeDlls} 个 .dll，但它们都不是 .NET 程序集（原生 C/C++ 编译），反编译工具也读不出结构。` : '',
+        '办法：① 指向源码目录；② 指向 .dll（.NET 的）；③ 指向 .exe（.NET 单文件发行版会自动解包，需 sfextract）；④ --dll "App*.dll" 指定。',
+        '注意：原生可执行文件 / 安装目录（C/C++ 编译，比如多数游戏与启动器）反编译不了。',
         '例外：Unity 游戏的 <游戏名>_Data\\Managed\\*.dll 是 .NET 程序集，可以直接指它。',
-      ].join('\n'));
+      ].filter(Boolean).join('\n'));
     }
   }
 

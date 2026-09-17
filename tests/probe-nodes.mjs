@@ -7,8 +7,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Parser from 'web-tree-sitter';
-import { LANGUAGES, WASM_DIR } from '../src/languages.mjs';
+import { Parser, Language } from 'web-tree-sitter';
+import { LANGUAGES, resolveWasm } from '../src/languages.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const filter = process.argv[2];
@@ -23,7 +23,7 @@ if (wi >= 0) {
   const wasm = process.argv[wi + 1];
   const file = process.argv[wi + 2];
   const p2 = new Parser();
-  p2.setLanguage(await Parser.Language.load(path.join(WASM_DIR, wasm)));
+  p2.setLanguage(await Language.load(resolveWasm({ wasm })));
   const tree = p2.parse(fs.readFileSync(file, 'utf8'));
   const hist = new Map();
   const walk = (n) => { hist.set(n.type, (hist.get(n.type) || 0) + 1); for (const c of n.namedChildren) walk(c); };
@@ -43,7 +43,7 @@ for (const lang of Object.values(LANGUAGES)) {
   const file = findFirst(FIXTURES, lang.exts);
   if (!file) continue;
   const parser = new Parser();
-  parser.setLanguage(await Parser.Language.load(path.join(WASM_DIR, lang.wasm)));
+  parser.setLanguage(await Language.load(resolveWasm(lang)));
   const src = fs.readFileSync(file, 'utf8');
   const tree = parser.parse(src);
 

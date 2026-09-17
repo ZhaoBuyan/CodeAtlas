@@ -17,7 +17,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { LANGUAGES } from '../src/languages.mjs';
+import { LANGUAGES, WASM_ROOTS, resolveWasm } from '../src/languages.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -102,19 +102,33 @@ copy(fs.readdirSync(path.join(ROOT, 'licenses')).map((f) => [`licenses/${f}`, nu
 // 3) 前端要用的 d3（只取发布用的那一个文件）
 copy([['node_modules/d3/dist/d3.min.js', null]]);
 
-// 4) 引擎唯一的裸依赖：web-tree-sitter（package.json + js + wasm 三件套）
+// 4) 引擎唯一的裸依赖：web-tree-sitter（package.json + ESM 入口 + 运行时 wasm + 许可证）
+//    注意：0.27 的文件名是 web-tree-sitter.js / web-tree-sitter.wasm（旧版叫 tree-sitter.js / tree-sitter.wasm）
 copy([
   ['node_modules/web-tree-sitter/package.json', null],
-  ['node_modules/web-tree-sitter/tree-sitter.js', null],
-  ['node_modules/web-tree-sitter/tree-sitter.wasm', null],
+  ['node_modules/web-tree-sitter/web-tree-sitter.js', null],
+  ['node_modules/web-tree-sitter/web-tree-sitter.wasm', null],
   ['node_modules/web-tree-sitter/LICENSE', null],
 ]);
 
-// 5) 语法包：只带我们支持的 24 门语言（不用的 12 个省 18 MB）
+// 5) 语法包：只带语言表里用到的那几个（105 个里用不到的省一大截）
+//    两个来源分别归位：主来源 → node_modules/tree-sitter-wasm/out/，自己补的 → vendor/wasm/
+//    路径必须与 languages.mjs 里 WASM_ROOTS 保持一致，否则运行时找不到
 const langs = Object.values(LANGUAGES);
 const wasms = [...new Set(langs.map((l) => l.wasm))];
-copy(wasms.map((w) => [`node_modules/tree-sitter-wasms/out/${w}`, `node_modules/tree-sitter-wasms/out/${w}`]));
-copy([['node_modules/tree-sitter-wasms/LICENSE', null]]);
+const wasmCopies = wasms.map((w) => {
+  const src = resolveWasm({ wasm: w });
+  const i = WASM_ROOTS.findIndex((r) => src.startsWith(r + path.sep));
+  if (i < 0) throw new Error(`语法包不在已知来源里：${w}`);
+  return [`${rel(WASM_ROOTS[i])}/${w}`, null];
+});
+copy(wasmCopies);
+copy([
+  ['node_modules/tree-sitter-wasm/LICENSE', null],
+  ...fs.readdirSync(path.join(ROOT, 'vendor', 'wasm'))
+    .filter((f) => f.startsWith('LICENSE'))
+    .map((f) => [`vendor/wasm/${f}`, null]),
+]);
 
 // 6) node.exe（完全版）
 let nodeInfo = null;

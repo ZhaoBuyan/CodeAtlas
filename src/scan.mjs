@@ -11,12 +11,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import Parser from 'web-tree-sitter';
-import { WASM_DIR, LANGUAGES, languageForExt, resolveLanguages } from './languages.mjs';
+import { Parser, Language } from 'web-tree-sitter';
+import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages } from './languages.mjs';
 import { preprocess } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 
 const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** 起子进程时用它调回自己（__extract 内部命令） */
@@ -366,8 +366,9 @@ function extractFile(source, tree, lang) {
       const name = nameOf(node, lang);
       if (name) {
         namespaces.add(name);
-        if (lang.namespaceScope === 'file') {
-          // Java / Kotlin 的 package 语句是文件级兄弟节点，作用于整份文件
+        // 作用域=整份文件：Java/Kotlin 的 package 语句，以及 C# 10 的 `namespace X;`
+        // （后者的类型声明在语法树里是它的兄弟节点，不是子节点，所以必须走这条）
+        if (lang.namespaceScope === 'file' || (lang.fileScopedNamespaces || []).includes(type)) {
           fileNamespace = name;
           sweepComments(node);
           return;
@@ -754,7 +755,7 @@ async function extractFiles(files) {
   const getParser = async (lang) => {
     if (parsers.has(lang.id)) return parsers.get(lang.id);
     const p = new Parser();
-    const language = await Parser.Language.load(path.join(WASM_DIR, lang.wasm));
+    const language = await Language.load(resolveWasm(lang));
     p.setLanguage(language);
     parsers.set(lang.id, p);
     return p;
@@ -1043,11 +1044,11 @@ export async function scan(opts) {
 
   // 解析：**每门语言起一个子进程**（父进程自己一律不装语法包）
   //
-  // 为什么必须分进程：每门语法包一加载就常驻约 150~180 MB，而且 web-tree-sitter 0.20.8
-  // 没提供释放接口（Parser.delete() 无效、Language.delete 不存在、手动 GC 也没用——都实测过）。
-  // 同进程装 24 门峰值能到 4 GB 以上：扫描中途会 OOM，退出阶段（V8 析构）必崩。
-  // 分进程之后：每个子进程只装一门（峰值就一门），父进程不装 wasm → 退出干净、退出码正确；
-  // 某个子进程就算崩了，也只是"那一门没进地图"，其余照常，并且会明说。
+  // 为什么分进程：老运行时（web-tree-sitter 0.20.8）每门语法包一加载就常驻 150~180 MB 且没有释放接口，
+  // 同进程装 9 门就崩（退出期 0xC0000409，1~3 门正常）——详见 ROADMAP 附录 A.11 的实测表。
+  // 升到 0.27 后单门内存降到约 11 MB、105 门同进程一次装也能干净退出（实测），内存不再是理由；
+  // 保留分进程是为了**崩溃隔离**：某个语法包在特定输入上硬 abort（wasm 层 abort 杀进程，JS 拦不住）时，
+  // 只丢那一门、其余照常进地图。代价是每门约 0.2 s 进程启动。
   // ---------- 增量：先看缓存，没变的文件直接复用上次的解析结果 ----------
   const cacheFile = path.join(outDir, CACHE_NAME);
   const langSpec = opts.lang || 'auto';

@@ -14,8 +14,8 @@ import path from 'node:path';
 import v8 from 'node:v8';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import Parser from 'web-tree-sitter';
-import { LANGUAGES, WASM_DIR } from '../src/languages.mjs';
+import { Parser, Language } from 'web-tree-sitter';
+import { LANGUAGES, resolveWasm } from '../src/languages.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -61,12 +61,12 @@ if (useGc && !gc) say('  ⚠ 没拿到 GC 句柄，--gc 无效');
 const kept = [];
 let peak = 0;
 for (const lang of langs) {
-  const wasm = path.join(WASM_DIR, lang.wasm);
+  const wasm = resolveWasm(lang);
   if (!fs.existsSync(wasm)) { say(`  ${lang.id.padEnd(12)} 缺 wasm（打包时被裁掉了），跳过`); continue; }
   let note = '';
   try {
     let p = new Parser();
-    let language = await Parser.Language.load(wasm);
+    let language = await Language.load(wasm);
     p.setLanguage(language);
     const sample = findSample(lang);
     if (sample) p.parse(fs.readFileSync(sample, 'utf8'));

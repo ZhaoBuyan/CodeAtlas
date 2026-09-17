@@ -110,7 +110,7 @@ npm run publish:lite   # 只出精简版
   超过 7 天没动过的旧解包目录会在下次启动时顺手清掉，免得换个版本就多留 120 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本/包大小不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 24 门代码语言 + 5 种文件级格式**的 wasm（tree-sitter-wasms 里用不到的那几个不进去）。
+- 打包只带**我们支持的 23 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去；SystemRDL 待补）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - 反编译工具（`ilspycmd` / `sfextract` / `cfr.jar`）**不打进包**，用到时按提示装。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -140,20 +140,16 @@ node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
 - 反编译产物没有源码注释，所以“说明”是空的；行数含语法糖展开（实测比源码高 ~6%），界面上会明确标出来。
 - **编译器生成物自动识别**：形如 `<PrivateImplementationDetails>`、`_003C...`（ILSpy 转义）、`__InlineArray`、`__DisplayClass` 的类型会自动打上 `compiler-generated` 标签，反编译产物默认在界面里隐藏（可取消勾选看）。
 
-## C# 语法预处理（反编译产物友好）
+## C# 语法（不再需要预处理了）
 
-内置的 tree-sitter-c_sharp 是 2023 年版，不认 C# 11/12 部分新语法，会把整段标成 ERROR。
-`src/preprocess.mjs` 在解析前做等值改写（**行号、行数不变**，字符串/注释里绝不乱动）：
+以前内置的 tree-sitter-c_sharp 是 2023 年版，不认 C# 11/12 的部分新语法，会把整段标成 ERROR，
+所以 `src/preprocess.mjs` 会在解析前做等值改写（行号/行数不变，不碰字符串与注释）。
 
-| 语法 | 处理 |
-| --- | --- |
-| `"""..."""` 原始字符串 | 改写为 `@"..."`（`"` 双写） |
-| `class Foo(...)` 主构造函数 | 去掉参数表（不影响类型/成员/继承结构） |
-| `file class Foo`（C# 11 file 修饰符） | 换成 `internal` |
-| `void* p`（不安全指针） | 换成 `nint`（解析等价） |
-| 局部变量名叫 `required` | 改名 `required_`（只在明显是标识符的位置） |
-
-实测：一个几万行的 C# 项目（含反编译产物）解析异常从 78 处降到 **0**。
+**2026-09-17 升级语法包后这套改写已停用**：新的 C# 语法自己就认得那些写法，实测 12 项（原始字符串、
+主构造函数、`file` 修饰符、`void*`、集合表达式、`required` 成员、`scoped ref`、静态抽象成员、
+lambda 默认参数、raw 插值字符串、变量名叫 `required`…）**全是 0 个 ERROR**；而旧的改写还会把名叫
+`required` 的变量改成 `required_`，反而把名字弄错。`src/preprocess.mjs` 作为通用机制留在仓库里
+（哪门语言的语法包又落后于语言版本时，在 profile 里加一行 `preprocess: 'xxx'` 就能重新挂上），目前没有语言用它。
 
 ## 给 AI 用：MCP 查询层
 
@@ -202,10 +198,10 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（24 门，各自独立进程）
+npm test                                          # 语言 fixtures 回归（23 门，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
-node tests/probe-abi.mjs                           # 审计哪些语法包能用 / 用不了
+node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
 node tests/probe-grammars.mjs [--release] [--gc]   # 语法包内存探针（多语法包崩在哪儿，逐行落盘）
 node src/cli.mjs langs [--json]                    # 看支持哪些语言（--json 给程序读）
 ```
@@ -299,7 +295,7 @@ MIT（见 [LICENSE](LICENSE)）。
 反编译只支持三类：**.NET 程序集**、**.NET 单文件发行版**、**Java .jar**（详见下面「没有源码也能扫」的已知限制）。
 Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指它就能扫。
 
-### 认识的语言（24 门代码语言）
+### 认识的语言（23 门代码语言，另有 SystemRDL 待补）
 
 | 语言 | 后缀 | 状态 |
 | --- | --- | --- |
@@ -324,13 +320,14 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | OCaml | `.ml` `.mli` | ✅ fixtures（module/type；顶层 let 会合成 module 节点） |
 | ReScript | `.res` | ✅ fixtures（module / type / variant） |
 | TLA+ | `.tla` | ✅ fixtures（module + operator / variable） |
-| SystemRDL | `.rdl` | ✅ fixtures（addrmap / reg / field；内联匿名组件显示为 `(anonymous)`） |
+| SystemRDL | `.rdl` | ⏸️ 暂时缺席（旧语法包与当前运行时不吃；新的要自己用 emscripten 编，正在补 —— 见 ROADMAP 附录 A.12） |
 | Emacs Lisp | `.el` | ✅ fixtures（无类型概念 → 顶层函数/变量挂在合成的 module 节点上） |
 | Elixir | `.ex` `.exs` | ✅ fixtures（module / function / struct；注：`defmodule`/`def` 在语法树里是 call 节点，靠专属钩子识别；`alias` 会计入导入，但暂不连成依赖边） |
 
-**目前用不了的**（我们的运行时锁在 tree-sitter 0.20.8，它们的语法包要求更新的 ABI）：`Dart`、`Ruby`、`Elm`、`QL`。
-`Vue` 单文件组件、`Objective-C`（`.m` 与 MATLAB 扩名冲突）暂未支持，原因已记录。
-审计命令：`node tests/probe-abi.mjs`（把每个语法包真解析一遍，分清能用 / 用不了）。
+**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`Dart`、`Ruby`、`Elm`、`QL`、`Haskell`、`PowerShell`、`Terraform/HCL`、`GraphQL`、`Julia`、`Vue`、`Svelte`…
+`Vue` 单文件组件要先解决“解析内嵌 `<script>`”，`Objective-C` 的 `.m` 与 MATLAB 扩名冲突（只能靠开关指定），这两个是刻意先不做。
+`TLA+` 的上游没有可直接用的 wasm，放在 `vendor/wasm/` 自己维护；`SystemRDL` 暂时缺席（同样原因，要自己用 emscripten 编一份，详见 ROADMAP）。
+审计命令：`node tests/probe-abi.mjs`（把每个语法包真加载 + 真解析一遍，分清能用 / 用不了）。
 
 **文件级格式（默认不开，要看就显式指定）**：`JSON` `.json` · `YAML` `.yaml .yml` · `TOML` `.toml` · `CSS` `.css` · `HTML` `.html .htm` —— 这些没有"类型"可言，只会以文件为单位出现在图上（合成 module 节点）：
 
@@ -340,21 +337,25 @@ node src/cli.mjs scan ./repo --lang json,yaml        # 只看配置文件
 node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 ```
 
-**语法包内存与“分进程解析”**：每门 tree-sitter 语法包一加载就常驻约 150–180 MB，而且 `web-tree-sitter` 0.20.8 **没有释放接口**（`Parser.delete()` 无效、`Language.delete` 不存在、手动 GC 也没用 —— 都实测过，见 `tests/probe-grammars.mjs`）。所以同进程里装十几门就是 GB 级：扫描中途会 OOM、退出阶段（V8 析构）必崩。
+**语法包与“分进程解析”**：升到 `web-tree-sitter` 0.27.0 之后，单门语法包加载后常驻约 **11 MB**（曾经是 150–180 MB），同进程里装 105 门也只是 1.2 GB 级别（实测：20 门共 104 MB、自然退出 exit=0）。
+分进程**仍然保留**，但理由换成了**崩溃隔离**：语法包在特定输入上硬崩（wasm 层 abort，JS 拦不住）时，
+只丢那一门、其余照常进地图。参考实测：老运行时同进程装 9 门必崩（退出码 `0xC0000409`），1~3 门正常。
 注意这**不是“内存不够”**：本机 Node 能分配到 50 GB+ 才叫不够。
 
 **所以扫描是这么跑的**：父进程只负责收集文件 / 建索引 / 写 bundle，**每门语言的解析都在自己的子进程里做**（每个子进程只装一门语法包）。
 
-- 内存峰值 = 一门（约 200 MB），不再随语言数叠加上去；
+- 内存峰值 = 一门（约 50 MB），不再随语言数叠加上去；
 - 某个子进程挂掉，只丢那一门（报告里会明说），其余语言照常进地图；
 - 父进程不装 wasm，所以**退出干净、退出码正确** —— Swift/Scala 那类“退出时崩”也一并消失；
 - 代价：多几次进程启动（每门约 0.2 s）。
 
 调这个可以用：`npm run probe:mem`（语法包内存探针，逐行落盘）。
 
-**测试过的语法包共 32 个**（用哪个就加 profile，一般 5~10 行）：
-`bash c c_sharp cpp css elisp elixir go html java javascript json kotlin lua objc ocaml php python rescript rust scala solidity swift toml tsx typescript vue yaml zig` 等。
-**用不了的有 4 个**：`dart`（需要 ABI 15，当前运行时锁在 0.20.8）、`ruby`、`elm`、`ql`（加载即崩）。要支持它们得先升级 tree-sitter 运行时。
+**语法包来源与规模**（用哪个就在 `src/languages.mjs` 里加 profile，一般 5~10 行）：
+
+- 主来源：npm 包 `tree-sitter-wasm`（**105 个语法包**；当前运行时 `web-tree-sitter` 0.27.0，兼容语法 ABI 13~15）；
+- 自己补的：`vendor/wasm/`（目前有 TLA+；SystemRDL 待编）；
+- 全量冒烟：`npm run probe:abi` → 实测两个来源里的 wasm 全部能加载并解析。
 
 加一门语言 = 在 `src/languages.mjs` 加一份 profile（节点类型 + 继承字段 + 复杂度分支表），
 再往 `tests/fixtures/<语言>/` 丢一个样例、在 `tests/run-fixtures.mjs` 写期望值，然后 `npm test`。
@@ -386,7 +387,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ### 读不了什么（边界，说清楚）
 
-1. **没支持的语言**（Vue / Dart / Ruby / Elm / QL …）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.rb 2 · .dart 1 …）」；
+1. **没支持的语言**（Ruby / Dart / Vue / Haskell…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.rb 2 · .dart 1 …）」；
    还有一种容易误会的：「我们支持、但这次没在扫描范围内」的文件（没勾那门语言，或者 JSON/YAML 这类默认不扫的格式），会单独报成「**语言范围外** N 个文件没扫」，不会被算成“不支持”；
 2. **反编译产物**：没有源码注释（所以"说明"是空的）、行数比源码高（语法糖被展开）、会多出编译器生成物（已自动打标签并在界面默认隐藏）；
 3. **静态分析的边界**：反射、动态 `import`、拼字符串调出来的方法**拿不到**；依赖边是名字匹配级别的，重名符号会误连（界面标着 unknown / ambiguous 计数）；
@@ -399,7 +400,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：24 门代码语言 + 5 种文件级格式
+- [x] 语言覆盖：23 门代码语言 + 5 种文件级格式（SystemRDL 待补）
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤

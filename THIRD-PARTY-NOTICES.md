@@ -47,38 +47,54 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### tree-sitter 语法包（tree-sitter-wasms）
+### tree-sitter 语法包（tree-sitter-wasm）
 
-- **是什么**：各个语言的语法被预编译成 `.wasm`，由 npm 包 `tree-sitter-wasms` 汇总分发；我们只带支持的那 24 个（`payload.json` 里有清单）。
-- **许可**：Unlicense（公有领域）
-- **原作者**：每个语法包由各自社区维护（`tree-sitter/tree-sitter-*`、`tree-sitter-grammars/tree-sitter-*` 等仓库，多为 MIT）。`tree-sitter-wasms` 只做汇总打包。
-- **原文**（`node_modules/tree-sitter-wasms/LICENSE`）：
+- **是什么**：各个语言的语法被预编译成 `.wasm`，由 npm 包 `tree-sitter-wasm` 汇总分发（共 105 个）；我们只带语言表里支持的那几个（`payload.json` 里有清单）。
+- **许可**：MIT
+- **原作者**：每个语法包由各自社区维护（`tree-sitter/tree-sitter-*`、`tree-sitter-grammars/tree-sitter-*` 等仓库，多为 MIT / Apache-2.0）。`tree-sitter-wasm` 只做汇总打包。
+- **原文**（`node_modules/tree-sitter-wasm/LICENSE`）：
 
 ```text
-This is free and unencumbered software released into the public domain.
+MIT License
 
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
+Copyright (c) 2026 Crysthamus
 
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-For more information, please refer to <https://unlicense.org>
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### 自己补的语法包（`vendor/wasm/`）
+
+上面那个汇总包里没有的语法，就自己取一份放进仓库（目前只有 TLA+）。
+
+**TLA+**（`vendor/wasm/tree-sitter-tlaplus.wasm`，取自 npm 包 `@tlaplus/tree-sitter-tlaplus@1.5.0`）
+
+- **许可**：MIT
+- **原文**（`vendor/wasm/LICENSE-tree-sitter-tlaplus.txt`）：
+
+```text
+Copyright 2020 Andrew Helwer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 ### d3

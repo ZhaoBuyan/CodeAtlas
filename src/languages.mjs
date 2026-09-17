@@ -3,8 +3,11 @@
  *
  * 每加一门语言只需要在这里加一份 profile：
  *   exts        文件后缀
- *   wasm        tree-sitter 语法（来自 tree-sitter-wasms）
+ *   wasm        tree-sitter 语法（相对 WASM_ROOTS 的路径，如 'ruby/tree-sitter-ruby.wasm'）；用 resolveWasm() 解析
  *   namespaces  命名空间/包 节点类型
+ *   fileScopedNamespaces  其中"作用到文件后续全部声明"的那几种（C# 10 的 `namespace X;`）——
+ *               新版 C# 语法里 file_scoped_namespace_declaration 只包住名字，
+ *               后面的类型声明是它的**兄弟节点**，不能当普通块来处理
  *   types       类型声明节点类型 -> 类别名
  *   members     成员声明节点类型 -> 类别名
  *   imports     导入语句节点类型
@@ -16,11 +19,29 @@
  * status: 'ok' 已实测过 / 'wip' 配置写好但未验证
  * 注意：每种语言的语法节点名要以实际语法为准（tests/fixtures 会跑回归）。
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const WASM_DIR = path.join(HERE, '..', 'node_modules', 'tree-sitter-wasms', 'out');
+export const ENGINE_ROOT = path.join(HERE, '..');
+
+/**
+ * 语法包目录（按顺序找）：
+ *   ① node_modules/tree-sitter-wasm/out —— 主来源（105 个语法包；布局是 <语言>/tree-sitter-<语言>.wasm）
+ *   ② vendor/wasm                       —— 上游没有现成 wasm 的，自己编或从别的包取（目前：TLA+ / SystemRDL）
+ * 换了运行时（web-tree-sitter 0.27）之后，旧的 tree-sitter-wasms@0.1.13（ABI 14）已不能加载，不再使用。
+ */
+export const WASM_ROOTS = [
+  path.join(ENGINE_ROOT, 'node_modules', 'tree-sitter-wasm', 'out'),
+  path.join(ENGINE_ROOT, 'vendor', 'wasm'),
+];
+
+/** profile.wasm → 绝对路径（打包脚本用同一套规则，别在两处各写一份） */
+export function resolveWasm(profile, roots = WASM_ROOTS) {
+  const cands = roots.map((root) => path.join(root, profile.wasm));
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
 
 /** const foo = () => {} / const bar = function () {} —— 是不是"函数赋值" */
 // ---------- Elixir 专用：defmodule / def / alias 在语法树里全是 call 节点，只能按“调用的名字”判断 ----------
@@ -126,11 +147,18 @@ export const LANGUAGES = {
     label: 'C#',
     status: 'ok',
     exts: ['.cs'],
-    wasm: 'tree-sitter-c_sharp.wasm',
+    wasm: 'c_sharp/tree-sitter-c_sharp.wasm',
+    // 2026-09-17 升级语法包后，五条改写里四条不再需要（新语法原生认得原始字符串 / 主构造函数 /
+    // file 修饰符 / void* 等，12 项实测均 0 ERROR）。只剩「局部变量名叫 required」还必须改：
+    // 新旧语法都会把 `required = 1;` 里的 required 当修饰符关键字 → 整句 ERROR（真项目实测 3 处）。
+    // preprocess.mjs 里的 csharp() 已经收窄成只做这一条。
     preprocess: 'csharp',
     // 参数名的标识符不算"引用"（否则参数名与类型重名时会产生假依赖）
     skipNameNodes: { parameter: 'name' },
     namespaces: { namespace_declaration: 1, file_scoped_namespace_declaration: 1 },
+    // C# 10 的 `namespace Foo;`：整份文件都属于它。新版语法里它只包住名字，
+    // 后面的类型是兄弟节点（旧语法是包在里面的）——不声明这条，所有类型都会落到 (global)。
+    fileScopedNamespaces: ['file_scoped_namespace_declaration'],
     types: {
       class_declaration: 'class',
       interface_declaration: 'interface',
@@ -152,8 +180,10 @@ export const LANGUAGES = {
       enum_member_declaration: 'enumValue',
     },
     imports: { using_directive: 1 },
-    baseFields: ['bases'],
-    baseNodes: [],
+    // 旧语法包把继承列表放在 base_list 字段里；换成 tree-sitter-wasm@2.0.1 的 C# 语法后
+    // base_list 变成普通子节点（childForFieldName('bases') 取不到了），改走 baseNodes。
+    baseFields: [],
+    baseNodes: ['base_list'],
     decisions: [
       'if_statement', 'switch_statement', 'for_statement', 'foreach_statement',
       'while_statement', 'do_statement', 'catch_clause', 'conditional_expression',
@@ -162,16 +192,16 @@ export const LANGUAGES = {
     decisionOps: ['&&', '||', '??'],
   },
 
-  typescript: { id: 'typescript', label: 'TypeScript', status: 'ok', exts: ['.ts', '.mts', '.cts'], wasm: 'tree-sitter-typescript.wasm', ...TS_SHAPE },
+  typescript: { id: 'typescript', label: 'TypeScript', status: 'ok', exts: ['.ts', '.mts', '.cts'], wasm: 'typescript/tree-sitter-typescript.wasm', ...TS_SHAPE },
   // .tsx 必须用 tsx 语法：typescript 语法不认 JSX
-  tsx: { id: 'tsx', label: 'TSX', status: 'ok', exts: ['.tsx'], wasm: 'tree-sitter-tsx.wasm', ...TS_SHAPE },
+  tsx: { id: 'tsx', label: 'TSX', status: 'ok', exts: ['.tsx'], wasm: 'tsx/tree-sitter-tsx.wasm', ...TS_SHAPE },
 
   javascript: {
     id: 'javascript',
     label: 'JavaScript',
     status: 'ok',
     exts: ['.js', '.mjs', '.cjs', '.jsx'],
-    wasm: 'tree-sitter-javascript.wasm',
+    wasm: 'javascript/tree-sitter-javascript.wasm',
     namespaces: {},
     types: {
       class_declaration: 'class',
@@ -205,7 +235,7 @@ export const LANGUAGES = {
     label: 'Java',
     status: 'ok',
     exts: ['.java'],
-    wasm: 'tree-sitter-java.wasm',
+    wasm: 'java/tree-sitter-java.wasm',
     namespaces: { package_declaration: 1 },
     namespaceScope: 'file',
     types: {
@@ -238,7 +268,7 @@ export const LANGUAGES = {
     label: 'Python',
     status: 'ok',
     exts: ['.py'],
-    wasm: 'tree-sitter-python.wasm',
+    wasm: 'python/tree-sitter-python.wasm',
     docstring: true,
     namespaces: {},
     types: { class_definition: 'class' },
@@ -262,7 +292,7 @@ export const LANGUAGES = {
     label: 'Kotlin',
     status: 'ok',
     exts: ['.kt', '.kts'],
-    wasm: 'tree-sitter-kotlin.wasm',
+    wasm: 'kotlin/tree-sitter-kotlin.wasm',
     namespaces: { package_header: 1 },
     namespaceScope: 'file',
     types: {
@@ -286,7 +316,7 @@ export const LANGUAGES = {
     label: 'Lua',
     status: 'ok',
     exts: ['.lua'],
-    wasm: 'tree-sitter-lua.wasm',
+    wasm: 'lua/tree-sitter-lua.wasm',
     namespaces: {},
     // Lua 没有类型系统，落到"函数"一级（文件会合成一个模块节点）
     types: {},
@@ -309,7 +339,7 @@ export const LANGUAGES = {
     label: 'Shell',
     status: 'ok',
     exts: ['.sh', '.bash', '.zsh'],
-    wasm: 'tree-sitter-bash.wasm',
+    wasm: 'bash/tree-sitter-bash.wasm',
     namespaces: {},
     types: {},
     members: {
@@ -329,7 +359,7 @@ export const LANGUAGES = {
     label: 'Zig',
     status: 'ok',
     exts: ['.zig'],
-    wasm: 'tree-sitter-zig.wasm',
+    wasm: 'zig/tree-sitter-zig.wasm',
     namespaces: {},
     // Zig 的类型写在 const X = struct/enum {...}，名称在父节点上（扫描器已支持）
     types: {
@@ -355,7 +385,7 @@ export const LANGUAGES = {
     label: 'Solidity',
     status: 'ok',
     exts: ['.sol'],
-    wasm: 'tree-sitter-solidity.wasm',
+    wasm: 'solidity/tree-sitter-solidity.wasm',
     namespaces: {},
     types: {
       contract_declaration: 'contract',
@@ -383,7 +413,7 @@ export const LANGUAGES = {
     label: 'OCaml',
     status: 'ok',
     exts: ['.ml', '.mli'],
-    wasm: 'tree-sitter-ocaml.wasm',
+    wasm: 'ocaml/tree-sitter-ocaml.wasm',
     namespaces: {},
     types: {
       type_definition: 'type',
@@ -408,7 +438,7 @@ export const LANGUAGES = {
     label: 'ReScript',
     status: 'ok',
     exts: ['.res'],
-    wasm: 'tree-sitter-rescript.wasm',
+    wasm: 'rescript/tree-sitter-rescript.wasm',
     namespaces: {},
     types: {
       module_declaration: 'module',
@@ -447,28 +477,26 @@ export const LANGUAGES = {
     decisionOps: ['/\\', '\\/'],
   },
 
-  systemrdl: {
-    id: 'systemrdl',
-    label: 'SystemRDL',
-    status: 'ok',
-    exts: ['.rdl'],
-    wasm: 'tree-sitter-systemrdl.wasm',
-    namespaces: {},
-    types: {
-      component_named_def: 'component',
-      component_anon_def: 'component',
-    },
-    members: {
-      component_inst: 'instance',
-      property_assignment: 'property',
-      explicit_prop_assignment: 'property',
-    },
-    imports: {},
-    baseFields: [],
-    baseNodes: [],
-    decisions: [],
-    decisionOps: [],
-  },
+  // ⚠️ SystemRDL 暂时缺席（2026-09-17）：上游没有任何 ABI 15 的 wasm（其 npm 包只有 C 源、
+  // GitHub 仓库 0 个 release），我们自己编需要 emscripten，而本机三条路都被网络挡住：
+  // GitHub release 资产下载被重置、Docker 镜像源对 emscripten/emsdk 返 403、emsdk 要 clone GitHub（时通时不通）。
+  // 编出来之后把下面这段恢复、并把 vendor/wasm/tree-sitter-systemrdl.wasm 放好即可（步骤见 ROADMAP 附录 A.12）。
+  //
+  // systemrdl: {
+  //   id: 'systemrdl',
+  //   label: 'SystemRDL',
+  //   status: 'ok',
+  //   exts: ['.rdl'],
+  //   wasm: 'tree-sitter-systemrdl.wasm',
+  //   namespaces: {},
+  //   types: { component_named_def: 'component', component_anon_def: 'component' },
+  //   members: { component_inst: 'instance', property_assignment: 'property', explicit_prop_assignment: 'property' },
+  //   imports: {},
+  //   baseFields: [],
+  //   baseNodes: [],
+  //   decisions: [],
+  //   decisionOps: [],
+  // },
 
   // Emacs Lisp：没有“类型”这回事，顶层全是函数/变量 → 都挂到扫描器合成的 module 节点上
   elisp: {
@@ -476,7 +504,7 @@ export const LANGUAGES = {
     label: 'Emacs Lisp',
     status: 'ok',
     exts: ['.el'],
-    wasm: 'tree-sitter-elisp.wasm',
+    wasm: 'elisp/tree-sitter-elisp.wasm',
     namespaces: {},
     types: {},
     members: {
@@ -499,7 +527,7 @@ export const LANGUAGES = {
     label: 'Go',
     status: 'ok',
     exts: ['.go'],
-    wasm: 'tree-sitter-go.wasm',
+    wasm: 'go/tree-sitter-go.wasm',
     namespaces: { package_clause: 1 },
     namespaceScope: 'file',
     types: { type_declaration: 'type' },
@@ -530,7 +558,7 @@ export const LANGUAGES = {
     label: 'Rust',
     status: 'ok',
     exts: ['.rs'],
-    wasm: 'tree-sitter-rust.wasm',
+    wasm: 'rust/tree-sitter-rust.wasm',
     namespaces: {},
     types: { struct_item: 'struct', enum_item: 'enum', trait_item: 'trait', impl_item: 'impl', union_item: 'union', type_item: 'type' },
     members: {
@@ -555,7 +583,7 @@ export const LANGUAGES = {
     label: 'C',
     status: 'ok',
     exts: ['.c', '.h'],
-    wasm: 'tree-sitter-c.wasm',
+    wasm: 'c/tree-sitter-c.wasm',
     namespaces: {},
     types: { type_definition: 'type', struct_specifier: 'struct', enum_specifier: 'enum', union_specifier: 'union' },
     // typedef struct X {...} X; 会让 struct_specifier 成为 type_definition 的子节点，别重复记
@@ -573,7 +601,7 @@ export const LANGUAGES = {
     label: 'C++',
     status: 'ok',
     exts: ['.cpp', '.cc', '.cxx', '.hpp', '.hxx'],
-    wasm: 'tree-sitter-cpp.wasm',
+    wasm: 'cpp/tree-sitter-cpp.wasm',
     namespaces: { namespace_definition: 1 },
     types: { class_specifier: 'class', struct_specifier: 'struct', enum_specifier: 'enum', union_specifier: 'union' },
     typeSkipParent: { struct_specifier: ['type_definition', 'class_specifier'], enum_specifier: ['type_definition'], union_specifier: ['type_definition'] },
@@ -590,7 +618,7 @@ export const LANGUAGES = {
     label: 'PHP',
     status: 'ok',
     exts: ['.php'],
-    wasm: 'tree-sitter-php.wasm',
+    wasm: 'php/tree-sitter-php.wasm',
     namespaces: { namespace_definition: 1 },
     namespaceScope: 'file',
     types: { class_declaration: 'class', interface_declaration: 'interface', trait_declaration: 'trait', enum_declaration: 'enum' },
@@ -613,7 +641,7 @@ export const LANGUAGES = {
     label: 'Swift',
     status: 'ok',
     exts: ['.swift'],
-    wasm: 'tree-sitter-swift.wasm',
+    wasm: 'swift/tree-sitter-swift.wasm',
     namespaces: {},
     types: {
       class_declaration: 'class',
@@ -650,7 +678,7 @@ export const LANGUAGES = {
     label: 'Scala',
     status: 'ok',
     exts: ['.scala', '.sc'],
-    wasm: 'tree-sitter-scala.wasm',
+    wasm: 'scala/tree-sitter-scala.wasm',
     namespaces: { package_clause: 1 },
     namespaceScope: 'file',
     types: { class_definition: 'class', object_definition: 'object', trait_definition: 'trait', enum_definition: 'enum' },
@@ -675,7 +703,7 @@ export const LANGUAGES = {
     label: 'Elixir',
     status: 'ok',
     exts: ['.ex', '.exs'],
-    wasm: 'tree-sitter-elixir.wasm',
+    wasm: 'elixir/tree-sitter-elixir.wasm',
     namespaces: {},
     types: {},
     members: {},
@@ -698,7 +726,7 @@ export const LANGUAGES = {
     status: 'ok',
     optIn: true,
     exts: ['.json', '.jsonc'],
-    wasm: 'tree-sitter-json.wasm',
+    wasm: 'json/tree-sitter-json.wasm',
     namespaces: {},
     types: {},
     members: {},
@@ -715,7 +743,7 @@ export const LANGUAGES = {
     status: 'ok',
     optIn: true,
     exts: ['.yaml', '.yml'],
-    wasm: 'tree-sitter-yaml.wasm',
+    wasm: 'yaml/tree-sitter-yaml.wasm',
     namespaces: {},
     types: {},
     members: {},
@@ -732,7 +760,7 @@ export const LANGUAGES = {
     status: 'ok',
     optIn: true,
     exts: ['.toml'],
-    wasm: 'tree-sitter-toml.wasm',
+    wasm: 'toml/tree-sitter-toml.wasm',
     namespaces: {},
     types: {},
     members: {},
@@ -749,7 +777,7 @@ export const LANGUAGES = {
     status: 'ok',
     optIn: true,
     exts: ['.css'],
-    wasm: 'tree-sitter-css.wasm',
+    wasm: 'css/tree-sitter-css.wasm',
     namespaces: {},
     types: {},
     members: {},
@@ -766,7 +794,7 @@ export const LANGUAGES = {
     status: 'ok',
     optIn: true,
     exts: ['.html', '.htm'],
-    wasm: 'tree-sitter-html.wasm',
+    wasm: 'html/tree-sitter-html.wasm',
     namespaces: {},
     types: {},
     members: {},

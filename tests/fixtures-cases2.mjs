@@ -98,18 +98,21 @@ export const EXTRA_CASES = [
     membersMin: 4,
     errorsMax: 0,
   },
-  {
-    dir: 'systemrdl',
-    lang: 'systemrdl',
-    // 内联的 reg/field 本来就是匿名的，显示为 (anonymous)（类型名不参与 names 校验）
-    types: 3,
-    names: ['my_map'],
-    kinds: { component: 3 },
-    importsMin: 0,
-    docs: 2,
-    membersMin: 2,
-    errorsMax: 0,
-  },
+  // ⚠️ SystemRDL 暂时缺席（2026-09-17 升级时挂起）：它的 wasm 要自己用 emscripten 编，
+  // 本机三条路都被网络挡住（见 ROADMAP 附录 A.12）。wasm 放进 vendor/wasm/ 后，
+  // 把 languages.mjs 里那段注释掉的 profile 恢复，再把下面这个用例取消注释即可。
+  // {
+  //   dir: 'systemrdl',
+  //   lang: 'systemrdl',
+  //   // 内联的 reg/field 本来就是匿名的，显示为 (anonymous)（类型名不参与 names 校验）
+  //   types: 3,
+  //   names: ['my_map'],
+  //   kinds: { component: 3 },
+  //   importsMin: 0,
+  //   docs: 2,
+  //   membersMin: 2,
+  //   errorsMax: 0,
+  // },
   {
     dir: 'go',
     lang: 'go',
@@ -184,12 +187,14 @@ export const EXTRA_CASES = [
   {
     // Scala 的语法包特别大：单进程扫没问题，混在别的语言后面扫会 OOM，
     // 所以 fixture 测试一律"一门语言一个进程"（见 run-fixtures.mjs 里 scanOne）。
+    // 2026-09-17 升级语法包后：新的 Scala 语法认得出 Scala 3 的 enum 了，所以多出一个 Kind（enum）——
+    // 这是语法包变强的结果，不是回归（types 5 → 6）。
     dir: 'scala',
     lang: 'scala',
-    types: 5,
-    names: ['Shape', 'Circle', 'Registry', 'Point', 'Helper'],
+    types: 6,
+    names: ['Shape', 'Circle', 'Registry', 'Point', 'Helper', 'Kind'],
     importsMin: 1,
-    errorsMax: 2, // 语法包对 Scala 3 的 enum 还认不全
+    errorsMax: 2, // 语法包对 Scala 3 的部分新语法还认不全
     membersMin: 4,
   },
 ];

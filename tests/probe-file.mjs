@@ -8,8 +8,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Parser from 'web-tree-sitter';
-import { LANGUAGES, WASM_DIR, languageForExt } from '../src/languages.mjs';
+import { Parser, Language } from 'web-tree-sitter';
+import { LANGUAGES, resolveWasm, languageForExt } from '../src/languages.mjs';
 import { preprocess } from '../src/preprocess.mjs';
 
 const args = process.argv.slice(2);
@@ -35,7 +35,7 @@ for (let i = 0; i < Math.min(head, lines.length); i++) console.log(String(i + 1)
 
 await Parser.init();
 const parser = new Parser();
-parser.setLanguage(await Parser.Language.load(path.join(WASM_DIR, lang.wasm)));
+parser.setLanguage(await Language.load(resolveWasm(lang)));
 const tree = parser.parse(src);
 
 console.log('--- 根节点的子节点 ---');
