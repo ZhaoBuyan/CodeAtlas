@@ -110,7 +110,7 @@ npm run publish:lite   # 只出精简版
   超过 7 天没动过的旧解包目录会在下次启动时顺手清掉，免得换个版本就多留 120 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本/包大小不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 23 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去；SystemRDL 待补）。
+- 打包只带**我们支持的 24 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去；SystemRDL 待补）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - 反编译工具（`ilspycmd` / `sfextract` / `cfr.jar`）**不打进包**，用到时按提示装。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -203,7 +203,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（23 门，各自独立进程）
+npm test                                          # 语言 fixtures 回归（24 门，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
 node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
@@ -300,7 +300,7 @@ MIT（见 [LICENSE](LICENSE)）。
 反编译只支持三类：**.NET 程序集**、**.NET 单文件发行版**、**Java .jar**（详见下面「没有源码也能扫」的已知限制）。
 Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指它就能扫。
 
-### 认识的语言（23 门代码语言，另有 SystemRDL 待补）
+### 认识的语言（24 门代码语言，另有 SystemRDL 待补）
 
 | 语言 | 后缀 | 状态 |
 | --- | --- | --- |
@@ -324,12 +324,13 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | Solidity | `.sol` | ✅ fixtures（contract/interface + 继承） |
 | OCaml | `.ml` `.mli` | ✅ fixtures（module/type；顶层 let 会合成 module 节点） |
 | ReScript | `.res` | ✅ fixtures（module / type / variant） |
+| Ruby | `.rb` `.rake` `.gemspec` | ✅ fixtures（class/module；`module` 当命名空间；`attr_*` 认成属性；`require`/`include` 连成依赖边） |
 | TLA+ | `.tla` | ✅ fixtures（module + operator / variable） |
 | SystemRDL | `.rdl` | ⏸️ 暂时缺席（旧语法包与当前运行时不吃；新的要自己用 emscripten 编，正在补 —— 见 ROADMAP 附录 A.12） |
 | Emacs Lisp | `.el` | ✅ fixtures（无类型概念 → 顶层函数/变量挂在合成的 module 节点上） |
 | Elixir | `.ex` `.exs` | ✅ fixtures（module / function / struct；注：`defmodule`/`def` 在语法树里是 call 节点，靠专属钩子识别；`alias` 会计入导入，但暂不连成依赖边） |
 
-**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`Dart`、`Ruby`、`Elm`、`QL`、`Haskell`、`PowerShell`、`Terraform/HCL`、`GraphQL`、`Julia`、`Vue`、`Svelte`…
+**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`Dart`、`Elm`、`QL`、`Haskell`、`PowerShell`、`Terraform/HCL`、`GraphQL`、`Julia`、`Vue`、`Svelte`…
 `Vue` 单文件组件要先解决“解析内嵌 `<script>`”，`Objective-C` 的 `.m` 与 MATLAB 扩名冲突（只能靠开关指定），这两个是刻意先不做。
 `TLA+` 的上游没有可直接用的 wasm，放在 `vendor/wasm/` 自己维护；`SystemRDL` 暂时缺席（同样原因，要自己用 emscripten 编一份，详见 ROADMAP）。
 审计命令：`node tests/probe-abi.mjs`（把每个语法包真加载 + 真解析一遍，分清能用 / 用不了）。
@@ -392,7 +393,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ### 读不了什么（边界，说清楚）
 
-1. **没支持的语言**（Ruby / Dart / Vue / Haskell…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.rb 2 · .dart 1 …）」；
+1. **没支持的语言**（Dart / Vue / Haskell…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.dart 2 · .vue 1 …）」；
    还有一种容易误会的：「我们支持、但这次没在扫描范围内」的文件（没勾那门语言，或者 JSON/YAML 这类默认不扫的格式），会单独报成「**语言范围外** N 个文件没扫」，不会被算成“不支持”；
 2. **反编译产物**：没有源码注释（所以"说明"是空的）、行数比源码高（语法糖被展开）、会多出编译器生成物（已自动打标签并在界面默认隐藏）；
 3. **静态分析的边界**：反射、动态 `import`、拼字符串调出来的方法**拿不到**；依赖边是名字匹配级别的，重名符号会误连（界面标着 unknown / ambiguous 计数）；
@@ -405,7 +406,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：23 门代码语言 + 5 种文件级格式（SystemRDL 待补）
+- [x] 语言覆盖：24 门代码语言 + 5 种文件级格式（SystemRDL 待补）
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤

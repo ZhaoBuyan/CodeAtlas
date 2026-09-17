@@ -197,4 +197,19 @@ export const EXTRA_CASES = [
     errorsMax: 2, // 语法包对 Scala 3 的部分新语法还认不全
     membersMin: 4,
   },
+  {
+    // Ruby（2026-09-17 加，跟着运行时升级一起）：module 当命名空间、class 当类型；
+    // attr_reader/accessor 与 require/include 都走 ruby* 钩子（它们在语法树里都是 call）。
+    // 文件级那两个方法（walk / helper）落在合成的 module 节点上——跟 Python / Lua 一样。
+    dir: 'ruby',
+    lang: 'ruby',
+    types: 3,
+    names: ['Shape', 'Circle', 'sample'],
+    kinds: { class: 2, module: 1 },
+    extends: ['Circle -> Shape'],
+    importsMin: 2,     // require 'json' + include Walkable
+    docs: 2,           // 类上一条注释 + initialize 上一条
+    membersMin: 6,     // 实际 8（Shape 4 / Circle 2 / sample 2），留点余量
+    errorsMax: 0,
+  },
 ];

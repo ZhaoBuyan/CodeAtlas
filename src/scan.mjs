@@ -204,7 +204,7 @@ function baseNameOf(node) {
 
 /** 收集一组基类/接口名 */
 function collectBaseNames(node, out) {
-  const listTypes = new Set(['base_list', 'super_interfaces', 'interface_type_list', 'type_list', 'extends_clause', 'implements_clause', 'delegation_specifiers']);
+  const listTypes = new Set(['base_list', 'super_interfaces', 'interface_type_list', 'type_list', 'extends_clause', 'implements_clause', 'delegation_specifiers', 'superclass']);
   const items = listTypes.has(node.type) ? node.namedChildren : [node];
   for (const item of items) {
     if (item.type === 'type_arguments' || item.type === 'type_parameter') continue;

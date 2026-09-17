@@ -141,6 +141,50 @@ const TS_SHAPE = {
   decisionOps: ['&&', '||', '??'],
 };
 
+// ---------- Ruby ----------
+// 节点名都是实测出来的（2026-09-17，tests/probe-nodes.mjs + 一份特意写全各种写法的样本）：
+//   class / module / method / singleton_method / superclass / call / if / unless / case / while / until / for
+// Ruby 的“钩子”只需要两处：属性（attr_* 是一句 call）和导入（require / include 也都是 call）。
+
+/** attr_reader :a, :b → 两个成员（属性）；其余交给静态表（注意：这个钩子一旦存在就会完全接管 memberKindOf 判定，得自己兜底） */
+const rubyMemberKind = (node) => {
+  if (node.type === 'call') {
+    const m = node.childForFieldName('method');
+    if (!m || !/^attr_(reader|writer|accessor)$/.test(m.text)) return null;
+    const args = node.childForFieldName('arguments');
+    return args && args.namedChildren.some((a) => a.type === 'simple_symbol') ? 'property' : null;
+  }
+  return { method: 'method', singleton_method: 'method' }[node.type] || null;
+};
+
+/** 属性名在参数里（不是 name 字段），所以得单独取：attr_accessor :size → size */
+const rubyName = (node) => {
+  if (node.type === 'call') {
+    const args = node.childForFieldName('arguments');
+    const first = args && args.namedChildren.find((a) => a.type === 'simple_symbol');
+    return first ? first.text.replace(/^:/, '') : null;
+  }
+  const n = node.childForFieldName('name');
+  return n ? n.text : null;
+};
+
+/** require 'json' / require_relative './x' / load 'y' → 依赖；include / extend / prepend → 混入 */
+const rubyImportKind = (node) => {
+  if (node.type !== 'call') return null;
+  const m = node.childForFieldName('method');
+  if (!m) return null;
+  if (['require', 'require_relative', 'load'].includes(m.text)) return 'require';
+  if (['include', 'extend', 'prepend'].includes(m.text)) return 'mixin';
+  return null;
+};
+
+/** 取第一个参数当目标：'json' → json；Comparable → Comparable */
+const rubyImportText = (node) => {
+  const args = node.childForFieldName('arguments');
+  const first = args && args.namedChildren[0];
+  return first ? first.text : '';
+};
+
 export const LANGUAGES = {
   csharp: {
     id: 'csharp',
@@ -718,6 +762,33 @@ export const LANGUAGES = {
     isDecision: elixirIsDecision,
     decisions: ['call'],
     decisionOps: [],
+  },
+
+  // Ruby：module 当命名空间（真实代码里就是靠模块嵌套分层），class 当类型；
+  // attr_* 、require / include 全靠上面那组 ruby* 钩子。
+  ruby: {
+    id: 'ruby',
+    label: 'Ruby',
+    status: 'ok',
+    exts: ['.rb', '.rake', '.gemspec'],
+    wasm: 'ruby/tree-sitter-ruby.wasm',
+    namespaces: { module: 1 },
+    types: { class: 'class' },
+    members: { method: 'method', singleton_method: 'method' },
+    imports: {},
+    baseFields: ['superclass'],
+    baseNodes: [],
+    memberKindOf: rubyMemberKind,
+    nameOf: rubyName,
+    importKindOf: rubyImportKind,
+    importTextOf: rubyImportText,
+    decisions: ['if', 'unless', 'if_modifier', 'unless_modifier', 'case', 'while', 'until', 'for', 'rescue', 'rescue_modifier', 'binary'],
+    decisionOps: ['&&', '||'],
+    isDecision: (node) => {
+      if (node.type !== 'binary') return true;            // 上面列的那些都是分支
+      const op = node.childForFieldName('operator');
+      return !!op && ['&&', '||'].includes(op.text);      // 算数比较不算复杂度
+    },
   },
 
   json: {

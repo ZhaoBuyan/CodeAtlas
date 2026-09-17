@@ -22,6 +22,9 @@
   不再说"可能不是 .NET 应用"，而是直接讲明白它是什么、只能扫哪三类、Unity 游戏的
   `<游戏名>_Data\Managed\*.dll` 是例外；
 - README 新增「扫描时要注意什么」（语言选择、编码、增量前提、先看 unknown/ambiguous 等）；
+- **新增 Ruby 支持**（24 门）：`class` 当类型、`module` 当命名空间（真实项目里就靠它分层）；
+  `attr_reader / attr_writer / attr_accessor` 认成属性；`require` / `require_relative` / `load` 与
+  `include` / `extend` / `prepend` 连成依赖边（也包括 `class Circle < Shape` 这种继承）。
 - 按钮文案：主按钮「开跑」→ **「扫描」**（向导里的「保存并开跑」→「保存并扫描」）；只是叫法更贴切，行为没变。
 - **反编译不再需要你装任何东西（完全版）**：扫 `.dll` / `.exe` 用启动器**内置**的反编译器（ILSpy 引擎，MIT）；
   扫 `.jar` 用**自带的裁剪版 Java 运行时 + cfr**（只含 `java.base` + `java.logging`，从 microsoft-jdk-25 裁出来）。
@@ -32,7 +35,7 @@
   `overview` 第一屏给出**扫描根目录**、**数据快照**（生成时间 / 语言 / 单文件上限 / 是否增量）
   和**可信度前提**（未匹配 / 同名歧义计数）；`refs` 与 `file` 在截断时会说明还剩多少条没显示。
 
-（支持的语言与上一版相同：23 门代码语言 + 5 种文件级格式；SystemRDL 暂时缺席，等它的语法包补上。）
+（支持的语言：24 门代码语言 + 5 种文件级格式；SystemRDL 暂时缺席，等它的语法包补上。）
 
 ## 1.0.0（2026-09-17）
 
