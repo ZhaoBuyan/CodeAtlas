@@ -170,17 +170,17 @@ function findSfextract() {
  */
 function notManagedError(target) {
   return new Error([
-    `这不是 .NET 程序集：${path.basename(target)}`,
-    '看起来是原生可执行文件（C/C++ 编译出来的，很多软件和游戏本体属于这一类）。',
+    t(`这不是 .NET 程序集：${path.basename(target)}`, `Not a .NET assembly: ${path.basename(target)}`),
+    t('看起来是原生可执行文件（C/C++ 编译出来的，很多软件和游戏本体属于这一类）。', 'This looks like a native executable (compiled from C/C++ — most games and many apps are).'),
     '',
-    '反编译只支持这三类：',
-    '  ① .NET 程序集：.dll / 带 CLR 头的 .exe',
-    '  ② .NET 单文件发行版：.NET Core 3.x 及以上打包出来的单个 exe',
-    '  ③ Java 的 .jar（需要 Java 运行时 + cfr/vineflower）',
+    t('反编译只支持这三类：', 'Decompilation only covers three kinds of targets:'),
+    t('  ① .NET 程序集：.dll / 带 CLR 头的 .exe', '  1) .NET assemblies: .dll / .exe with a CLR header'),
+    t('  ② .NET 单文件发行版：.NET Core 3.x 及以上打包出来的单个 exe', '  2) .NET single-file bundles: a single .exe packaged by .NET Core 3.x or newer'),
+    t('  ③ Java 的 .jar（需要 Java 运行时 + cfr/vineflower）', '  3) Java .jar (needs a Java runtime + cfr/vineflower)'),
     '',
-    '原生程序里没有类型名、命名空间、方法签名这些元数据，要出这种图得先反汇编成近似 C 再解释',
-    '（IDA / Ghidra 那个量级的活），不在本工具的能力范围内。',
-    '例外：Unity 游戏的 <游戏名>_Data\\Managed\\*.dll 就是 .NET 程序集，直接指那个目录或文件就能扫。',
+    t('原生程序里没有类型名、命名空间、方法签名这些元数据，要出这种图得先反汇编成近似 C 再解释', 'Native programs carry no type names, namespaces or method signatures, so getting a map out of them'),
+    t('（IDA / Ghidra 那个量级的活），不在本工具的能力范围内。', 'means disassembling to approximate C first (IDA / Ghidra territory) — out of scope for this tool.'),
+    t('例外：Unity 游戏的 <游戏名>_Data\\Managed\\*.dll 就是 .NET 程序集，直接指那个目录或文件就能扫。', 'Exception: in Unity games, <GameName>_Data\\Managed\\*.dll are .NET assemblies — point at that file or folder and it just works.'),
   ].join('\n'));
 }
 
@@ -192,9 +192,9 @@ function decompileBundle(exe, workDir, notes) {
   const sf = findSfextract();
   if (!sf) {
     throw new Error([
-      `${path.basename(exe)} 是 .NET 单文件发行版（原生宿主），程序集打在里面，要先用工具解包。`,
-      '用启动器（CodeAtlas.exe）跑的话，解包是内置的；直接跑引擎才需要：dotnet tool install -g sfextract',
-      '或者：把同版本构建输出里的 .dll 直接丢进来（bin/Release/.../win-x64/App.dll）。',
+      t(`${path.basename(exe)} 是 .NET 单文件发行版（原生宿主），程序集打在里面，要先用工具解包。`, `${path.basename(exe)} is a .NET single-file bundle (native host) — the assemblies are packed inside and need unpacking first.`),
+      t('用启动器（CodeAtlas.exe）跑的话，解包是内置的；直接跑引擎才需要：dotnet tool install -g sfextract', 'The launcher (CodeAtlas.exe) does this built-in; running the engine directly needs: dotnet tool install -g sfextract'),
+      t('或者：把同版本构建输出里的 .dll 直接丢进来（bin/Release/.../win-x64/App.dll）。', 'Or: point at the .dll from the matching build output (bin/Release/.../win-x64/App.dll).'),
     ].join('\n'));
   }
   const bundleDir = path.join(workDir, '_bundle');
@@ -204,7 +204,7 @@ function decompileBundle(exe, workDir, notes) {
     const out = String(r.stderr || r.stdout || '').trim();
     // 解包器对非 .NET 单文件的回话有两种形式（自带的和 sfextract 的措辞不同），两条路都给同一个清楚的说法
     if (/not a \.NET Core|不是 \.NET 单文件发行版|bundle 清单/i.test(out)) throw notManagedError(exe);
-    throw new Error(`解包失败：${out.slice(0, 300)}`);
+    throw new Error(t(`解包失败：${out.slice(0, 300)}`, `Unpacking failed: ${out.slice(0, 300)}`));
   }
   const dllCount = countFiles(bundleDir, '.dll');
   if (!dllCount) throw notManagedError(exe);
@@ -223,9 +223,9 @@ function decompileBundle(exe, workDir, notes) {
   }
   if (!assemblies.length) {
     throw new Error([
-      `解包出来了 ${dllCount} 个 dll，但没有应用自己的程序集（都是运行时/系统程序集？）`,
-      `解包目录：${bundleDir}`,
-      '可以把里面的应用程序集直接指给我：atlas ingest "<那个 .dll>"',
+      t(`解包出来了 ${dllCount} 个 dll，但没有应用自己的程序集（都是运行时/系统程序集？）`, `Unpacked ${dllCount} dlls, but none of them is the application's own assembly (all runtime/system assemblies?)`),
+      t(`解包目录：${bundleDir}`, `Bundle directory: ${bundleDir}`),
+      t('可以把里面的应用程序集直接指给我：atlas ingest "<那个 .dll>"', 'You can point me straight at the app assembly: atlas ingest "<that .dll>"'),
     ].join('\n'));
   }
   return decompileAssemblies(assemblies, path.join(workDir, 'src'), notes);
@@ -262,9 +262,9 @@ function decompileAssemblies(assemblies, workDir, notes) {
   const ilspy = findIlspy();
   if (!ilspy) {
     throw new Error([
-      '这个目标需要反编译（.NET 程序集），但没找到可用的反编译器。',
-      '用启动器（CodeAtlas.exe）跑的话，反编译是内置的，不需要装任何东西；',
-      '如果是直接跑引擎（node src/cli.mjs），才需要装：dotnet tool install -g ilspycmd --version 9.1.0.7988',
+      t('这个目标需要反编译（.NET 程序集），但没找到可用的反编译器。', 'This target needs decompilation (.NET assembly), but no usable decompiler was found.'),
+      t('用启动器（CodeAtlas.exe）跑的话，反编译是内置的，不需要装任何东西；', 'The launcher (CodeAtlas.exe) has one built in — nothing to install;'),
+      t('如果是直接跑引擎（node src/cli.mjs），才需要装：dotnet tool install -g ilspycmd --version 9.1.0.7988', 'running the engine directly (node src/cli.mjs) needs: dotnet tool install -g ilspycmd --version 9.1.0.7988'),
     ].join('\n'));
   }
   notes.push(t(`反编译工具：${ilspy.label}`, `Decompiler: ${ilspy.label}`));
@@ -275,14 +275,14 @@ function decompileAssemblies(assemblies, workDir, notes) {
     fs.mkdirSync(out, { recursive: true });
     const r = run(ilspy.cmd, [...ilspy.argsPrefix, asm, '-o', out, '-p']);
     if (r.status !== 0) {
-      notes.push(`反编译失败（跳过）：${path.basename(asm)} — ${String(r.stderr || r.stdout || '').trim().split('\n').slice(0, 2).join(' ')}`);
+      notes.push(t(`反编译失败（跳过）：${path.basename(asm)} — ${String(r.stderr || r.stdout || '').trim().split('\n').slice(0, 2).join(' ')}`, `Decompile failed (skipped): ${path.basename(asm)} — ${String(r.stderr || r.stdout || '').trim().split('\n').slice(0, 2).join(' ')}`));
       continue;
     }
     const n = countFiles(out, '.cs');
     csCount += n;
     notes.push(t(`反编译 ${path.basename(asm)} → ${n} 个 .cs（${path.relative(process.cwd(), out)}）`, `Decompiled ${path.basename(asm)} → ${n} .cs files (${path.relative(process.cwd(), out)})`));
   }
-  if (!csCount) throw new Error('反编译没有产出任何 .cs 文件');
+  if (!csCount) throw new Error(t('反编译没有产出任何 .cs 文件', 'Decompilation produced no .cs files'));
   return workDir;
 }
 
@@ -303,23 +303,23 @@ function decompileJar(jar, workDir, notes, decompilerPath) {
   const java = findJava();
   if (!java) {
     throw new Error([
-      '这个目标是 .jar，需要 Java 运行时才能反编译。',
-      '完全版（CodeAtlas.exe）自带一份裁剪过的运行时，不需要装；',
-      '直接跑引擎（node src/cli.mjs）才需要装个 JRE。',
+      t('这个目标是 .jar，需要 Java 运行时才能反编译。', 'This target is a .jar — decompiling it needs a Java runtime.'),
+      t('完全版（CodeAtlas.exe）自带一份裁剪过的运行时，不需要装；', 'The full edition (CodeAtlas.exe) ships a trimmed runtime — nothing to install;'),
+      t('直接跑引擎（node src/cli.mjs）才需要装个 JRE。', 'only running the engine directly (node src/cli.mjs) needs a JRE.'),
     ].join('\n'));
   }
   const dec = findJarDecompiler(decompilerPath);
   if (!dec) {
     throw new Error([
-      '没找到 cfr.jar（Java 反编译器）。',
-      '完全版内置了一份（vendor/cfr.jar）；直接跑引擎的话可以下 cfr.jar 放到 ' + path.join(os.homedir(), '.code-atlas', 'cfr.jar') + '，或用 --decompiler <路径> 指定。',
+      t('没找到 cfr.jar（Java 反编译器）。', 'cfr.jar not found (the Java decompiler).'),
+      t('完全版内置了一份（vendor/cfr.jar）；直接跑引擎的话可以下 cfr.jar 放到 ' + path.join(os.homedir(), '.code-atlas', 'cfr.jar') + '，或用 --decompiler <路径> 指定。', 'The full edition has it bundled (vendor/cfr.jar); running the engine directly, download cfr.jar into ' + path.join(os.homedir(), '.code-atlas', 'cfr.jar') + ', or pass --decompiler <path>.'),
     ].join('\n'));
   }
   notes.push(t(`反编译工具：${path.basename(dec)} + ${java.label}${java.bundled ? '（自带）' : ''}`, `Decompiler: ${path.basename(dec)} + ${java.label}${java.bundled ? ' (bundled)' : ''}`));
   fs.mkdirSync(workDir, { recursive: true });
   // 注意用找到的那个 java（以前这里写死了 'java'，自带运行时形同虚设）
   const r = run(java.cmd, ['-jar', dec, jar, '--outputdir', workDir, '--silent', 'true']);
-  if (r.status !== 0) throw new Error(`反编译 .jar 失败：${String(r.stderr || r.stdout || '').slice(0, 400)}`);
+  if (r.status !== 0) throw new Error(t(`反编译 .jar 失败：${String(r.stderr || r.stdout || '').slice(0, 400)}`, `Decompiling the .jar failed: ${String(r.stderr || r.stdout || '').slice(0, 400)}`));
   notes.push(t(`反编译 ${path.basename(jar)} → ${countFiles(workDir, '.java')} 个 .java`, `Decompiled ${path.basename(jar)} → ${countFiles(workDir, '.java')} .java files`));
   return workDir;
 }
