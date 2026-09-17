@@ -135,7 +135,7 @@ export function looksManaged(file) {
 function autoFacets(stem, explicit) {
   if (explicit) return { facets: explicit, note: null };
   const p = path.join(PROJECT_ROOT, 'configs', `${stem}.facets.json`);
-  if (fs.existsSync(p)) return { facets: p, note: `分组规则：configs/${stem}.facets.json（自动匹配）` };
+  if (fs.existsSync(p)) return { facets: p, note: t(`分组规则：configs/${stem}.facets.json（自动匹配）`, `Grouping rules: configs/${stem}.facets.json (auto-matched)`) };
   return { facets: null, note: null };
 }
 
@@ -339,9 +339,9 @@ function decompileJar(jar, workDir, notes, decompilerPath) {
  * @param {string} o.facets        分组规则文件
  */
 export async function ingest(o) {
-  if (!o.target) throw new Error('用法：atlas ingest <目录|.dll|.exe|.jar>');
+  if (!o.target) throw new Error(t('用法：atlas ingest <目录|.dll|.exe|.jar>', 'Usage: atlas ingest <dir|.dll|.exe|.jar>'));
   const target = path.resolve(o.target);
-  if (!fs.existsSync(target)) throw new Error(`目标不存在：${target}`);
+  if (!fs.existsSync(target)) throw new Error(t(`目标不存在：${target}`, `Target not found: ${target}`));
   const stat = fs.statSync(target);
   const baseName = stat.isDirectory() ? path.basename(target) : path.basename(target).replace(/\.[^.]+$/, '');
   const workDir = path.resolve(o.work || path.join('ingest', baseName));
@@ -402,12 +402,12 @@ export async function ingest(o) {
       const dlls = (() => { try { return fs.readdirSync(target).filter((n) => n.toLowerCase().endsWith('.dll')); } catch { return []; } })();
       const nativeDlls = dlls.filter((n) => !looksManaged(path.join(target, n))).length;
       throw new Error([
-        `没有什么可以分析的：${target}`,
-        '目录里既没有源码，也没有可反编译的程序集。',
-        nativeDlls ? `注意：这里能找到 ${nativeDlls} 个 .dll，但它们都不是 .NET 程序集（原生 C/C++ 编译），反编译工具也读不出结构。` : '',
-        '办法：① 指向源码目录；② 指向 .dll（.NET 的）；③ 指向 .exe（.NET 单文件发行版会自动解包，需 sfextract）；④ --dll "App*.dll" 指定。',
-        '注意：原生可执行文件 / 安装目录（C/C++ 编译，比如多数游戏与启动器）反编译不了。',
-        '例外：Unity 游戏的 <游戏名>_Data\\Managed\\*.dll 是 .NET 程序集，可以直接指它。',
+        t(`没有什么可以分析的：${target}`, `Nothing to analyze here: ${target}`),
+        t('目录里既没有源码，也没有可反编译的程序集。', 'This directory has neither source code nor assemblies we can decompile.'),
+        nativeDlls ? t(`注意：这里能找到 ${nativeDlls} 个 .dll，但它们都不是 .NET 程序集（原生 C/C++ 编译），反编译工具也读不出结构。`, `Note: there are ${nativeDlls} .dll files here, but none is a .NET assembly (native C/C++ builds) — decompilers cannot read structure out of them.`) : '',
+        t('办法：① 指向源码目录；② 指向 .dll（.NET 的）；③ 指向 .exe（.NET 单文件发行版会自动解包，需 sfextract）；④ --dll "App*.dll" 指定。', 'What to do: (1) point at a source directory; (2) point at a .NET .dll; (3) point at a .exe (.NET single-file bundles are unpacked automatically); (4) use --dll "App*.dll".'),
+        t('注意：原生可执行文件 / 安装目录（C/C++ 编译，比如多数游戏与启动器）反编译不了。', 'Note: native executables / installed-app directories (C/C++ builds — most games and launchers) cannot be decompiled.'),
+        t('例外：Unity 游戏的 <游戏名>_Data\\Managed\\*.dll 是 .NET 程序集，可以直接指它。', 'Exception: in Unity games, <GameName>_Data\\Managed\\*.dll are .NET assemblies — point straight at one.'),
       ].filter(Boolean).join('\n'));
     }
   }

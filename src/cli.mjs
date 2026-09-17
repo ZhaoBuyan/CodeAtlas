@@ -274,7 +274,7 @@ async function cmdIngest(argv) {
   const opts = parseArgs(argv);
   const target = opts._[0];
   if (!target) {
-    console.error('用法：atlas ingest <目录|.dll|.exe|.jar> [--out dist] [--work ingest/<名>] [--dll "App*.dll"] [--decompiler cfr.jar] [--facets 配置.json]');
+    console.error(t('用法：atlas ingest <目录|.dll|.exe|.jar> [--out dist] [--work ingest/<名>] [--dll "App*.dll"] [--decompiler cfr.jar] [--facets 配置.json]', 'Usage: atlas ingest <dir|.dll|.exe|.jar> [--out dist] [--work ingest/<name>] [--dll "App*.dll"] [--decompiler cfr.jar] [--facets config.json]'));
     process.exit(1);
   }
   const res = await ingest({
@@ -346,7 +346,7 @@ function cmdDraftFacets(argv) {
   const opts = parseArgs(argv);
   const target = opts._[0];
   if (!target) {
-    console.error('用法：atlas draft-facets <目录> [--out 文件] [--json] [--lang auto] [--maxkb 1024] [--by namespace --bundle 输出目录]');
+    console.error(t('用法：atlas draft-facets <目录> [--out 文件] [--json] [--lang auto] [--maxkb 1024] [--by namespace --bundle 输出目录]', 'Usage: atlas draft-facets <dir> [--out file] [--json] [--lang auto] [--maxkb 1024] [--by namespace --bundle <out dir>]'));
     process.exit(1);
   }
   const res = draftFacets({ roots: [target], lang: opts.lang, maxKb: opts.maxkb, by: opts.by, bundle: opts.bundle });
@@ -357,11 +357,11 @@ function cmdDraftFacets(argv) {
     fs.writeFileSync(abs, json);
   }
   if (opts.json !== undefined) { process.stdout.write(JSON.stringify(res, null, 2) + '\n'); return; }   // 给程序读：连预览和提示一起给
-  console.log(`\n${res.by === 'namespace' ? '按命名空间' : '按目录结构'}草拟了 ${res.preview.length} 个系统（共 ${res.files} 个文件）：\n`);
-  for (const p of res.preview) console.log(`  ${p.name.padEnd(18)} ${String(p.files).padStart(5)} ${p.unit || '个文件'}`);
+  console.log(t(`\n${res.by === 'namespace' ? '按命名空间' : '按目录结构'}草拟了 ${res.preview.length} 个系统（共 ${res.files} 个文件）：\n`, `\nDrafted ${res.preview.length} systems from ${res.by === 'namespace' ? 'namespaces' : 'directory structure'} (${res.files} files):\n`));
+  for (const p of res.preview) console.log(`  ${p.name.padEnd(18)} ${String(p.files).padStart(5)} ${p.unit || t('个文件', 'files')}`);
   for (const n of res.notes) console.log(`  · ${n}`);
   console.log(`\n${json}`);
-  console.log(opts.out ? `已写入：${path.resolve(opts.out)}\n` : '（加 --out <文件> 就能写出来）\n');
+  console.log(opts.out ? t(`已写入：${path.resolve(opts.out)}\n`, `Written to: ${path.resolve(opts.out)}\n`) : t('（加 --out <文件> 就能写出来）\n', '(pass --out <file> to write it out)\n'));
 }
 
 /** mcp：把 bundle 变成 AI 能查的接口（stdio JSON-RPC —— stdout 只能走协议，日志走 stderr） */
@@ -370,7 +370,7 @@ function cmdMcp(argv) {
   if (opts['list-tools'] !== undefined) {
     console.log(`\nCode Atlas MCP · ${path.join(path.resolve(opts.out || 'dist'), 'bundle.json')}\n`);
     console.log(listToolsText());
-    console.log('\n接入客户端：command=node，args=[<绝对路径>/src/cli.mjs, mcp, --out, <绝对路径>/dist]\n');
+    console.log(t('\n接入客户端：command=node，args=[<绝对路径>/src/cli.mjs, mcp, --out, <绝对路径>/dist]\n', '\nTo hook up a client: command=node, args=[<abs>/src/cli.mjs, mcp, --out, <abs>/dist]\n'));
     return;
   }
   if (opts['config-json'] !== undefined) {
@@ -383,10 +383,10 @@ function cmdMcp(argv) {
   if (opts['print-config'] !== undefined) {
     const cli = path.resolve(fileURLToPath(import.meta.url));
     const out = path.resolve(opts.out || 'dist');
-    console.log('\n把下面这段粘进 MCP 客户端（Chatbox / Claude Desktop 等）的 mcpServers 配置里：\n');
+    console.log(t('\n把下面这段粘进 MCP 客户端（Chatbox / Claude Desktop 等）的 mcpServers 配置里：\n', '\nPaste this into mcpServers in your MCP client (Chatbox / Claude Desktop, …):\n'));
     console.log(JSON.stringify({ mcpServers: { 'code-atlas': { command: 'node', args: [cli, 'mcp', '--out', out] } } }, null, 2));
-    console.log('\n说明：路径已写成绝对路径（客户端的工作目录不确定，相对路径会找不到）。');
-    console.log('     换项目只要改 --out 指向那个项目的输出目录；想同时看多个项目就配多份（名字不同）。\n');
+    console.log(t('\n说明：路径已写成绝对路径（客户端的工作目录不确定，相对路径会找不到）。', '\nNote: paths are absolute — clients start in an unknown working directory, so relative paths would break.'));
+    console.log(t('     换项目只要改 --out 指向那个项目的输出目录；想同时看多个项目就配多份（名字不同）。\n', '     To switch projects just change --out; to watch several at once, add more entries (different names).\n'));
     return;
   }
   startMcp({ bundlePath: path.join(opts.out || 'dist', 'bundle.json') });
@@ -459,7 +459,7 @@ if (!first || first === 'help' || first === '--help' || first === '-h') {
 } else if (COMMANDS[first]) {
   run = () => COMMANDS[first](rest);
 } else if (first.startsWith('--')) {
-  console.error(`未知选项：${first}\n\n${HELP}`);
+  console.error(t(`未知选项：${first}\n\n${HELP}`, `Unknown option: ${first}\n\n${HELP}`));
   process.exit(1);
 } else {
   // 第一个参数是路径 -> 零配置入口
