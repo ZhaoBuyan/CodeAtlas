@@ -20,10 +20,9 @@
 
 形态：**CLI + 本地网页**（零上传，代码不出本机）。
 
-## 它和同名的那些"代码 Atlas"有什么不一样
+## 它是什么
 
-GitHub 上叫 Code Atlas 的项目不止一个（最像的三个：Visual Studio 插件的 `league1991/CodeAtlasVsix`、
-依赖图可视化的 `lucyb0207/CodeAtlas`、带 MCP 的 `giauphan/codeatlas-platform`）。这个项目想做的组合是：
+四条取向：
 
 - **本地优先**：不注册、不上传、不调云服务；断网照用，代码不出机器；
 - **免安装**：一个单文件 exe（完全版自带 Node 运行时），双击就用，不用装 Node、不用配环境；

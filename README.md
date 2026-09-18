@@ -20,11 +20,9 @@ Shape: **CLI + local web page** (nothing is uploaded; your code never leaves the
 Where to look: **capabilities & limits** → “What it can read (input)” / “What is skipped by default” /
 “What it cannot read”; **the MCP layer** → “For AI”; **day-to-day usage** → [USAGE.md](USAGE.md).
 
-## How it differs from the other projects named "Code Atlas"
+## What it is
 
-There is more than one project called Code Atlas on GitHub (the three closest: the Visual Studio extension
-`league1991/CodeAtlasVsix`, the dependency-graph visualizer `lucyb0207/CodeAtlas`, and the MCP-enabled
-`giauphan/codeatlas-platform`). The combination this project aims for:
+Four things it aims for:
 
 - **Local-first**: no sign-up, no upload, no cloud calls; works offline, your code stays on your machine;
 - **Install-free**: one single-file exe (the full edition bundles a Node runtime) — double-click and go,
