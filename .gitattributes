@@ -17,3 +17,6 @@
 # 被 CRLF→LF 归一化后就与原始 jlink 产物不一致了——这份运行时是要原样分发的。
 # （注意：git 用最后一条匹配的规则，所以这条必须放在上面的 * text=auto 之后。）
 vendor/jre/** -text
+
+# CRLF 夹具必须原样存进仓库：否则被上面的 * text=auto eol=lf 规范成 LF，这个回归用例就白测了。
+tests/fixtures/vue/Crlf.vue -text
