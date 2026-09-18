@@ -96,7 +96,7 @@ const topDir = biggestFile.path.includes('/') ? biggestFile.path.split('/')[0] :
 const listSub = await call('list', topDir ? { path: topDir } : {});
 check(/本层|here/.test(listSub), 'list（子目录）', listSub.split('\n')[0].slice(0, 70));
 const listMiss = await call('list', { path: 'zzz-no-such-dir-zzz' });
-check(/没有以|Nothing starts/.test(listMiss), 'list（找不到时给提示）', listMiss.split('\n')[0].slice(0, 60));
+check(/没有正好叫|No directory or file matches/.test(listMiss), 'list（找不到时给提示）', listMiss.split('\n')[0].slice(0, 60));
 
 // 每个工具结果末尾都挂快照时间（单点调用也能看出数据新不新）
 const symTail = sym.split('\n').slice(-1)[0];

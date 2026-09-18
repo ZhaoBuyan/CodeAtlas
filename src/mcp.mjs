@@ -52,10 +52,13 @@ const INSTRUCTIONS = [
   '  **name matching** — dynamic calls, reflection and names built by string concatenation are invisible, and the counts of',
   '  unmatched and ambiguous references are reported explicitly in overview and impact;',
   '- Files with parse errors are flagged individually; their data may be incomplete;',
+  '- Top-level functions in JS / TS are recorded as [function] **types**, not members: search(scope="member") will not find',
+  '  them — use the default scope (any) or scope="type";',
   '- Decompiled output (.dll / .exe / .jar) carries no source comments, so an empty "description" is expected;',
   '- Every path in the output is **relative to the scan root**, which overview reports (use it to build absolute paths and read source yourself);',
   '- The data is a snapshot (UTC): overview spells out the generation time (scan options included) and every tool result ends',
-  '  with the same short "snapshot" stamp; the server picks up a freshly scanned bundle automatically, no restart needed.',
+  '  with the same short "snapshot" stamp; a freshly scanned bundle is picked up automatically, but an **engine code update**',
+  '  does need this server process restarted (the client reconnects and gets the new tool list).',
 ].join('\n');
 
 export function buildIndex(b) {
@@ -80,12 +83,12 @@ const TOOLS = [
   },
   {
     name: 'search',
-    description: 'Search by name: type names / qualified names / file-name fragments. **Member names are included by default** (searching "OnPaint" finds who declares that method). Returns type ids for symbol/refs.',
+    description: 'Search by name: type names / qualified names / file-name fragments. **Member names are included by default** (searching "OnPaint" finds who declares that method). Returns type ids for symbol/refs. Note: top-level JS/TS functions are *types*, so scope="member" will miss them — keep the default scope=any.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Name fragment, e.g. "Logger" / "Players" / "OnPaint"' },
-        scope: { type: 'string', enum: ['any', 'type', 'member'], description: 'Where to search: any (default, types + members) / type (type names only) / member (member names only)' },
+        scope: { type: 'string', enum: ['any', 'type', 'member'], description: 'Where to search: any (default, types + members) / type (type names only) / member (member names only; JS/TS top-level functions are types, so this scope will not find them)' },
         kind: { type: 'string', description: 'Optional: restrict to one kind (class/interface/enum/function/module...); applies to types only' },
         limit: { type: 'number', description: 'Maximum number of results, default 20' },
       },
@@ -405,7 +408,7 @@ function toolList(idx, a) {
       if (cut > 0) dirs.add(p.slice(0, cut + 1));
     }
     const hint = [...dirs].slice(0, 8).join(' · ');
-    return T(`没有以 "${a.path}" 开头的目录或文件。${hint ? `你想找的是不是：${hint}` : '用 search 按名字找符号。'}`, `Nothing starts with "${a.path}".${hint ? ` Did you mean: ${hint}` : ' Use search to find symbols by name.'}`);
+    return T(`没有正好叫 "${a.path}" 的目录或文件。${hint ? `相近的有：${hint}` : '用 search 按名字找符号，或 list() 看扫描根。'}`, `No directory or file matches "${a.path}".${hint ? ` Close ones: ${hint}` : ' Use search to find symbols by name, or list() for the scan root.'}`);
   }
   const prefix = q === '' ? '' : q + '/';
   const dirAgg = new Map();
