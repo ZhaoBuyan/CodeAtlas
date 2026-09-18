@@ -90,6 +90,15 @@ function printScanReport(b, out) {
       `  Out of scope ${nf(oosTotal)} files not scanned (${detail}) — add languages to include them: tick them in the launcher, or --lang auto,json`,
     ));
   }
+  // 被默认跳过表命中的目录：列出来，免得“图里少了东西”只能靠猜（monorepo 的 packages/ 就是这么发现的）
+  const ignDirs = Object.entries(b.stats.skipped?.ignoredDirs || {}).sort((a, c) => c[1] - a[1]);
+  if (ignDirs.length) {
+    const detail = ignDirs.slice(0, 8).map(([n, c]) => `${n} ${c}`).join(' · ') + (ignDirs.length > 8 ? ` …共 ${ignDirs.length} 种` : '');
+    console.log(t(
+      `  跳过目录  ${detail}（默认跳过表命中；里面的源码不会进这张图）`,
+      `  Skipped dirs ${detail} (matched the default skip list; source inside them is not in this map)`,
+    ));
+  }
   console.log(`${t('  版本戳    ', '  Revision    ')}${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}${b.source.git.dirty ? t(' (有未提交改动)', ' (uncommitted changes)') : ''}` : t(' （非 git 仓库，用文件时间戳）', ' (not a git repo — using file timestamps)')}`);
   console.log(`${t('  未解析引用 ', '  Unresolved  ')}unknown ${nf(b.unresolved.unknown)} / ambiguous ${nf(b.unresolved.ambiguous)}`);
   if (b.totals.parseErrors) console.log(t(`  解析异常  ${nf(b.totals.parseErrors)} 处 / ${nf(b.totals.parseErrorFiles)} 个文件（语法树没解析干净，这些文件的数据可能不全）`, `  Parse errors ${nf(b.totals.parseErrors)} spots / ${nf(b.totals.parseErrorFiles)} files (parse tree had errors; data in those files may be incomplete)`));

@@ -1,10 +1,10 @@
 /**
  * 解析前预处理：把语法不支持的写法换成等价写法，让语法树能解析干净。
  *
- * ⚠️ 目前**没有语言在用它**（2026-09-17 升级到 web-tree-sitter 0.27 + tree-sitter-wasm@2.0.1 后，
- *    新 C# 语法自己就能吃下当初需要改写的 12 种写法，实测 0 个 ERROR；而那些改写反而会
- *    把名为 required 的变量改成 required_，把名字弄错）。它作为通用机制留着，将来哪门语言的
- *    语法包又落后于语言版本时，在 profile 里加一行 `preprocess: 'xxx'` 就能重新挂上。
+ * 谁在用：C# 挂着 `preprocess: 'csharp'`（只剩“局部变量叫 required”那一条必需改写），
+ *         `.vue` 挂着 `preprocess: 'vue'`（把 <script> 之外的内容空格化，借 TSX 语法解析）。
+ * 2026-09-17 升级到 web-tree-sitter 0.27 + tree-sitter-wasm@2.0.1 后，C# 当年需要的 12 种改写里
+ * 有 11 种语法自己就能吃下了（那几个函数保留导出 —— 语法包再落后就能挂回去）。
  *
  * 两条铁律：
  *   1. 只做"不改变行号、不改变行数"的替换 —— 否则 bundle 里的行号就不再指向真实源码。
@@ -170,10 +170,42 @@ export function csharpRequiredIdentifier(src) {
   return out + src.slice(last);
 }
 
+/**
+ * .vue 单文件组件：把 <script> / <script setup> 之外的一切换成空格，只把 script 里的代码留给 TSX 语法。
+ *
+ * 两条铁律（和本文件开头一样）：
+ *   1. **逐字节对齐** —— 输出与输入等长、换行原样保留，所以行号 / 列号 / file:line 全部指回 .vue 原文；
+ *   2. **按标签边界切，不按行** —— prettier 格式化后开始标签会折行（<script 换行 setup 换行 lang="ts" 换行 >），
+ *      按行处理会漏掉中间几行，解析直接崩。这里用 [^>]* 跨行吃掉整个开始标签，再从 </script 截断。
+ *
+ * 没有 <script> 的 .vue → 整份变空格 → 解析出 0 个类型 / 0 个错误（符合预期）；
+ * 模板 + 样式块不参与解析（要的是组件里的 JS/TS，不是模板）。
+ */
+export function vue(src) {
+  const out = new Array(src.length);
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    out[i] = c === '\n' || c === '\r' ? c : ' ';
+  }
+  // 开始标签必须落在行首（允许缩进）：这样模板 / 字符串里偶然出现的 "<script" 不会被当真标签
+  const re = /^[ \t]*<script\b[^>]*>/gim;
+  let m;
+  while ((m = re.exec(src))) {
+    const bodyStart = m.index + m[0].length;
+    const close = src.toLowerCase().indexOf('</script', bodyStart);
+    const bodyEnd = close < 0 ? src.length : close;
+    for (let i = bodyStart; i < bodyEnd; i++) out[i] = src[i];
+    if (close < 0) break;
+    re.lastIndex = bodyEnd + 1;
+  }
+  return out.join('');
+}
+
 /** profile.preprocess 的取值 -> 具体实现 */
 export const PREPROCESSORS = {
   csharp,
   csharpRawStrings,
+  vue,
 };
 
 export function preprocess(src, name) {

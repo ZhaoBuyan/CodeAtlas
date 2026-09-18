@@ -154,7 +154,7 @@ runtime (about 30 MB).
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
-- The payload ships wasm only for the **27 code languages + 5 file-level formats** we support
+- The payload ships wasm only for the **28 code languages + 5 file-level formats** we support
   and nothing else (the unused grammars in the npm package stay out).
 - Third-party components and licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
   (a copy also ships in the extracted engine directory).
@@ -280,7 +280,7 @@ Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the rea
 ## Debugging tools
 
 ```bash
-npm test                                          # language fixtures regression (27 languages, one process each)
+npm test                                          # language fixtures regression (28 languages, one process each)
 npm run probe                                     # print the node names tree-sitter actually produces per language
 node tests/probe-file.mjs <file> [--lang csharp]   # single-file probe: where the ERRORs are, which declarations are recognized
 node tests/probe-abi.mjs                           # grammar smoke test (load + parse every wasm from both sources)
@@ -404,13 +404,14 @@ Decompilation supports three things: **.NET assemblies**, **.NET single-file pub
 (see the known limits under "Scanning without source" above).
 Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, point at it and it scans.
 
-### Supported languages (27 code languages)
+### Supported languages (28 code languages)
 
 | Language | Extensions | Status |
 | --- | --- | --- |
 | C# | `.cs` | ✅ measured (a 54-file / 106-type project) |
 | TypeScript | `.ts` `.mts` `.cts` | ✅ measured (a 114-file / 367-type project) |
 | TSX | `.tsx` | ✅ measured (JSX needs the separate tsx grammar) |
+| Vue | `.vue` | ✅ measured (**only `<script>` / `<script setup>` is parsed** — templates and styles stay out; grammar borrowed from TSX, line numbers line up with the original file) |
 | JavaScript | `.js` `.mjs` `.cjs` `.jsx` | ✅ measured |
 | Java | `.java` | ✅ fixtures regression |
 | Python | `.py` | ✅ fixtures (docstrings included) |
@@ -494,8 +495,16 @@ so the whole file does not vanish from the map; their members (functions/variabl
 ### What is skipped by default
 
 - **Directories**: `.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor`
-  `packages` `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`;
-- **Files**: `*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts` `*.freezed.dart`;
+  `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`;
+  (**`packages/` is not on the list** — it is the source root of pnpm / yarn workspaces / lerna / Nx / Turborepo,
+  and skipping it turns such a monorepo into a nearly empty map)
+- **Files**: minified / auto-generated ones (`*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts`
+  `*.freezed.dart` `*.g.dart`) plus **machine-generated lockfiles** (`package-lock.json` `pnpm-lock.yaml` `yarn.lock`
+  `bun.lockb` `*.lock` `Cargo.lock` `poetry.lock` `composer.lock` `Gemfile.lock` `go.sum` `gradle.lockfile`
+  `.terraform.lock.hcl`, Yarn PnP's `.pnp.cjs`) and `*.snap` / `*.js.map` / `*.css.map` — a single `pnpm-lock.yaml`
+  can account for 97% of the “lines of code” in a map;
+- **Skipped directories are named**: the scan report prints a line like “Skipped dirs node_modules 312 · dist 4 …”,
+  and `overview` does the same — so “something is missing from the map” is never something you have to guess;
 - **Any file > 1 MB** (`--maxkb` to change);
 - **Whatever your project rules say**: `facets.json`'s `exclude` adds directories to ignore (upstream
   reference code, for instance).
@@ -530,7 +539,7 @@ so the whole file does not vanish from the map; their members (functions/variabl
 
 ### What it cannot read (the boundaries, stated plainly)
 
-1. **Unsupported languages** (Dart / Vue / Haskell…) are skipped, but **not silently** — the report and the UI
+1. **Unsupported languages** (Dart / Haskell / Svelte…) are skipped, but **not silently** — the report and the UI
    both show "unsupported languages: N files (.dart 2 · .vue 1 …)". There is also an easily confused case:
    files in a language we *do* support but that were outside this scan (that language was not ticked, or a
    file-level format like JSON/YAML that is off by default) are reported separately as
@@ -549,7 +558,7 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
 - [x] Grouping layer: system rules (facets config) + directory / namespace / flat
 - [x] MCP server (search symbols / find references / export subgraphs) for AI
-- [x] Language coverage: 27 code languages + 5 file-level formats
+- [x] Language coverage: 28 code languages + 5 file-level formats
 - [x] Dependency graph view (force-directed) + package-level dependency matrix
 - [x] Pick languages to scan in the launcher (UI + `--lang`)
 - [x] Search improvements: type names + member names (web and MCP) · per-language filtering in the map

@@ -326,6 +326,9 @@ export const LANGUAGES = {
   typescript: { id: 'typescript', label: 'TypeScript', status: 'ok', exts: ['.ts', '.mts', '.cts'], wasm: 'typescript/tree-sitter-typescript.wasm', ...TS_SHAPE },
   // .tsx 必须用 tsx 语法：typescript 语法不认 JSX
   tsx: { id: 'tsx', label: 'TSX', status: 'ok', exts: ['.tsx'], wasm: 'tsx/tree-sitter-tsx.wasm', ...TS_SHAPE },
+  // .vue：只解析 <script> / <script setup>（模板、样式不看），语法借 TSX（TS + JSX 的超集，覆盖更全）；
+  // 不引 vue 语法包 —— 它的 wasm 在本运行时里一解析就 abort。行号靠 preprocess 逐字节对齐。
+  vue: { id: 'vue', label: 'Vue', status: 'ok', exts: ['.vue'], wasm: 'tsx/tree-sitter-tsx.wasm', preprocess: 'vue', ...TS_SHAPE },
 
   javascript: {
     id: 'javascript',

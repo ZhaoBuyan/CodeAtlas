@@ -78,6 +78,40 @@ const CASES = [
     errorsMax: 0, // JSX 能解析干净才说明 tsx 语法挂对了
   },
   {
+    // .vue：只解析 <script> / <script setup>（模板、样式不看），语法借 TSX；行号必须指回 .vue 原文
+    // CRLF 与“开始标签跨行”是两个容易翻车的 case，都在这里断言
+    dir: 'vue',
+    lang: 'vue',
+    types: 7,
+    names: ['Props', 'greet', 'pretty', 'crlfFn', 'fromSetup', 'double'],
+    kinds: { interface: 1, function: 5, module: 1 },
+    docs: 1,
+    errorsMax: 0,
+    typeLines: [
+      ['greet', 'Comp.vue', 11],
+      ['pretty', 'Comp.vue', 15],
+      ['crlfFn', 'Crlf.vue', 6], // CRLF 文件：行号不能漂
+      ['double', 'MultiTag.vue', 9], // 开始标签跨行：不能按行切
+      ['fromSetup', 'Dual.vue', 6],
+    ],
+  },
+  {
+    // monorepo：packages/ 是 pnpm / yarn workspaces / lerna / Nx 的源码根，不能再当构建目录跳过
+    dir: 'monorepo',
+    lang: 'javascript',
+    types: 2,
+    names: ['startApp'],
+    filesMin: 2,
+  },
+  {
+    // 锁文件：即使勾了 json，机器生成的锁文件也不该进图（这里还有一条 files=1 的硬断言）
+    dir: 'lockfile',
+    lang: 'auto,json',
+    types: 1,
+    names: ['compute'],
+    files: 1,
+  },
+  {
     dir: 'javascript',
     lang: 'javascript',
     types: 3,
@@ -145,6 +179,15 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
   const push = (ok, msg) => checks.push({ ok, msg });
 
   if (c.types != null) push(b.totals.types === c.types, `类型数 ${b.totals.types}（期望 ${c.types}）`);
+  if (c.files != null) push(b.files.length === c.files, `文件数 ${b.files.length}（期望 ${c.files}）`);
+  if (c.filesMin != null) push(b.files.length >= c.filesMin, `文件数 ${b.files.length}（期望 ≥ ${c.filesMin}）`);
+  if (c.typeLines) {
+    for (const [name, file, line] of c.typeLines) {
+      const t = b.types.find((x) => x.name === name);
+      const got = t ? b.files[t.file].path : '';
+      push(!!t && got.endsWith(file) && t.line === line, `${name} 的行号（${file}:${line}）`, t ? `${got}:${t.line}` : '没找到这个类型');
+    }
+  }
   if (c.names) {
     const got = new Set(b.types.map((t) => t.name));
     const missing = c.names.filter((n) => !got.has(n));

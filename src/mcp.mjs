@@ -230,6 +230,12 @@ function toolOverview(idx) {
   const when = String(b.generated || '').replace('T', ' ').slice(0, 19) + ' UTC';
   lines.push(T(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`, `Snapshot: ${when} · scan took ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · languages ${so.lang || 'auto'} · max file ${so.maxKb || 1024}KB · ${so.incremental ? 'incremental' : 'full'}`));
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
+  // 被默认跳过表命中的目录：AI 也该知道“这张图缺了东西”（诚实优先）。老 bundle 没这个字段 → 当空处理
+  const ignDirs = Object.entries(b.stats?.skipped?.ignoredDirs || {}).sort((x, y) => y[1] - x[1]).slice(0, 8);
+  if (ignDirs.length) {
+    const detail = ignDirs.map(([n, c]) => `${n}(${c})`).join(' · ');
+    lines.push(T(`跳过目录：${detail} —— 这些目录里的源码不在本图里（默认跳过表命中）`, `Skipped dirs: ${detail} — source inside them is not in this map (matched the default skip list)`));
+  }
   if (b.totals.parseErrors) {
     const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
     const showBad = bad.slice(0, 8);

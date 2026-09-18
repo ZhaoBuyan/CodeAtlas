@@ -133,7 +133,7 @@ npm run publish:lite   # 只出精简版
   不是当前版本的旧解包目录会在**每次启动**时自动清掉（只留**当前在用的 + 最近用过的那个**），免得换个版本就多留一百多 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本/包大小不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 27 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
+- 打包只带**我们支持的 28 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - **反编译在完全版里无需安装**：扫 `.dll` / `.exe` 用链接进启动器的反编译器（ILSpy 引擎）；扫 `.jar` 用自带的裁剪版 Java 运行时 + cfr.jar —— 都不需要先装 ilspycmd / sfextract / Java。精简版不带 Java 运行时（它本来就要求 .NET 9 + Node），扫 `.jar` 仍需自己装 Java。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -236,7 +236,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（27 门，各自独立进程）
+npm test                                          # 语言 fixtures 回归（28 门，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
 node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
@@ -329,13 +329,14 @@ node src/cli.mjs langs [--json]                    # 看支持哪些语言（--j
 反编译只支持三类：**.NET 程序集**、**.NET 单文件发行版**、**Java .jar**（详见下面「没有源码也能扫」的已知限制）。
 Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指它就能扫。
 
-### 认识的语言（27 门代码语言）
+### 认识的语言（28 门代码语言）
 
 | 语言 | 后缀 | 状态 |
 | --- | --- | --- |
 | C# | `.cs` | ✅ 实测（一个 54 文件 / 106 类型的项目） |
 | TypeScript | `.ts` `.mts` `.cts` | ✅ 实测（一个 114 文件 / 367 类型的项目） |
 | TSX | `.tsx` | ✅ 实测（JSX 必须用单独的 tsx 语法） |
+| Vue | `.vue` | ✅ 实测（**只解析 `<script>` / `<script setup>`**：模板与样式不参与；语法借 TSX，行号与原文对齐） |
 | JavaScript | `.js` `.mjs` `.cjs` `.jsx` | ✅ 实测 |
 | Java | `.java` | ✅ fixtures 回归 |
 | Python | `.py` | ✅ fixtures（含 docstring） |
@@ -404,8 +405,13 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ### 默认跳过什么
 
-- **目录**：`.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor` `packages` `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`；
-- **文件**：`*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts` `*.freezed.dart`；
+- **目录**：`.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor` `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`；
+  （**`packages/` 不在这里** —— 它是 pnpm / yarn workspaces / lerna / Nx / Turborepo 的源码根，跳过它会把 monorepo 扫成一张几乎空白的地图）
+- **文件**：压缩 / 自动生成的 `*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts` `*.freezed.dart` `*.g.dart`，
+  以及**机器生成的锁文件**（`package-lock.json` `pnpm-lock.yaml` `yarn.lock` `bun.lockb` `*.lock` `Cargo.lock` `poetry.lock`
+  `composer.lock` `Gemfile.lock` `go.sum` `gradle.lockfile` `.terraform.lock.hcl`、Yarn PnP 的 `.pnp.cjs`），还有 `*.snap` / `*.js.map` / `*.css.map`
+  —— 这些没有分析价值，一个 `pnpm-lock.yaml` 就能吃掉整张图 97% 的“代码行”；
+- **被跳过的目录会点名**：扫描报告里有一行「跳过目录 node_modules 312 · dist 4 …」，`overview` 里也会写 —— 免得“图里少了东西”只能靠猜；
 - **单个文件 > 1MB**（`--maxkb` 可调）；
 - **项目规则里写的**：`facets.json` 的 `exclude` 可以追加要忽略的目录（比如上游参考代码）。
 
@@ -427,7 +433,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ### 读不了什么（边界，说清楚）
 
-1. **没支持的语言**（Dart / Vue / Haskell…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.dart 2 · .vue 1 …）」；
+1. **没支持的语言**（Dart / Haskell / Svelte…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.dart 2 · .vue 1 …）」；
    还有一种容易误会的：「我们支持、但这次没在扫描范围内」的文件（没勾那门语言，或者 JSON/YAML 这类默认不扫的格式），会单独报成「**语言范围外** N 个文件没扫」，不会被算成“不支持”；
 2. **反编译产物**：没有源码注释（所以"说明"是空的）、行数比源码高（语法糖被展开）、会多出编译器生成物（已自动打标签并在界面默认隐藏）；
 3. **静态分析的边界**：反射、动态 `import`、拼字符串调出来的方法**拿不到**；依赖边是名字匹配级别的，重名符号会误连（界面标着 unknown / ambiguous 计数）；
@@ -440,7 +446,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：27 门代码语言 + 5 种文件级格式
+- [x] 语言覆盖：28 门代码语言 + 5 种文件级格式
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤

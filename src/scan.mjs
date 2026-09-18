@@ -17,7 +17,7 @@ import { t } from './i18n.mjs';
 import { preprocess } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 /**
  * 没归到任何系统规则的哨兵值：**中性固定值**，不带任何语言。
@@ -33,20 +33,42 @@ const CLI_PATH = path.join(PROJECT_ROOT, 'src', 'cli.mjs');
 /** 默认跳过的目录：依赖、构建产物、版本库元数据 */
 const IGNORE_DIRS = new Set([
   '.git', '.hg', '.svn', 'node_modules', 'bin', 'obj', 'dist', 'build', 'out', 'target',
-  'vendor', 'packages', '.vs', '.vscode', '.idea', '.venv', 'venv', '__pycache__',
+  'vendor', '.vs', '.vscode', '.idea', '.venv', 'venv', '__pycache__',
   'coverage', '.next', '.nuxt', '.cache', 'publish', 'publish-sc', 'publish-lite',
 ]);
+// `packages` 故意不在这里：pnpm / yarn workspaces / lerna / Nx / Turborepo 的源码根都叫它，
+// 跳过它会把这类 monorepo 扫成一张近乎空白的地图（而且不报错）。老式 NuGet 还原目录
+// （packages/<id>/lib/*.dll）里本来就没有可解析的源码，扫到只是多遍历一瞬。
 
 /** 默认跳过的文件：压缩产物、自动生成的代码 */
 const IGNORE_FILE_RE = /(\.min\.(js|css)|\.d\.ts|\.g\.cs|\.designer\.cs|\.generated\.(cs|ts)|\.freezed\.dart)$/i;
+
+/**
+ * 机器生成的锁文件 —— 按名字显式列（`*.lock` 盖不住 gradle.lockfile / go.sum / packages.lock.json 这类），
+ * 它们没有分析价值却动辄几千上万行（实测一个 pnpm-lock.yaml 吃掉整张图 97% 的“代码行”）。
+ * `.pnp.cjs` 是 Yarn PnP 的产物、默认会被提交进仓库，JS 项目里尤其常见。
+ */
+const IGNORE_FILES = new Set([
+  'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'packages.lock.json',
+  'yarn.lock', 'bun.lock', 'bun.lockb', 'go.sum', 'gradle.lockfile', '.terraform.lock.hcl',
+  '.pnp.cjs', '.pnp.js', '.pnp.data.json',
+]);
+
+/** 机器生成的锁文件 / 快照 / sourcemap：按后缀 */
+const IGNORE_FILE_EXT_RE = /(\.lock|\.g\.dart|\.snap|\.js\.map|\.css\.map)$/i;
+
+/** 这个文件算不算“机器生成的、不值得扫” */
+function isIgnoredFile(name) {
+  return IGNORE_FILE_RE.test(name) || IGNORE_FILES.has(name) || IGNORE_FILE_EXT_RE.test(name);
+}
 
 /** 还没支持的语言的后缀（只用于报告"漏了多少"，不会去解析） */
 const UNSUPPORTED_SRC_EXTS = new Set([
   '.go', '.rs', '.c', '.h', '.cc', '.cpp', '.hpp', '.cxx', '.m', '.mm',
   '.php', '.rb', '.swift', '.scala', '.gradle', '.dart',
   '.fs', '.fsx', '.vb', '.pl', '.pm', '.r', '.jl', '.ex', '.exs', '.erl', '.groovy',
-  '.vue', '.svelte', '.el', '.clj', '.cljs', '.hs', '.ml', '.nim', '.zig', '.sol',
-]);
+  '.svelte', '.el', '.clj', '.cljs', '.hs', '.ml', '.nim', '.zig', '.sol',
+]);  // （.vue 已从这张表里拿掉：见 languages.mjs 的 vue profile —— 走 TSX 语法 + 空格化预处理）
 
 /**
  * 编译器 / 生成器产出的类型名（反编译产物里最常见）：
@@ -71,7 +93,9 @@ function collectFiles(roots, { languages, maxKb, excludes }) {
   for (const d of excludes || []) ignoreDirs.add(d);
 
   const files = [];
-  const skipped = { ignored: 0, tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map() };
+  // ignoredDirs：被默认跳过表命中的目录名 → 次数。它进 bundle、进扫描报告，
+  // 让“图里少了东西”这件事可见（monorepo 的 packages/ 当年就是这么被发现的）。
+  const skipped = { ignored: 0, ignoredDirs: new Map(), tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map() };
 
   for (const root of roots) {
     const stack = [root];
@@ -86,12 +110,12 @@ function collectFiles(roots, { languages, maxKb, excludes }) {
       for (const e of entries) {
         const abs = path.join(dir, e.name);
         if (e.isDirectory()) {
-          if (ignoreDirs.has(e.name) || e.name.startsWith('.git')) { skipped.ignored++; continue; }
+          if (ignoreDirs.has(e.name) || e.name.startsWith('.git')) { skipped.ignored++; skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1); continue; }
           stack.push(abs);
           continue;
         }
         if (!e.isFile()) continue;
-        if (IGNORE_FILE_RE.test(e.name)) { skipped.ignored++; continue; }
+        if (isIgnoredFile(e.name)) { skipped.ignored++; continue; }
         const ext = path.extname(e.name).toLowerCase();
         const lang = exts.get(ext);
         if (!lang) {
@@ -1387,6 +1411,7 @@ export async function scan(opts) {
     // 被跳过的文件：默认忽略目录 / 生成物、超限大小、以及“还不支持的语言”（后者要能看见，不能静静吞掉）
     skipped: {
       ignored: skipped.ignored || 0,
+    ignoredDirs: Object.fromEntries(skipped.ignoredDirs || []),
       tooBig: skipped.tooBig || 0,
       unknown: skipped.unknown || 0,
       unsupported: Object.fromEntries(skipped.unsupported || []),
