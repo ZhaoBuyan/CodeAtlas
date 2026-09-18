@@ -97,6 +97,13 @@ const listSub = await call('list', topDir ? { path: topDir } : {});
 check(/本层|here/.test(listSub), 'list（子目录）', listSub.split('\n')[0].slice(0, 70));
 const listMiss = await call('list', { path: 'zzz-no-such-dir-zzz' });
 check(/没有正好叫|No directory or file matches/.test(listMiss), 'list（找不到时给提示）', listMiss.split('\n')[0].slice(0, 60));
+// 近似候选的质量：拿真实顶层目录名的前缀去问，应该能把它找回来（原来这儿的匹配是坏的）
+const seedDir = biggestFile.path.includes('/') ? biggestFile.path.split('/')[0] : '';
+if (seedDir.length > 3) {
+  const q2 = seedDir.slice(0, Math.min(4, seedDir.length - 1));
+  const hintOut = await call('list', { path: q2 });
+  check(hintOut.includes(seedDir + '/'), `list（近似候选："${q2}" 能找到 "${seedDir}/"）`, hintOut.split('\n')[0].slice(0, 70));
+}
 
 // 每个工具结果末尾都挂快照时间（单点调用也能看出数据新不新）
 const symTail = sym.split('\n').slice(-1)[0];

@@ -399,15 +399,33 @@ function toolList(idx, a) {
   const norm = b.files.map((f) => f.path.replace(/\\/g, '/'));
   const scoped = b.files.filter((f, i) => (q === '' ? true : norm[i].toLowerCase() === q || norm[i].toLowerCase().startsWith(q + '/')));
   if (!scoped.length) {
-    // 退一步：当片段用，给出最接近的几个目录
-    const dirs = new Set();
+    // 退一步：按「路径段」做近似匹配给候选 —— 段名以 q 开头(3) > 含 q(2) > q 是它的子序列(1)。
+    // （原实现是在整条路径里搜子串再往前截，会给出 e2e/ 这种离谱候选、还会漏掉 server/）
+    const isSub = (needle, hay) => { let i = 0; for (const ch of hay) if (ch === needle[i]) i++; return needle.length > 0 && i === needle.length; };
+    const score = (seg) => (seg.startsWith(q) ? 3 : seg.includes(q) ? 2 : isSub(q, seg) ? 1 : 0);
+    const hints = new Map();
+    const consider = (p, isDir) => {
+      const segs = p.split('/').filter(Boolean);
+      for (let k = 0; k < segs.length; k++) {
+        const sc = score(segs[k].toLowerCase());
+        if (!sc) continue;
+        const path = segs.slice(0, k + 1).join('/') + (k === segs.length - 1 && !isDir ? '' : '/');
+        if (!hints.has(path) || hints.get(path) < sc) hints.set(path, sc);
+      }
+    };
     for (const p of norm) {
-      const i = p.toLowerCase().indexOf(q);
-      if (i < 0) continue;
-      const cut = p.lastIndexOf('/', i + q.length);
-      if (cut > 0) dirs.add(p.slice(0, cut + 1));
+      consider(p, false);
+      const segs = p.split('/').filter(Boolean);
+      for (let k = 1; k < segs.length; k++) consider(segs.slice(0, k).join('/'), true);
     }
-    const hint = [...dirs].slice(0, 8).join(' · ');
+    const ranked = [...hints].sort((x, y) => y[1] - x[1] || x[0].length - y[0].length || (x[0] < y[0] ? -1 : 1));
+    const keep = [];
+    for (const [p] of ranked) {
+      if (keep.some((k) => p.startsWith(k))) continue; // 父目录已列出就不列子孙
+      keep.push(p);
+      if (keep.length >= 6) break;
+    }
+    const hint = keep.join(' · ');
     return T(`没有正好叫 "${a.path}" 的目录或文件。${hint ? `相近的有：${hint}` : '用 search 按名字找符号，或 list() 看扫描根。'}`, `No directory or file matches "${a.path}".${hint ? ` Close ones: ${hint}` : ' Use search to find symbols by name, or list() for the scan root.'}`);
   }
   const prefix = q === '' ? '' : q + '/';
