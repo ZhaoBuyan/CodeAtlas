@@ -765,7 +765,7 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            SetTip(_langs, "选择要扫描的语言（默认自动：27 门代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: 27 code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
+            SetTip(_langs, "选择要扫描的语言（默认自动：所有代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: all code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
             SetText(_wiz, "项目设置…", "Setup…");
@@ -1134,7 +1134,7 @@ namespace CodeAtlas
         /// <summary>日志 / 状态区里的人类可读描述（不糊弄：没配就说清楚默认到底扫什么）</summary>
         private string LangsSummary()
         {
-            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("自动（27 门代码语言；配置文件格式默认不扫）", "auto (all 27 code languages; file-level formats are opt-in)");
+            if (string.IsNullOrWhiteSpace(_cfg.Langs)) return L.T("自动（所有代码语言；配置文件格式默认不扫）", "auto (all code languages; file-level formats are opt-in)");
             var ids = _cfg.Langs.Split(',').Select((s) => s.Trim()).Where((s) => s.Length > 0).ToArray();
             return L.En ? $"scanning {ids.Length} languages: " + string.Join(", ", ids) : $"只扫 {ids.Length} 种：" + string.Join(", ", ids);
         }
@@ -1340,12 +1340,19 @@ namespace CodeAtlas
             _listHost.Controls.Add(_list);
 
             var cur = (current ?? "").Split(',').Select((s) => s.Trim().ToLowerInvariant()).Where((s) => s.Length > 0).ToArray();
+            // 已保存的选择如果本来就是“全选”（代码语言一个不落），这次新加的语言也该跟着勾上 ——
+            // 否则升级后新语言会静默缺席（v1.3.0 复测抓到：全选过的配置升级后看不到 .vue）。
+            // 判定：已保存的 id 覆盖了当前代码语言的 ≥ N-3 门，就当作“当时是全选”（差几门 = 这几次新增的）。
+            var codeIds = _langs.Where((x) => !x.OptIn).Select((x) => x.Id).ToArray();
+            int covered = codeIds.Count((id) => Array.IndexOf(cur, id) >= 0);
+            bool savedWasAll = cur.Length > 0 && covered >= Math.Max(1, codeIds.Length - 3);
             for (int i = 0; i < _langs.Length; i++)
             {
                 var l = _langs[i];
                 string ext = (l.Exts != null && l.Exts.Length > 0) ? "   " + string.Join(" ", l.Exts) : "";
                 _list.Items.Add(l.Label + ext + (l.OptIn ? L.T("    （文件级格式 · 默认不扫）", "    (file-level format · off by default)") : ""));
-                _list.SetItemChecked(i, cur.Length == 0 ? !l.OptIn : Array.IndexOf(cur, l.Id) >= 0);
+                // 默认（cur 为空）→ 勾非 OptIn；已保存的选择 → 照它说的勾，但“当时是全选”时把新语言补上
+                _list.SetItemChecked(i, cur.Length == 0 ? !l.OptIn : (Array.IndexOf(cur, l.Id) >= 0 || (savedWasAll && !l.OptIn)));
             }
             // 勾选状态在 ItemCheck 之后才变，所以推到消息循环下一轮再算摘要
             _list.ItemCheck += (s, e) => BeginInvoke(new Action(UpdateHint));
