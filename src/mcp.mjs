@@ -42,9 +42,10 @@ const PROTOCOL = '2024-11-05';
 const INSTRUCTIONS = [
   'This is a code map produced by Code Atlas: a static parse of the source tree via tree-sitter, entirely local, never online.',
   '',
-  'How to use it: start with overview for the big picture, then search for symbols (it returns ids), then drill down with',
-  'symbol / refs / subgraph / impact. When context is tight, call map(budget) first to get the skeleton',
-  '(systems -> key types -> key members).',
+  'How to use it: start with overview for the big picture. If you do not know any names yet, call list(path) to browse',
+  'directories and file names (its output is meant to be fed into file() / search()). Then search for symbols (it returns',
+  'ids) and drill down with symbol / refs / subgraph / impact. When context is tight, call map(budget) first to get the',
+  'skeleton (systems -> key types -> key members).',
   '',
   'Boundaries you must know (honesty first — do not treat inference as fact):',
   '- Types / members / line counts / imports come from the syntax tree and are trustworthy; dependency edges come from static',
@@ -53,7 +54,8 @@ const INSTRUCTIONS = [
   '- Files with parse errors are flagged individually; their data may be incomplete;',
   '- Decompiled output (.dll / .exe / .jar) carries no source comments, so an empty "description" is expected;',
   '- Every path in the output is **relative to the scan root**, which overview reports (use it to build absolute paths and read source yourself);',
-  '- The data is a snapshot: overview shows the generation time, and the server picks up a freshly scanned bundle automatically, no restart needed.',
+  '- The data is a snapshot (UTC): overview spells out the generation time (scan options included) and every tool result ends',
+  '  with the same short "snapshot" stamp; the server picks up a freshly scanned bundle automatically, no restart needed.',
 ].join('\n');
 
 export function buildIndex(b) {
@@ -96,7 +98,10 @@ const TOOLS = [
     description: 'Everything about one symbol (type): description, file:line, member list, base types, dependents/dependencies, owning system.',
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string', description: 'id (number) or a name / qualified name' } },
+      properties: {
+        name: { type: 'string', description: 'id (number) or a name / qualified name' },
+        members: { type: 'number', description: 'Max members to list, default 40 (max 300) — raise it when you need the whole member list' },
+      },
       required: ['name'],
       additionalProperties: false,
     },
@@ -160,6 +165,18 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'list',
+    description: 'Browse the scanned tree by directory: pass a directory path fragment (or nothing for the scan root) and get its direct entries with file / type / code-line counts. Use this when you do not know any names yet — the output gives you paths and file names to feed into file() / search().',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Directory fragment, e.g. "client/src" / "src/Players"; omit for the scan root' },
+        limit: { type: 'number', description: 'Max entries to list, default 40 (max 200)' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -210,7 +227,13 @@ function toolOverview(idx) {
   const when = String(b.generated || '').replace('T', ' ').slice(0, 19) + ' UTC';
   lines.push(T(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`, `Snapshot: ${when} · scan took ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · languages ${so.lang || 'auto'} · max file ${so.maxKb || 1024}KB · ${so.incremental ? 'incremental' : 'full'}`));
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
-  if (b.totals.parseErrors) lines.push(T(`注意：${b.totals.parseErrors} 处语法树解析异常（这些文件数据可能不全）`, `Note: ${b.totals.parseErrors} parse errors (data in those files may be incomplete)`));
+  if (b.totals.parseErrors) {
+    const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
+    const showBad = bad.slice(0, 8);
+    const list = showBad.map((f) => `${f.path}(${f.errors})`).join(' · ');
+    const tail = bad.length > showBad.length ? T(` …等 ${bad.length} 个文件`, ` … ${bad.length} files in total`) : '';
+    lines.push(T(`注意：${b.totals.parseErrors} 处语法树解析异常（这些文件数据可能不全）：${list}${tail}`, `Note: ${b.totals.parseErrors} parse errors (data in those files may be incomplete): ${list}${tail}`));
+  }
   if (b.totals.compilerGenerated) lines.push(T(`注意：${b.totals.compilerGenerated} 个编译器生成/反编译生成类型（非手写代码）`, `Note: ${b.totals.compilerGenerated} compiler-generated / decompiled types (not hand-written code)`));
   if (b.totals.nonUtf8Files) lines.push(T(`注意：${b.totals.nonUtf8Files} 个文件可能不是 UTF-8 编码（其中的注释 / 字符串是乱码）`, `Note: ${b.totals.nonUtf8Files} files are probably not UTF-8 (their comments / strings are mojibake)`));
   // 诚实边界：把"依赖边是名字匹配"这个前提摆在第一屏——只调 overview 的 AI 也得看得到
@@ -274,7 +297,8 @@ function toolSymbol(idx, a) {
   if (r.error) return r.error;
   const t = r.type;
   const f = idx.files.get(t.file);
-  const members = (t.memberList || []).slice(0, 40);
+  const memberCap = Math.min(Math.max(Number(a.members) || 40, 1), 300);
+  const members = (t.memberList || []).slice(0, memberCap);
   const lines = [];
   lines.push(`${t.fqn}  [${t.kind}]${t.tags?.length ? `  (${t.tags.join(', ')})` : ''}`);
   lines.push(T(`文件：${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   系统：${t.system ? sysLabel(t.system) : '（未分组）'}${t.systemRule ? `（规则 ${t.systemRule}）` : ''}`, `File: ${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   System: ${t.system ? sysLabel(t.system) : '(ungrouped)'}${t.systemRule ? ` (rule ${t.systemRule})` : ''}`));
@@ -351,10 +375,67 @@ function toolFile(idx, a) {
     T(`${f.path}  [${f.lang}]  ${f.loc} 行（整文件：代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines (whole file: code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
   ];
   if (f.errors) lines.push(T(`注意：${f.errors} 处解析异常`, `Note: ${f.errors} parse errors`));
-  lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.name}[${t.kind}]`).join('  '));
+  lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.fqn && t.fqn !== t.name ? t.fqn : t.name}[${t.kind}]`).join('  '));
   const imports = f.imports || [];
   lines.push(T(`导入（${imports.length}）：${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` …等 ${imports.length} 条` : ''}`, `Imports (${imports.length}): ${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` … ${imports.length} in total` : ''}`));
   return lines.join('\n');
+}
+
+/** 快照时间（UTC，和 overview 那条同一个来源）；挂在每个工具结果的末尾 */
+function stampShort(b) {
+  return String(b.generated || '').replace('T', ' ').slice(0, 16) + ' UTC';
+}
+
+/**
+ * list(path?, limit?)：目录浏览 —— AI 从零探索陌生库的入口（以前只能靠 search 猜名字）。
+ * 不传 path 就列扫描根的顶层；输出里的路径可以直接喂给 file() / search()。
+ */
+function toolList(idx, a) {
+  const b = idx.b;
+  const q = String(a.path || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
+  const norm = b.files.map((f) => f.path.replace(/\\/g, '/'));
+  const scoped = b.files.filter((f, i) => (q === '' ? true : norm[i].toLowerCase() === q || norm[i].toLowerCase().startsWith(q + '/')));
+  if (!scoped.length) {
+    // 退一步：当片段用，给出最接近的几个目录
+    const dirs = new Set();
+    for (const p of norm) {
+      const i = p.toLowerCase().indexOf(q);
+      if (i < 0) continue;
+      const cut = p.lastIndexOf('/', i + q.length);
+      if (cut > 0) dirs.add(p.slice(0, cut + 1));
+    }
+    const hint = [...dirs].slice(0, 8).join(' · ');
+    return T(`没有以 "${a.path}" 开头的目录或文件。${hint ? `你想找的是不是：${hint}` : '用 search 按名字找符号。'}`, `Nothing starts with "${a.path}".${hint ? ` Did you mean: ${hint}` : ' Use search to find symbols by name.'}`);
+  }
+  const prefix = q === '' ? '' : q + '/';
+  const dirAgg = new Map();
+  const filesHere = [];
+  for (const f of scoped) {
+    const rest = f.path.replace(/\\/g, '/').slice(prefix.length);
+    const slash = rest.indexOf('/');
+    if (slash >= 0) {
+      const d = rest.slice(0, slash);
+      const agg = dirAgg.get(d) || { files: 0, types: 0, code: 0 };
+      agg.files++; agg.types += (f.types || []).length; agg.code += f.code || 0;
+      dirAgg.set(d, agg);
+    } else filesHere.push(f);
+  }
+  const rows = [];
+  for (const [d, agg] of [...dirAgg].sort((x, y) => y[1].code - x[1].code)) rows.push({ dir: true, name: prefix + d + '/', agg });
+  for (const f of filesHere.sort((x, y) => (y.code || 0) - (x.code || 0))) rows.push({ dir: false, f, name: f.path.replace(/\\/g, '/') });
+  const cap = Math.min(Math.max(Number(a.limit) || 40, 1), 200);
+  const tot = scoped.reduce((acc, f) => { acc.files++; acc.types += (f.types || []).length; acc.code += f.code || 0; return acc; }, { files: 0, types: 0, code: 0 });
+  const out = [];
+  out.push(q === ''
+    ? T(`扫描根（${(b.source.roots || b.source.labels || []).join(', ')}）：本层 ${rows.length} 项 · 整棵树 ${fmt(tot.files)} 文件 / ${fmt(tot.types)} 类型 / ${fmt(tot.code)} 行代码`, `Scan root (${(b.source.roots || b.source.labels || []).join(', ')}): ${rows.length} entries here · ${fmt(tot.files)} files / ${fmt(tot.types)} types / ${fmt(tot.code)} lines of code in the whole tree`)
+    : T(`${prefix}本层 ${rows.length} 项 · 这棵子树 ${fmt(tot.files)} 文件 / ${fmt(tot.types)} 类型 / ${fmt(tot.code)} 行代码`, `${prefix} ${rows.length} entries here · ${fmt(tot.files)} files / ${fmt(tot.types)} types / ${fmt(tot.code)} lines of code below`));
+  for (const r of rows.slice(0, cap)) {
+    if (r.dir) out.push(T(`  [目录] ${r.name}  ${fmt(r.agg.files)} 文件 · ${fmt(r.agg.types)} 类型 · ${fmt(r.agg.code)} 行`, `  [dir]  ${r.name}  ${fmt(r.agg.files)} files · ${fmt(r.agg.types)} types · ${fmt(r.agg.code)} lines`));
+    else out.push(T(`  [文件] ${r.name}  ${fmt(r.f.code)} 行 · ${(r.f.types || []).length} 类型${r.f.errors ? ` · ${r.f.errors} 处解析异常` : ''}`, `  [file] ${r.name}  ${fmt(r.f.code)} lines · ${(r.f.types || []).length} types${r.f.errors ? ` · ${r.f.errors} parse errors` : ''}`));
+  }
+  if (rows.length > cap) out.push(T(`（只列前 ${cap} / 共 ${rows.length} 项：用 path= 缩到某个子目录，或调大 limit）`, `(first ${cap} of ${rows.length}: narrow it with path=, or raise limit)`));
+  out.push(T('（看单个文件的类型/导入用 file，按名字找符号用 search）', '(use file for one file\'s types/imports, search to find symbols by name)'));
+  return out.join('\n');
 }
 
 /**
@@ -471,7 +552,7 @@ function toolImpact(idx, a) {
   return out.join('\n');
 }
 
-const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, refs: toolRefs, subgraph: toolSubgraph, file: toolFile, map: toolMap, impact: toolImpact };
+const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, refs: toolRefs, subgraph: toolSubgraph, file: toolFile, list: toolList, map: toolMap, impact: toolImpact };
 
 function callTool(idx, name, args) {
   const fn = IMPL[name];
@@ -554,7 +635,9 @@ export function startMcp({ bundlePath }) {
       const args = params?.arguments || {};
       maybeReload();
       const text = callTool(idx, name, args);
-      return ok(id, { content: [{ type: 'text', text }], isError: false });
+      // 结尾挂一条快照时间（overview 那行已经写全了，不重复）：单点调用时也能看出数据新不新
+      const body = name === 'overview' ? text : `${text}\n${T(`（快照 ${stampShort(idx.b)}）`, `(snapshot ${stampShort(idx.b)})`)}`;
+      return ok(id, { content: [{ type: 'text', text: body }], isError: false });
     }
     if (id !== undefined) fail(id, -32601, T(`不支持的方法：${method}`, `Unsupported method: ${method}`));
   }

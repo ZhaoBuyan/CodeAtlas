@@ -29,7 +29,7 @@ Four things it aims for:
   no Node install, no environment setup;
 - **One dataset, two consumers**: the same `bundle.json` — **humans** browse it in the browser
   (tree map / tree list / dependency graph / dependency matrix), **AI** queries it over MCP
-  (8 tools, including token-budgeted export and impact analysis). You never re-parse just to feed an AI;
+  (9 tools, including token-budgeted export and impact analysis). You never re-parse just to feed an AI;
 - **Honesty first**: whatever is uncertain is labelled (dependency edges are static name matching;
   unmatched and ambiguous references are counted; decompiled output is marked as having no source comments).
   It would rather show "I don't know" than pretend to be authoritative.
@@ -220,7 +220,7 @@ language version again, add `preprocess: 'xxx'` to that profile) — right now n
 
 ## For AI: the MCP query layer
 
-> **Setup steps (which button, where each client pastes the config, when to use each of the 8 tools,
+> **Setup steps (which button, where each client pastes the config, when to use each of the 9 tools,
 > troubleshooting) are in [USAGE.md](USAGE.md) section 5 (Chinese: [使用说明.md](使用说明.md)).**
 > Lazy path: scan once in the launcher → click "MCP config" → paste into your AI client.
 
@@ -235,6 +235,7 @@ Tools provided:
 | Tool | What it does |
 | --- | --- |
 | `overview()` | Project overview: size, system breakdown, most-depended-on symbols, largest files |
+| `list(path?, limit?)` | **Browse by directory**: no `path` → the scan root; otherwise that level's folders / files with file, type and line counts. Start here when you do not know any names yet — its output (paths, file names) feeds `file()` / `search()` |
 | `search(query, scope?, kind?)` | Find symbols by name; **member names are included by default** (searching `OnPaint` finds "who defines this method"); `scope=type\|member` narrows it. Returns ids for the other tools |
 | `symbol(name)` | Everything about one type: description, file:line, member list, base types, dependency counts, its system |
 | `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code) |
@@ -242,6 +243,9 @@ Tools provided:
 | `file(path)` | A file's types, imports, line counts (**parse errors are called out when present**) |
 | `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply |
 | `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus an explicit list of what is invisible (dynamic calls / reflection) |
+
+Every tool lists a bounded number of entries and says "first N of M" when it truncates (`search` 20 · `symbol` members 40 · `subgraph` 40 per level · `list` 40 — raise with `limit` / `members`).
+Each result ends with a **snapshot stamp (UTC)**, so even a single call tells you how fresh the data is.
 
 Client configuration — the "MCP config" button copies exactly this shape (absolute paths, `command` already
 pointing at the resolved `node.exe`, `env` set to the current UI language):

@@ -89,6 +89,19 @@ check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));
 const fileOut = await call('file', { path: biggestFile.path.slice(0, Math.max(4, biggestFile.path.length - 4)) });
 check(fileOut.includes('行') || fileOut.includes('line'), 'file', fileOut.split('\n')[0].slice(0, 70));
 
+// list（目录浏览）：不认识任何名字时的入口 —— 从零探索陌生库
+const listRoot = await call('list', {});
+check(/\[(目录|dir)\]|\[(文件|file)\]/.test(listRoot), 'list（列扫描根）', listRoot.split('\n')[0].slice(0, 70));
+const topDir = biggestFile.path.includes('/') ? biggestFile.path.split('/')[0] : '';
+const listSub = await call('list', topDir ? { path: topDir } : {});
+check(/本层|here/.test(listSub), 'list（子目录）', listSub.split('\n')[0].slice(0, 70));
+const listMiss = await call('list', { path: 'zzz-no-such-dir-zzz' });
+check(/没有以|Nothing starts/.test(listMiss), 'list（找不到时给提示）', listMiss.split('\n')[0].slice(0, 60));
+
+// 每个工具结果末尾都挂快照时间（单点调用也能看出数据新不新）
+const symTail = sym.split('\n').slice(-1)[0];
+check(/(快照|snapshot).*UTC/.test(symTail), '非 overview 工具也带快照时间', symTail.slice(0, 60));
+
 const miss = await call('symbol', { name: 'zzz-this-does-not-exist' });
 check(/没有|找不到|No symbol|not found/i.test(miss), '找不到时给提示', miss.split('\n')[0].slice(0, 60));
 

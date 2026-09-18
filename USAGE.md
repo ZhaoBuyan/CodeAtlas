@@ -130,13 +130,14 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | **Cursor** | Settings → MCP → Add new MCP server (or `~/.cursor/mcp.json`) |
 | **Windsurf / Cline / others** | find the "MCP servers" setting and paste the `mcpServers` snippet |
 
-**Restart the client** afterwards; you should see a `code-atlas` server with 8 tools.
+**Restart the client** afterwards; you should see a `code-atlas` server with 9 tools.
 
-### 5.3 What you can ask once it is connected (8 tools)
+### 5.3 What you can ask once it is connected (9 tools)
 
 | Tool | When to use it |
 | --- | --- |
 | `overview` | Get the lay of the land first: how much is there, where the usual entry points are |
+| `list(path?)` | **Browse by directory** — start here when you do not know any names yet: pass a folder (or nothing for the scan root) and get its folders / files with file, type and line counts |
 | `search(query, scope?)` | Find symbols — **member names are searched too** ("who defines `OnPaint`?"), with type hits and member hits separated |
 | `symbol(name)` | Details of one type: members, bases, reference count |
 | `refs(name, dir?)` | Who references it / what it references |
@@ -144,6 +145,8 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members) |
 | `impact(name, depth)` | **Blast radius**: who is affected if you change it (multi-hop) |
 | `file(path)` | The types inside one file |
+
+Each tool lists a bounded number of entries and says "first N of M" when it truncates (`limit` / `members` raise it).\nEvery result ends with a snapshot stamp (UTC).
 
 Suggested flow: **`map` for the big picture → `search` to locate → `symbol` / `refs` / `impact` to go deep**. Far
 cheaper than having the AI read files one by one.
