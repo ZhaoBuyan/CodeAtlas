@@ -83,6 +83,25 @@ check(refs.length > 10 && /×/.test(refs), 'refs', refs.split('\n')[0].slice(0, 
 const refsTrunc = await call('refs', { name: String(hottest.id), direction: 'in', limit: 1 });
 check(hottest.fanIn <= 1 || /还有 .*条没显示|more not shown/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
 
+// 引用证据强度：refs 每条边挂一个标签（同文件 / import 有支撑 / 仅同名），
+// overview 热点榜按“有证据的引用数”排 —— 免得好多“同名但无关”的边把没人真用的类型顶到第一
+const refsAll = await call('refs', { name: String(hottest.id), direction: 'in', limit: 200 });
+const tagCount = (refsAll.match(/\[(同文件|import|仅同名|same file|same name only)\]/g) || []).length;
+const edgeCount = (refsAll.match(/×/g) || []).length;
+check(edgeCount > 0 && tagCount === edgeCount, 'refs 每条边都标了引用证据强度', `${tagCount}/${edgeCount} 条带标签`);
+const hasNameOnly = /\[(仅同名|same name only)\]/.test(refsAll);
+check(!hasNameOnly || /别当真|do not trust it/.test(refsAll), 'refs 出现“仅同名”时会说明它不能当真', hasNameOnly ? '有仅同名边，已带说明' : '这个 bundle 里没有仅同名边');
+
+const hotLines = overview.split('\n').filter((l) => /被 \d+ 处引用|referenced by \d+/.test(l));
+const evOf = (l) => {
+  const m = l.match(/有证据 (\d+) 处|\((\d+) with evidence\)/);       // 括号里的是“算数的”引用数
+  if (m) return Number(m[1] ?? m[2]);
+  const n = l.match(/被 (\d+) 处引用|referenced by (\d+)/);
+  return Number(n[1] ?? n[2]);
+};
+const evCounts = hotLines.map(evOf);
+check(hotLines.length >= 3 && evCounts.every((v, i) => i === 0 || evCounts[i - 1] >= v), 'overview 热点榜按「有证据的引用数」排', evCounts.join(' ≥ '));
+
 const sub = await call('subgraph', { name: String(hottest.id), depth: 2 });
 check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));
 

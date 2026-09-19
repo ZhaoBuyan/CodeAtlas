@@ -51,6 +51,11 @@ const INSTRUCTIONS = [
   '- Types / members / line counts / imports come from the syntax tree and are trustworthy; dependency edges come from static',
   '  **name matching** — dynamic calls, reflection and names built by string concatenation are invisible, and the counts of',
   '  unmatched and ambiguous references are reported explicitly in overview and impact;',
+  '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `import-backed` (the',
+  '  referring file imports a module of that name — matched by module name, so treat it as strong evidence, not proof) >',
+  '  `same name only` (usually a coincidence; do not read it as a real dependency). Solitary `same name only` edges are why',
+  '  a raw reference count can be misleading, so the `overview` "most depended-on" list is ranked by references with',
+  '  evidence instead (the number in brackets is how many count);',
   '- Files with parse errors are flagged individually; their data may be incomplete;',
   '- Top-level functions in JS / TS are recorded as [function] **types**, not members: search(scope="member") will not find',
   '  them — use the default scope (any) or scope="type";',
@@ -194,6 +199,56 @@ function basename(p) {
   return String(p).split('/').pop();
 }
 
+/** 源码后缀：判“import 是否指到这个文件”时用来去掉尾部扩展名（'util.log-or-console' 这种不能被当成扩展名切掉） */
+const SRC_EXT = new Set([
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'py', 'java', 'cs', 'kt', 'kts', 'go', 'rs', 'rb', 'php',
+  'lua', 'swift', 'scala', 'ex', 'exs', 'zig', 'hcl', 'tf', 'sol', 'tla', 'res', 're', 'ml', 'mli', 'graphql', 'gql',
+  'sh', 'bash', 'ps1', 'el', 'c', 'h', 'hpp', 'cpp', 'cc', 'dart', 'jl', 'pl', 'r', 'json', 'yaml', 'yml', 'toml', 'html',
+]);
+
+/** 模块名归一：'x/y/util.log-or-console.js' 与 './util.log-or-console' 都算 'util.log-or-console' */
+function moduleKey(p) {
+  const b = basename(String(p || ''));
+  const m = b.match(/\.([A-Za-z0-9]+)$/);
+  return m && SRC_EXT.has(m[1].toLowerCase()) ? b.slice(0, -m[0].length) : b;
+}
+
+/**
+ * 引用证据强度 —— 依赖边是静态名字匹配，所以“同名但无关”的边会混进来：实测（一个真实 monorepo 样本）
+ * 有个函数 145 条入边里 141 条来自别的文件里同名对象的方法调用，跟它根本无关。
+ * 读侧分三档（不动引擎数据）：同文件最硬；引用方文件的 imports 能指到被引用方那个文件 = 有 import 支撑；
+ * 剩下只共享一个名字的归“仅同名”，噪声主要在这一档。
+ */
+function evidenceOf(idx, e) {
+  const src = idx.byId.get(e.from);
+  const dst = idx.byId.get(e.to);
+  if (!src || !dst) return 'name';
+  if (src.file === dst.file) return 'same';
+  const dstPath = idx.files.get(dst.file)?.path;
+  const f = idx.files.get(src.file);
+  if (dstPath && f) {
+    const key = moduleKey(dstPath);
+    for (const raw of f.imports || []) if (moduleKey(raw) === key) return 'import';
+  }
+  return 'name';
+}
+
+const EVIDENCE_RANK = { same: 2, import: 1, name: 0 };
+
+/** refs 每行尾的短标签（有证据的排前面，标了才看得出来哪几条是噪声） */
+function evidenceTag(ev) {
+  if (ev === 'same') return T('  [同文件]', '  [same file]');
+  if (ev === 'import') return T('  [import]', '  [import]');
+  return T('  [仅同名]', '  [same name only]');
+}
+
+/** 某个类型“算数的”入边数（同文件 + 有 import 支撑）—— overview 热点榜拿它排序 */
+function evidencedIn(idx, t) {
+  let n = 0;
+  for (const e of idx.ins.get(t.id) || []) if (evidenceOf(idx, e) !== 'name') n++;
+  return n;
+}
+
 /** 搜索命中上挂的一行说明摘要：压空白、截到 n 字（省 AI 一次 symbol 调用） */
 function briefDoc(s, n = 80) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();
@@ -218,7 +273,11 @@ function resolve(idx, key) {
 
 function toolOverview(idx) {
   const b = idx.b;
-  const topIn = b.types.slice().sort((a, c) => c.fanIn - a.fanIn).slice(0, 8);
+  // 热点榜按“有证据的引用数”排（并列再按原始引用数）——
+  // 不这么排的话，“同名但无关”的边会把一个没人真用的类型顶到第一（实测样本上就是这样）
+  const topIn = b.types.slice()
+    .sort((a, c) => (evidencedIn(idx, c) - evidencedIn(idx, a)) || (c.fanIn - a.fanIn))
+    .slice(0, 8);
   const bigFiles = b.files.slice().sort((a, c) => c.code - a.code).slice(0, 6);
   const lines = [];
   lines.push(T(`项目：${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`, `Project: ${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`));
@@ -251,7 +310,12 @@ function toolOverview(idx) {
   const sys = b.facets?.systems || [];
   if (sys.length) lines.push(T(`系统划分（${b.facets.configFile}）：\n`, `Systems (${b.facets.configFile}):\n`) + sys.map((s) => T(`  ${sysLabel(s.name)}：${fmt(s.loc)} 行 · ${s.types} 类型 · ${s.files} 文件`, `  ${sysLabel(s.name)}: ${fmt(s.loc)} lines · ${s.types} types · ${s.files} files`)).join('\n'));
   else lines.push(T('没有系统分组规则（可用 configs/<项目>.facets.json 定义；否则按目录/文件看）', 'No system grouping rules (define them in configs/<project>.facets.json; otherwise browse by directory / file)'));
-  lines.push(T('被依赖最多（改动的波及面最大）：\n', 'Most depended-on (biggest blast radius):\n') + topIn.map((t) => T(`  ${t.fqn} [${t.kind}] 被 ${t.fanIn} 处引用 · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced by ${t.fanIn} · ${idx.files.get(t.file)?.path}`)).join('\n'));
+  const hotLine = (t) => {
+    const ev = evidencedIn(idx, t);
+    const note = ev < t.fanIn ? T(`（有证据 ${ev} 处）`, ` (${ev} with evidence)`) : '';
+    return T(`  ${t.fqn} [${t.kind}] 被 ${t.fanIn} 处引用${note} · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced by ${t.fanIn}${note} · ${idx.files.get(t.file)?.path}`);
+  };
+  lines.push(T('被依赖最多（改动的波及面最大；按“有证据的引用”排 —— 仅同名的边不算，见 refs）：\n', 'Most depended-on (biggest blast radius; ranked by references with evidence — same-name-only edges do not count, see refs):\n') + topIn.map(hotLine).join('\n'));
   lines.push(T('最大的文件：\n', 'Largest files:\n') + bigFiles.map((f) => T(`  ${f.path}  ${fmt(f.code)} 行`, `  ${f.path}  ${fmt(f.code)} lines`)).join('\n'));
   lines.push(T('深入用：search / symbol / refs / subgraph / file', 'Dig deeper with: search / symbol / refs / subgraph / file'));
   return lines.join('\n');
@@ -330,19 +394,27 @@ function toolRefs(idx, a) {
   const dir = (a.direction || 'both').toLowerCase();
   const limit = Math.min(Number(a.limit) || 30, 200);
   const out = [];
+  let sawNameOnly = false;
   const show = (es, label, pick) => {
     if (!es.length) { out.push(T(`${label}：无`, `${label}: none`)); return; }
-    es.sort((x, y) => y.w - x.w);
+    // 有证据的排前面（同文件 > 有 import 支撑 > 仅同名），同档再按权重：
+    // 否则一堆“仅同名”的噪声会把真正的那几条挤出 limit
+    es.sort((x, y) => (EVIDENCE_RANK[evidenceOf(idx, y)] - EVIDENCE_RANK[evidenceOf(idx, x)]) || (y.w - x.w));
     out.push(`${label}（${es.length}）：`);
     for (const e of es.slice(0, limit)) {
       const o = pick(e);
-      out.push(T(`  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (继承)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`, `  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (inherits)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`));
+      const ev = evidenceOf(idx, e);
+      if (ev === 'name') sawNameOnly = true;
+      out.push(T(`  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (继承)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`, `  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (inherits)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`) + evidenceTag(ev));
     }
     if (es.length > limit) out.push(T(`  …还有 ${fmt(es.length - limit)} 条没显示（limit 可调，上限 200）`, `  …${fmt(es.length - limit)} more not shown (limit is adjustable, max 200)`));
   };
   if (dir === 'in' || dir === 'both') show(idx.ins.get(t.id) || [], T('被谁引用', 'referenced by'), (e) => idx.byId.get(e.from));
   if (dir === 'out' || dir === 'both') show(idx.outs.get(t.id) || [], T('引用了谁', 'references'), (e) => idx.byId.get(e.to));
-  return `${t.fqn} [${t.kind}]\n${out.join('\n')}`;
+  const legend = sawNameOnly
+    ? T('（边尾的标签：同文件 / import 有支撑 / 仅同名 —— 后两档是按模块名近似判的；“仅同名”多半只是名字巧合，别当真）\n', '(tag after each edge: same file / import-backed / same name only — the latter two are matched by module name; "same name only" is usually a coincidence, do not trust it)\n')
+    : '';
+  return `${t.fqn} [${t.kind}]\n${legend}${out.join('\n')}`;
 }
 
 function toolSubgraph(idx, a) {
