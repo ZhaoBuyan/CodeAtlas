@@ -51,6 +51,8 @@ const CASES = [
     // 回归：多行 /// 块必须整块进来（tree-sitter 把 /// 的每行各算一个 comment 节点，
     // 只取最近那行时，以 </summary> 收尾的块会变成空壳 —— MuSync 上实测丢过 25 个类型的说明）
     docContains: { MultiLineDoc: ['第一段在这里', '第二段也要在', '在这里。第二段也要在', '空格——就像'] },
+    // 回归：分节线不算“说明”（Dog 上方是 `── 分节线 ──`、IWalker 上方是 `── 接口 ────────`）
+    docNull: ['Dog', 'IWalker'],
     membersMin: 7,
     errorsMax: 0, // 主构造函数 / file 修饰符 / 原始字符串都要能被预处理掉
   },
@@ -220,6 +222,13 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
       push(missing.length === 0, missing.length
         ? `${name} 的说明缺内容：${missing.join(' / ')}（实际 ${JSON.stringify(doc.slice(0, 60))}）`
         : `${name} 多行说明整块提取（${parts.length} 段都在）`);
+    }
+  }
+  if (c.docNull) {
+    for (const name of c.docNull) {
+      const t = b.types.find((x) => x.name === name);
+      const actual = t && t.doc ? ` —— 实际拿到 ${JSON.stringify(t.doc.slice(0, 40))}` : '';
+      push(!!t && !t.doc, `${name} 没有说明（分节线不算说明）${actual}`);
     }
   }
   if (c.membersMin != null) {

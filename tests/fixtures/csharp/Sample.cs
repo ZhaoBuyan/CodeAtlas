@@ -17,6 +17,7 @@ namespace Fixture.Sample
         }
     }
 
+    // ── 分节线 ──
     public class Dog : Animal
     {
         public override void Speak() { }
@@ -24,6 +25,7 @@ namespace Fixture.Sample
         public int Legs { get; set; } = 4;
     }
 
+    // ── 接口 ────────────
     public interface IWalker
     {
         void Walk();
