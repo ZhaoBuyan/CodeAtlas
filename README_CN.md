@@ -137,7 +137,8 @@ npm run publish:lite   # 只出精简版
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - **反编译在完全版里无需安装**：扫 `.dll` / `.exe` 用链接进启动器的反编译器（ILSpy 引擎）；扫 `.jar` 用自带的裁剪版 Java 运行时 + cfr.jar —— 都不需要先装 ilspycmd / sfextract / Java。精简版不带 Java 运行时（它本来就要求 .NET 9 + Node），扫 `.jar` 仍需自己装 Java。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
-- **发版流程**：打 tag 推上去就行 —— `git tag v1.1.0 && git push --tags`。CI 会先跑测试，
+- **发版流程**：打 tag 推上去就行 —— `git tag v1.3.1 && git push origin v1.3.1`（**推单个 tag，别用 `--tags`** ——
+  那会把本地的备份 / 实验标签（`backup/*`）一起推上去）。CI 会先跑测试，
   然后打两个 exe 并挂到 GitHub Release 当下载资产（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
 - **版本号有三个地方，必须一起改**：`launcher/CodeAtlas.Launcher.csproj` 的 `<Version>`（exe 与窗口标题显示的就是它）、
   `src/scan.mjs` 的 `VERSION`（bundle 元数据 + 增量缓存指纹）、`package.json` 的 `version`。
