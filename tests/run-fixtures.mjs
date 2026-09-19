@@ -7,6 +7,7 @@
  */
 import { EXTRA_CASES } from './fixtures-cases2.mjs';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -23,11 +24,12 @@ const NODE = process.env.NODE_BIN || 'node';
  * 门数越少越稳，而真实项目一般 1~3 门语言 —— 隔离进程既贴合实际、也更稳。
  * 注意：别拿“19 门能跑完”当结论，那是侥幸（实测同一条命令 4 次全崩）。
  */
-function scanOne(dir, lang) {
+function scanOne(dir, lang, rootAbs) {
+  const srcDir = rootAbs || path.join(HERE, 'fixtures', dir);
   const outDir = path.join(HERE, '.out', dir);
   try {
     execFileSync(NODE, [
-      path.join(ROOT, 'src', 'cli.mjs'), 'scan', path.join(HERE, 'fixtures', dir),
+      path.join(ROOT, 'src', 'cli.mjs'), 'scan', srcDir,
       '--lang', lang, '--out', outDir,
     ], { stdio: 'pipe' });
   } catch (e) {
@@ -37,6 +39,36 @@ function scanOne(dir, lang) {
   }
   return JSON.parse(fs.readFileSync(path.join(outDir, 'bundle.json'), 'utf8'));
 }
+
+// ---- git 热度用例的两个根目录 ----
+// 必须现造：tests/fixtures/ 里的目录**永远在 CodeAtlas 自己的仓库里**，
+// 拿它当“非 git 目录”会读到父仓库的 git 信息，当“git 仓库”也只能看到父仓库的历史。
+const TMPROOT = path.join(os.tmpdir(), `codeatlas-fixtures-${process.pid}`);
+const GIT_FIXTURE = path.join(TMPROOT, 'git-heat');
+const PLAIN_FIXTURE = path.join(TMPROOT, 'no-git');
+const git = (cwd, args) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+function makeGitFixture() {
+  fs.rmSync(GIT_FIXTURE, { recursive: true, force: true });
+  fs.mkdirSync(GIT_FIXTURE, { recursive: true });
+  fs.writeFileSync(path.join(GIT_FIXTURE, 'a.js'), 'function alpha(x) { return x + 1; }\n');
+  fs.writeFileSync(path.join(GIT_FIXTURE, 'b.js'), 'function beta(y) { return y * 2; }\n');
+  git(GIT_FIXTURE, ['init', '-q']);
+  git(GIT_FIXTURE, ['-c', 'user.email=fixture@example.com', '-c', 'user.name=fixture', 'add', '.']);
+  git(GIT_FIXTURE, ['-c', 'user.email=fixture@example.com', '-c', 'user.name=fixture', 'commit', '-qm', 'first']);
+  // 第二次提交只碰 a.js（加一行注释，类型数不变）—— 于是 a.js 改动 2 次、b.js 1 次
+  fs.appendFileSync(path.join(GIT_FIXTURE, 'a.js'), '\n// touched again\n');
+  git(GIT_FIXTURE, ['-c', 'user.email=fixture@example.com', '-c', 'user.name=fixture', 'add', 'a.js']);
+  git(GIT_FIXTURE, ['-c', 'user.email=fixture@example.com', '-c', 'user.name=fixture', 'commit', '-qm', 'second']);
+  // c.js 写了但没提交 —— 图里要能看出来它是“未提交”
+  fs.writeFileSync(path.join(GIT_FIXTURE, 'c.js'), 'function gamma(z) { return z; }\n');
+}
+function makePlainFixture() {
+  fs.rmSync(PLAIN_FIXTURE, { recursive: true, force: true });
+  fs.mkdirSync(PLAIN_FIXTURE, { recursive: true });
+  fs.writeFileSync(path.join(PLAIN_FIXTURE, 'solo.js'), 'function solo(x) { return x; }\n');
+}
+makeGitFixture();
+makePlainFixture();
 
 const CASES = [
   {
@@ -172,13 +204,54 @@ const CASES = [
     docs: 0,    membersMin: 2,
     errorsMax: 0,
   },
+  {
+    // git 热度：现造的仓库（见上面 makeGitFixture）——a.js 被两次提交碰过、b.js 一次、c.js 没提交过
+    dir: 'git-heat',
+    rootAbs: GIT_FIXTURE,
+    lang: 'javascript',
+    types: 3,
+    files: 3,
+    errorsMax: 0,
+    gitChanges: { 'a.js': 2, 'b.js': 1 },
+    gitUntracked: ['c.js'],
+  },
+  {
+    // 非 git 目录：不该带 files[].git（不是“全 0”，而是“不知道”）
+    dir: 'no-git',
+    rootAbs: PLAIN_FIXTURE,
+    lang: 'javascript',
+    types: 1,
+    files: 1,
+    errorsMax: 0,
+    gitNone: true,
+  },
 ];
 
 const results = [];
 for (const c of [...CASES, ...EXTRA_CASES]) {
-  const b = scanOne(c.dir, c.lang);
+  const b = scanOne(c.dir, c.lang, c.rootAbs);
   const checks = [];
   const push = (ok, msg) => checks.push({ ok, msg });
+
+  if (c.gitChanges != null || c.gitUntracked != null || c.gitNone) {
+    const withGit = b.files.filter((f) => f.git);
+    if (c.gitNone) push(withGit.length === 0, `非 git 目录不该带 files[].git（带了 ${withGit.length} 个）`);
+    else {
+      push(withGit.length === b.files.length, `每个文件都带 files[].git（${withGit.length}/${b.files.length}）`);
+      const neg = withGit.filter((f) => typeof f.git.lastDaysAgo === 'number' && f.git.lastDaysAgo < 0);
+      push(neg.length === 0, `lastDaysAgo 没有负数（负数 ${neg.length} 个）`);
+      for (const [p, n] of Object.entries(c.gitChanges || {})) {
+        const f = b.files.find((x) => x.path === p);
+        const got = f && f.git ? f.git.changes : '（没有 git 字段）';
+        push(!!f && f.git && f.git.changes === n, `${p} 改动次数 ${got}（期望 ${n}）`);
+      }
+      if (c.gitUntracked) {
+        const got = b.files.filter((f) => f.git.untracked).map((f) => f.path).sort().join(', ');
+        const want = [...c.gitUntracked].sort().join(', ');
+        push(got === want, `未提交的文件：${got || '（无）'}（期望 ${want || '（无）'}）`);
+      }
+    }
+  }
 
   if (c.types != null) push(b.totals.types === c.types, `类型数 ${b.totals.types}（期望 ${c.types}）`);
   if (c.files != null) push(b.files.length === c.files, `文件数 ${b.files.length}（期望 ${c.files}）`);
@@ -244,6 +317,9 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
   }
   results.push({ dir: c.dir, checks });
 }
+
+// 现造的夹具用完就收（true 忽略删不掉的情况）
+try { fs.rmSync(TMPROOT, { recursive: true, force: true }); } catch { /* 忽略 */ }
 
 let failed = 0;
 for (const r of results) {
