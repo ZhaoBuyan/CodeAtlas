@@ -79,8 +79,24 @@ function boot(b) {
   // 反编译产物默认把编译器生成物藏起来（那些东西不是人写的，混在里面只会干扰看）
   state.hideGenerated = Boolean(b.source.ingest?.tool) && (b.totals.compilerGenerated || 0) > 0;
 
+  // git 热度：这份 bundle 里有没有 files[].git（扫的不是 git 仓库就没有）——
+  // 没有就把这一档**禁用并说明原因**，别让人选了之后以为图坏了（“没数据”与“全 0”得看得出区别）
+  const gitChanges = b.files.map((f) => (f.git ? f.git.changes : null)).filter((v) => v != null);
+  const gitAvailable = gitChanges.length > 0;
+  if (gitAvailable) gitHeatMax = gitChanges.reduce((a, v) => (v > a ? v : a), 2);
+
   readHash();
   if (!state.hasFacets && state.groupBy === 'system') state.groupBy = 'dir';
+  if (!gitAvailable && state.colorMode === 'git') state.colorMode = 'file';   // hash 里带了这一档也不能卡住
+  const gitOpt = $('#colorMode').querySelector('option[value="git"]');
+  if (gitOpt) {
+    if (!gitAvailable) {
+      gitOpt.disabled = true;
+      gitOpt.textContent = T('git 热度（这份 bundle 没有 git 信息）', 'Git heat (no git data in this bundle)');
+    } else {
+      gitOpt.textContent = T(`git 热度（最多 ${fmt(gitHeatMax)} 次改动）`, `Git heat (up to ${fmt(gitHeatMax)} changes)`);
+    }
+  }
 
   $('#ver').textContent = `v${b.generator.version}`;
   renderMeta();
@@ -406,18 +422,59 @@ function hashColor(key) {
   return state.groupColors.get(key);
 }
 
+// ---- git 热度（读 bundle 的 files[].git，见 src/scan.mjs 的 gitHeat）----
+// 越暖 = 最近 200 次提交里改得越多；仓库里有、这期间没改过 = 近黑；未提交 = 灰蓝 + 亮边框。
+// 没数据时这一档在 boot() 里直接禁用（“没数据”与“全 0”不是一回事）。
+const GIT_QUIET = '#21262d';
+const GIT_UNTRACKED = '#6e7681';
+let gitHeatMax = 2;
+
+/** 一个方格对应的 git 信息（类型 → 它所在的那个文件） */
+function gitOf(d) {
+  if (!d.data.isType) return null;
+  const t = state.typeById.get(d.data.id);
+  const f = t && state.fileById.get(t.file);
+  return (f && f.git) || null;
+}
+function gitHeatColor(g) {
+  if (!g || !g.changes) return GIT_QUIET;
+  if (g.untracked) return GIT_UNTRACKED;
+  // 改动次数是长尾的（个别文件上百次、多数只几次）→ 取 log 再映射到色带上
+  const n = Math.min(1, Math.log1p(g.changes) / Math.log1p(Math.max(2, gitHeatMax)));
+  return d3.color(d3.interpolatePlasma(0.14 + 0.8 * n)).formatHex();
+}
+/** 未提交的文件：在 git 热度视图里给它一个亮边框（光看颜色容易跟“改动少”混） */
+function isUntrackedCell(d) {
+  return state.colorMode === 'git' && d.data.isType && (gitOf(d) || {}).untracked === true;
+}
+
 function colorFor(d) {
   if (state.colorMode === 'kind') return KIND_COLOR[d.data.kind] || '#8b949e';
+  // git 热度：分组框不跟热度抢颜色（跟按文件着色一个道理）
+  if (state.colorMode === 'git') return d.data.isType ? gitHeatColor(gitOf(d)) : '#30363d';
   // 按文件着色时，分组框走中性色（不跟文件抢颜色）
   if (state.colorMode === 'file' && !d.data.isType) return '#30363d';
   return hashColor(colorKeyOf(d));
 }
 
+/** git 热度的图例：色带 + 两个特例 —— 这里没有“键 → 颜色”那一套，所以不走 renderLegend 的主逻辑 */
+function renderGitLegend() {
+  $('#legendTitle').textContent = `${T('git 热度', 'Git heat')} · ${T('最近 200 次提交', 'last 200 commits')}`;
+  const stops = [];
+  for (let i = 0; i <= 10; i++) stops.push(d3.color(d3.interpolatePlasma(0.14 + 0.8 * (i / 10))).formatHex());
+  $('#legend').innerHTML = `<li><div style="height:10px;border-radius:3px;background:linear-gradient(90deg,${stops.join(',')})"></div>
+      <div class="muted" style="display:flex;justify-content:space-between;font-size:11px"><span>1 次</span><span>${fmt(gitHeatMax)} 次</span></div></li>
+    <li><span class="p"><i style="background:${GIT_QUIET}"></i>${T('这期间没改过', 'no change in this window')}</span><span class="v"></span></li>
+    <li><span class="p"><i style="background:${GIT_UNTRACKED};box-shadow:inset 0 0 0 2px #c9d1d9"></i>${T('未提交（图上带亮边框）', 'uncommitted (bright border)')}</span><span class="v"></span></li>`;
+  $('#legend').onclick = null;
+}
+
 function renderLegend(target) {
   const root = d3.hierarchy(target).sum((d) => d.value || 0).sort((a, b) => b.value - a.value);
   const names = { system: T('系统 / 模块', 'System / module'), dir: T('目录', 'Directory'), ns: T('命名空间', 'Namespace'), file: T('文件', 'File'), flat: T('（未分组）', '(ungrouped)') };
-  const modes = { file: T('按文件', 'By file'), group: T('按分组', 'By group'), kind: T('按类型类别', 'By kind') };
+  const modes = { file: T('按文件', 'By file'), group: T('按分组', 'By group'), kind: T('按类型类别', 'By kind'), git: T('git 热度', 'Git heat') };
   $('#legendTitle').textContent = `${names[state.groupBy] || T('分组', 'Group')} · ${modes[state.colorMode] || ''}`;
+  if (state.colorMode === 'git') { renderGitLegend(); return; }
 
   const map = new Map();
   for (const leaf of root.leaves()) {
@@ -656,7 +713,7 @@ function renderCrumbs() {
 function updateChartInfo(extra) {
   const el = $('#chartInfo');
   if (!el) return;
-  const modes = { file: T('按文件', 'By file'), group: T('按分组', 'By group'), kind: T('按类型类别', 'By kind') };
+  const modes = { file: T('按文件', 'By file'), group: T('按分组', 'By group'), kind: T('按类型类别', 'By kind'), git: T('git 热度', 'Git heat') };
   const groups = { system: T('系统', 'System'), dir: T('目录', 'Directory'), ns: T('命名空间', 'Namespace'), file: T('文件', 'File'), flat: T('平铺', 'Flat') };
   const depth = ['dir', 'ns'].includes(state.groupBy) ? T(` ${state.groupDepth || '全部'}层`, ` ${state.groupDepth || 'all'} levels`) : '';
   let t = T(`${groups[state.groupBy] || ''}${depth} · 面积=${METRICS[state.metric]} · 着色=${modes[state.colorMode]}`, `${groups[state.groupBy] || ''}${depth} · area=${METRICS[state.metric]} · color=${modes[state.colorMode]}`);
@@ -718,7 +775,7 @@ function applyEmphasis(focusId) {
   const cells = leafSel.selectAll('rect');
   if (focusId == null || !state.typeById.has(focusId)) {
     cells.attr('fill-opacity', (d) => (isGenerated(state.typeById.get(d.data.id)) ? 0.3 : 0.72))
-      .attr('stroke', (d) => (state.selected === d.data.id ? '#fff' : '#0d1117'))
+      .attr('stroke', (d) => (isUntrackedCell(d) ? '#c9d1d9' : state.selected === d.data.id ? '#fff' : '#0d1117'))
       .attr('stroke-width', (d) => (state.selected === d.data.id ? 2 : 1));
     linkG.selectAll('*').remove();
     updateChartInfo();
@@ -727,7 +784,7 @@ function applyEmphasis(focusId) {
   const targets = emphasisTargets(focusId);
   cells
     .attr('fill-opacity', (d) => (d.data.id === focusId ? 1 : targets.has(d.data.id) ? 0.92 : 0.08))
-    .attr('stroke', (d) => (d.data.id === focusId ? '#fff' : targets.has(d.data.id) ? '#e6edf3' : '#0d1117'))
+    .attr('stroke', (d) => (d.data.id === focusId ? '#fff' : targets.has(d.data.id) ? '#e6edf3' : isUntrackedCell(d) ? '#c9d1d9' : '#0d1117'))
     .attr('stroke-width', (d) => (d.data.id === focusId ? 2.5 : targets.has(d.data.id) ? 1.8 : 1));
 
   const src = leafNodes.get(focusId);
@@ -807,7 +864,7 @@ function select(id) {
 // 永久链接的参数只认这些值：老链接 / 手改的 hash 不能让页面进入非法状态（比如 by=bogus → 空白）
 const HASH_BY = ['system', 'dir', 'ns', 'file', 'flat'];
 const HASH_VIEW = ['treemap', 'tree', 'graph', 'matrix'];
-const HASH_COLOR = ['file', 'group', 'kind'];
+const HASH_COLOR = ['file', 'group', 'kind', 'git'];
 
 function readHash() {
   const p = new URLSearchParams(location.hash.replace(/^#/, ''));
