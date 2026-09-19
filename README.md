@@ -505,8 +505,8 @@ so the whole file does not vanish from the map; their members (functions/variabl
 
 ### What is skipped by default
 
-- **Directories**: `.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor`
-  `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`;
+- **Directories**: `.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor`  `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*` `ingest`
+  (`ingest` is where `atlas ingest` writes its decompiled / unpacked output — one vendored jar can be 1000+ types, enough to drown the whole map);
   (**`packages/` is not on the list** — it is the source root of pnpm / yarn workspaces / lerna / Nx / Turborepo,
   and skipping it turns such a monorepo into a nearly empty map)
 - **Files**: minified / auto-generated ones (`*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts`

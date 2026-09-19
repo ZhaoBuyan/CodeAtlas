@@ -416,7 +416,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ### 默认跳过什么
 
-- **目录**：`.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor` `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*`；
+- **目录**：`.git` `.svn` `node_modules` `bin` `obj` `dist` `build` `out` `target` `vendor` `.vs` `.vscode` `.idea` `.venv` `__pycache__` `coverage` `.next` `.nuxt` `publish*` `ingest`（`atlas ingest` 的默认输出目录，里面是反编译/解包出来的东西）；
   （**`packages/` 不在这里** —— 它是 pnpm / yarn workspaces / lerna / Nx / Turborepo 的源码根，跳过它会把 monorepo 扫成一张几乎空白的地图）
 - **文件**：压缩 / 自动生成的 `*.min.js` `*.d.ts` `*.g.cs` `*.designer.cs` `*.generated.cs/ts` `*.freezed.dart` `*.g.dart`，
   以及**机器生成的锁文件**（`package-lock.json` `pnpm-lock.yaml` `yarn.lock` `bun.lockb` `*.lock` `Cargo.lock` `poetry.lock`

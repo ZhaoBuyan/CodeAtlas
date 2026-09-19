@@ -35,7 +35,12 @@ const IGNORE_DIRS = new Set([
   '.git', '.hg', '.svn', 'node_modules', 'bin', 'obj', 'dist', 'build', 'out', 'target',
   'vendor', '.vs', '.vscode', '.idea', '.venv', 'venv', '__pycache__',
   'coverage', '.next', '.nuxt', '.cache', 'publish', 'publish-sc', 'publish-lite',
+  'ingest',
 ]);
+// `ingest` 是 CodeAtlas 自己的约定：`atlas ingest <jar/dll>` 的默认输出目录就是 `ingest/<名字>`，
+// 里面全是反编译/解包出来的东西（实测一个 cfr 就有 1015 个类型、68k 行，会把地图和 overview 淹掉）。
+// 代价：别的项目里叫 ingest/ 的目录也可能是真源码（数据管道里常见）。这个取舍是故意的 ——
+// 跳过的目录会出现在扫描报告里，看得见，不是静默丢弃。
 // `packages` 故意不在这里：pnpm / yarn workspaces / lerna / Nx / Turborepo 的源码根都叫它，
 // 跳过它会把这类 monorepo 扫成一张近乎空白的地图（而且不报错）。老式 NuGet 还原目录
 // （packages/<id>/lib/*.dll）里本来就没有可解析的源码，扫到只是多遍历一瞬。
