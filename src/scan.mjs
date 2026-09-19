@@ -82,7 +82,7 @@ const GENERATED_NAME_RE = /(^<|^_003C)|(__InlineArray|__DisplayClass|PrivateImpl
 // 文件收集
 // ---------------------------------------------------------------------------
 
-function collectFiles(roots, { languages, maxKb, excludes }) {
+function collectFiles(roots, { languages, maxKb, excludes, budget }) {
   const exts = new Map();
   for (const lang of languages) for (const e of lang.exts) exts.set(e, lang);
   // 全量语言表：用来区分"这次没勾"和"我们根本不支持"——两者混在一起会误导人
@@ -145,6 +145,9 @@ function collectFiles(roots, { languages, maxKb, excludes }) {
     }
   }
   files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  // 文件预算：只取前 N 个（路径序稳定）。只有持续扫描会传它 —— 用来分趟把地图“长”出来；
+  // 正常扫描不传，行为一字不变。
+  if (budget && files.length > budget) files.length = budget;
   return { files, skipped };
 }
 
@@ -1197,7 +1200,7 @@ export async function scan(opts) {
 
   const facetsDoc = loadFacets(opts, roots);
   const excludes = [...(opts.excludes || []), ...(facetsDoc?.config?.exclude || [])];
-  const { files, skipped } = collectFiles(roots, { languages, maxKb, excludes });
+  const { files, skipped } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget });
 
   const langById = new Map(languages.map((l) => [l.id, l]));
   const byLang = new Map();
@@ -1500,6 +1503,110 @@ export async function scanToDisk(opts) {
   const result = await scan(opts);
   fs.mkdirSync(result.outDir, { recursive: true });
   const out = path.join(result.outDir, 'bundle.json');
-  fs.writeFileSync(out, JSON.stringify(result.bundle));
+  // **原子替换**（临时文件 + rename）：监控模式下网页与 MCP 随时在读这个文件，
+  // 绝不能读到写了一半的 JSON。同目录、同卷的 rename 是原子的。
+  const tmpOut = `${out}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpOut, JSON.stringify(result.bundle));
+  try {
+    fs.renameSync(tmpOut, out);
+  } catch {
+    fs.writeFileSync(out, JSON.stringify(result.bundle));   // 极端情况下（被占 / 跨卷）退回去直接写
+    try { fs.rmSync(tmpOut, { force: true }); } catch { /* 忽略 */ }
+  }
   return { ...result, out };
+}
+
+/**
+ * 持续扫描（`scan --watch`）—— 就是用户要的那个「内构监控」：
+ *   ① 首扫**分几趟**把地图“长”出来：先数一遍文件，再按 2%/10%/25%/50%/100% 分趟增量扫，
+ *      每趟写一次 bundle。复用现成的增量缓存 —— 后一趟只解析新增的那批，不重复干活。
+ *   ② 之后每 1.5 秒巡检一遗：已纳入文件的 mtime/大小（再加每个目录的条目数）—变了就增量重扫 → 原子替换 bundle。
+ *      用**轮询**而不是 fs.watch —— 实测 fs.watch 在本机这条路径里收不到事件（见函数里那段说明）。
+ * ⚠ 退出别指望优雅：这个进程在退出阶段会撞 libuv 的 UV_HANDLE_CLOSING（老坑），
+ *   所以启动器停监控 / 关窗口时请**直接强杀**（process.kill），别发信号等它自己退。
+ * 返回 `{ stop() }`（CLI 用不上 —— 它靠 Ctrl+C；启动器与测试可以直接调）。
+ */
+export async function watchScan(opts) {
+  const base = { ...opts, incremental: true };      // 监控模式一律带增量（否则每次重扫都是全量）
+  const roots = (opts.roots?.length ? opts.roots : ['.']).map((r) => path.resolve(r));
+  const languages = resolveLanguages(opts.lang);
+  const maxKb = opts.maxKb || 1024;
+  const excludes = opts.excludes || [];
+  let lastFiles = [];
+  let pass = 0;
+
+  const runPass = async (budget) => {
+    const r = await scanToDisk({ ...base, fileBudget: budget });
+    lastFiles = r.files || [];
+    pass++;
+    console.log(t(`  ✓ 地图已更新（第 ${pass} 趟）：${r.bundle.totals.files} 文件 · ${r.bundle.totals.types} 类型 · ${new Date().toLocaleTimeString()}`,
+      `  ✓ Map updated (pass ${pass}): ${r.bundle.totals.files} files · ${r.bundle.totals.types} types · ${new Date().toLocaleTimeString()}`));
+    return r;
+  };
+
+  // ① 分趟长出来（小项目就一趟全量）
+  const { files: all } = collectFiles(roots, { languages, maxKb, excludes });
+  const total = all.length;
+  const c = (f) => Math.max(20, Math.round(total * f));
+  const caps = [...new Set([c(0.02), c(0.1), c(0.25), c(0.5)].filter((n) => n < total).concat([total]))].sort((a, b) => a - b);
+  for (let i = 0; i < caps.length; i++) {
+    await runPass(caps[i] >= total ? null : caps[i]);
+    if (i < caps.length - 1) await new Promise((s) => setTimeout(s, 1200));   // 留出时间让网页看出来
+  }
+
+  // ② 之后：**轮询**已纳入文件的 mtime/大小（再加每个目录的条目数，用来发现新增/删除），
+  //    变了就增量重扫 + 原子替换 bundle。
+  //
+  // 为什么不用 fs.watch（原计划是它）：本机实测**装上了却一个事件都收不到、也不报错** ——
+  // 同一个目录用裸 `fs.watch` 能收到事件（做过对照），但放进我们这个“先 spawnSync 跑完解析”的
+  // 进程里就是没有；而且它在网络盘 / 目录被重建 / 编辑器临时文件上还有一堆坑。
+  // 轮询没有句柄、没有平台差异，代价只是每 1.5 秒 stat 一遗（超过 2 万文件自动放宽到 5 秒）。
+  let dirSnap = new Map();           // 目录 -> 条目数（新增 / 删除文件的信号）
+  const snapDirs = () => {
+    dirSnap = new Map();
+    for (const f of lastFiles) {
+      const d = path.dirname(f.abs);
+      if (dirSnap.has(d)) continue;
+      try { dirSnap.set(d, fs.readdirSync(d).length); } catch { dirSnap.set(d, -1); }
+    }
+  };
+
+  let busy = false;
+  let again = false;
+  const fire = async () => {
+    if (busy) { again = true; return; }        // 正在扫就排队，扫完再补一次
+    busy = true;
+    try {
+      await runPass(null);                     // 增量重扫（缓存让没变的文件不用重解析）
+      snapDirs();
+    } catch (err) {
+      console.error(t(`  ⚠ 重扫失败：${err.message}`, `  ⚠ Rescan failed: ${err.message}`));
+    }
+    busy = false;
+    if (again) { again = false; fire(); }
+  };
+
+  /** 一遗轻量巡检：文件 mtime/大小变了、或某个目录的条目数变了 → 需要重扫 */
+  const dirty = () => {
+    for (const f of lastFiles) {
+      let st;
+      try { st = fs.statSync(f.abs); } catch { return true; }        // 被删 / 改名了
+      if (st.size !== f.bytes || Math.round(st.mtimeMs) !== Math.round(f.mtime)) return true;
+    }
+    for (const [d, n] of dirSnap) {
+      try { if (fs.readdirSync(d).length !== n) return true; } catch { return true; }
+    }
+    return false;
+  };
+
+  snapDirs();
+  const intervalMs = lastFiles.length > 20000 ? 5000 : 1500;
+  const timer = setInterval(() => {
+    if (busy || !dirty()) return;
+    console.log(t('  · 检测到改动，重扫…', '  · Change detected, rescanning…'));
+    fire();
+  }, intervalMs);
+  console.log(t(`  监控中：${lastFiles.length} 个文件 / ${dirSnap.size} 个目录（每 ${intervalMs / 1000} 秒巡检一次；Ctrl+C 停）`,
+    `  Watching ${lastFiles.length} files in ${dirSnap.size} directories (polling every ${intervalMs / 1000}s; Ctrl+C to stop)`));
+  return { stop: () => clearInterval(timer) };
 }

@@ -15,7 +15,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { t, sysLabel, isUnclassified, LANG } from './i18n.mjs';
-import { scanToDisk, workerExtract, draftFacets, VERSION } from './scan.mjs';
+import { scanToDisk, watchScan, workerExtract, draftFacets, VERSION } from './scan.mjs';
 import { LANGUAGES } from './languages.mjs';
 import { ingest } from './ingest.mjs';
 import { startMcp, listToolsText } from './mcp.mjs';
@@ -290,7 +290,7 @@ async function cmdAuto(argv) {
 async function cmdScan(argv) {
   const opts = parseArgs(argv);
   const roots = opts._.length ? opts._ : ['.'];
-  const result = await scanToDisk({
+  const scanOpts = {
     roots,
     outDir: opts.out || 'dist',
     lang: opts.lang || 'auto',
@@ -299,7 +299,21 @@ async function cmdScan(argv) {
     facets: opts.facets || null,
     // 增量：默认关（全量）；加 --incremental 才按文件复用上次的解析结果
     incremental: opts.incremental !== undefined,
-  });
+  };
+  // --watch：持续扫描（启动器里那个「内构监控」）—— 先分趟把地图长出来，然后一直监听、改了自动重扫。
+  // ⚠ 这个分支**不会返回**（事件循环里挂着 watcher）；停止请强杀进程。
+  if (opts.watch) {
+    await watchScan(scanOpts);
+    if (opts.open !== undefined) {
+      startServer({ outDir: path.resolve(scanOpts.outDir), port: Number(opts.port || DEFAULT_PORT), open: true, host: opts.host });
+    }
+    // ⚠ 这里**故意永不 resolve**：CLI 收尾时对 scan / ingest 会 `flushAndExit(0)`（process.reallyExit），
+    // 这个函数一返回，监控进程就被当场硬杀（实测：日志停在“监控中”之后什么都没有）。
+    // 挂住它，轮询定时器就能一直跑；停监控请强杀进程。
+    await new Promise(() => {});
+    return;
+  }
+  const result = await scanToDisk(scanOpts);
   printScanReport(result.bundle, result.out);
   if (opts.open !== undefined) {
     startServer({ outDir: result.outDir, port: Number(opts.port || DEFAULT_PORT), open: true, host: opts.host });
@@ -447,7 +461,7 @@ const HELP_ZH = `Code Atlas v${VERSION}
   atlas "C:/path/to/game.jar"        反编译 jar + 扫描
 
 细分命令：
-  atlas scan   <目录...>            只扫描源码目录（可加 --incremental：只重解析改过的文件）
+  atlas scan   <目录...>            只扫描源码目录（--incremental：只重解析改过的文件；--watch：持续扫描，改了自动重扫）
   atlas ingest <目录|.dll|.exe|.jar> 没有源码的目标先反编译再扫
   atlas serve                       起本地服务（不重新扫描）
                                       默认只绑 127.0.0.1（不弹防火墙、也不暴露到局域网）；
