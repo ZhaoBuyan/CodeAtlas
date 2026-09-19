@@ -312,9 +312,8 @@ async function cmdScan(argv) {
   // ⚠ 这个分支**不会返回**（事件循环里挂着 watcher）；停止请强杀进程。
   if (opts.watch) {
     await watchScan(scanOpts);
-    if (opts.open !== undefined) {
-      startServer({ outDir: path.resolve(scanOpts.outDir), port: Number(opts.port || DEFAULT_PORT), open: true, host: opts.host });
-    }
+    // 与 scan 那条一样：--no-open 只是不弹系统浏览器，服务照起（启动器靠 stdout 里那个 URL 把地图嵌进窗口）
+    startServer({ outDir: path.resolve(scanOpts.outDir), port: Number(opts.port || DEFAULT_PORT), open: opts['no-open'] === undefined, host: opts.host });
     // ⚠ 这里**故意永不 resolve**：CLI 收尾时对 scan / ingest 会 `flushAndExit(0)`（process.reallyExit），
     // 这个函数一返回，监控进程就被当场硬杀（实测：日志停在“监控中”之后什么都没有）。
     // 挂住它，轮询定时器就能一直跑；停监控请强杀进程。
