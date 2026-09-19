@@ -228,6 +228,15 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
       res.end(`${Math.round(st.mtimeMs)}-${st.size}`);
       return;
     }
+    else if (url === '/web/meta') {
+      // 网页文件指纹：页面每 2.5 秒拿它对一次，改了（app.js / index.html / style.css）就自己重载
+      const stamp = ['app.js', 'index.html', 'style.css'].map((f) => {
+        try { const s = fs.statSync(path.join(WEB_DIR, f)); return `${f}:${Math.round(s.mtimeMs)}-${s.size}`; } catch { return `${f}:x`; }
+      }).join('|');
+      res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+      res.end(stamp);
+      return;
+    }
     else if (url === '/vendor/d3.js') file = path.join(HERE, '..', 'node_modules', 'd3', 'dist', 'd3.min.js');
     else if (url.startsWith('/web/')) file = insideDir(WEB_DIR, url.slice(5));
     else file = insideDir(WEB_DIR, url.replace(/^\/+/, ''));

@@ -1199,10 +1199,14 @@ function applyBundle(b) {
 }
 
 let bundleMeta = null;
+let webMeta = null;          // 网页文件指纹（/web/meta）：改了就把页面自己重载，省得手动 F5
 let applying = false;
 async function pollBundle() {
   if (applying) return;
   try {
+    const wm = await (await fetch(`/web/meta?ts=${Date.now()}`)).text();
+    if (webMeta === null) webMeta = wm;
+    else if (wm !== webMeta) { location.reload(); return; }   // 服务端把 app.js/index.html/style.css 的 mtime-大小 拼成指纹
     const r = await fetch(`/data/bundle.meta?ts=${Date.now()}`);
     if (!r.ok) return;
     const meta = await r.text();
@@ -1218,3 +1222,7 @@ async function pollBundle() {
   }
 }
 setInterval(pollBundle, 2500);
+
+// 地图右下角的「取消选中」：键放在 #stage 里而不是 #chart 里 —— 画布每次重绘都会清空
+const selClearBtn = document.getElementById('selClear');
+if (selClearBtn) selClearBtn.onclick = () => { state.selected = null; writeHash(); renderInspector(); draw(); };

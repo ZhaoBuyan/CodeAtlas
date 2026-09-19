@@ -176,6 +176,17 @@ button.mini {
   border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 12px; cursor: pointer;
 }
 button.mini:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 地图右下角的常用键：放在 #stage 里（画布 #chart 每次重绘会清空，键不能放里面） */
+#stage { position: relative; }
+#mapbtns { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; z-index: 5; }
+#mapbtns button {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer;
+}
+#mapbtns button:hover { border-color: var(--accent); color: var(--accent); }
+/* 地图上的文字一律不吃鼠标事件：否则“鼠标停在模块名字上”不算停在该模块上、点分组标题也没反应 */
+svg text { pointer-events: none; }
 .muted { color: var(--dim); font-size: 12px; }
 
 /* ---------- 底栏 / 提示 ---------- */
