@@ -32,7 +32,7 @@ const KIND_COLOR = {
 
 const state = {
   bundle: null, metric: 'code', colorMode: 'file', groupBy: 'system', groupDepth: 2, view: 'treemap',
-  kinds: new Set(), q: '', minCode: 0, focus: '', selected: null, groupColors: new Map(), collapsed: new Set(),
+  kinds: new Set(), kindsOff: new Set(), q: '', minCode: 0, focus: '', selected: null, groupColors: new Map(), collapsed: new Set(),
   depFocus: false, hideGenerated: false,
   // null = 没启用语言过滤（全显示）；否则是选中的语言 id 集合
   langs: null,
@@ -218,10 +218,12 @@ function renderControls() {
 function renderKinds() {
   const kinds = [...state.kinds].sort();
   $('#kinds').innerHTML = kinds.map((k) => `
-    <label><input type="checkbox" value="${k}" checked />
+    <label><input type="checkbox" value="${k}" ${state.kinds.has(k) ? 'checked' : ''} />
       <span class="swatch" style="background:${KIND_COLOR[k] || '#8b949e'}"></span>${esc(k)}</label>`).join('');
   $('#kinds').onchange = () => {
-    state.kinds = new Set([...$('#kinds').querySelectorAll('input:checked')].map((i) => i.value));
+    const on = new Set([...$('#kinds').querySelectorAll('input:checked')].map((i) => i.value));
+    state.kinds = on;
+    state.kindsOff = new Set(kinds.filter((k) => !on.has(k)));   // 记住用户取消过哪些：bundle 更新时不能弄丢
     draw(); renderTopList();
   };
 }
@@ -1164,3 +1166,58 @@ function depsSection(title, list, dir) {
         <span class="n">${esc(o.name)}</span><span class="w">${e.kind === 'inherit' ? T('继承 · ', 'inherits · ') : ''}${e.w}</span></div>`;
     }).join('')}</div>`;
 }
+
+// ---------------------------------------------------------------------------
+// 监控模式（引擎 `scan --watch` / 启动器的「内构监控」）：bundle 一变就**就地**换数据重画
+// ---------------------------------------------------------------------------
+// 只轮询一个几十字节的 /data/bundle.meta（mtime-大小），变了才去拉整份 bundle ——
+// 否则每 2.5 秒拉一次 3 MB 的地图数据太浪费。**不重载页面**：选择/搜索/聚焦是上下文，要留住。
+/**
+ * bundle 换了之后就地把数据换掉再画（字段与 boot() 里那段保持一致 —— 以后改一边记得改另一边）。
+ */
+function applyBundle(b) {
+  state.bundle = b;
+  state.typeById = new Map(b.types.map((t) => [t.id, t]));
+  state.fileById = new Map(b.files.map((f) => [f.id, f]));
+  state.ins = new Map();
+  state.outs = new Map();
+  for (const e of b.edges) {
+    (state.outs.get(e.from) || state.outs.set(e.from, []).get(e.from)).push(e);
+    (state.ins.get(e.to) || state.ins.set(e.to, []).get(e.to)).push(e);
+  }
+  // 类型类别：现有的里还存在的留下、新出现的补上，用户取消过的（kindsOff）依然取消
+  const kinds = new Set(b.types.map((t) => t.kind));
+  state.kinds = new Set([...kinds].filter((k) => !state.kindsOff.has(k)));
+  state.sysColors = new Map((b.facets?.systems || []).map((s) => [s.name, s.color]).filter(([, c]) => c));
+  state.hasFacets = Boolean(b.facets?.configFile);
+  if (state.selected != null && !state.typeById.has(state.selected)) state.selected = null;   // 选中的那条没了
+  const gitChanges = b.files.map((f) => (f.git ? f.git.changes : null)).filter((v) => v != null);
+  if (gitChanges.length) gitHeatMax = gitChanges.reduce((a, v) => (v > a ? v : a), 2);
+  $('#ver').textContent = `v${b.generator.version}`;
+  renderMeta();
+  renderKinds();
+  renderLangs();
+  renderTopList();
+  draw();
+}
+
+let bundleMeta = null;
+let applying = false;
+async function pollBundle() {
+  if (applying) return;
+  try {
+    const r = await fetch(`/data/bundle.meta?ts=${Date.now()}`);
+    if (!r.ok) return;
+    const meta = await r.text();
+    if (bundleMeta === null) { bundleMeta = meta; return; }    // 首次只记下来，别把刚加载的那份又拉一遍
+    if (meta === bundleMeta) return;
+    bundleMeta = meta;
+    applying = true;
+    const res = await fetch(`/data/bundle.json?ts=${Date.now()}`);
+    applyBundle(await res.json());
+    applying = false;
+  } catch {
+    applying = false;      // 服务停了 / 取不到：下次再试，别把循环卡死
+  }
+}
+setInterval(pollBundle, 2500);

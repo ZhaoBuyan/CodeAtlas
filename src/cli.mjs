@@ -220,6 +220,14 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
       return;
     }
     else if (url === '/data/bundle.json') file = bundlePath;
+    else if (url === '/data/bundle.meta') {
+      // 监控模式靠它判断“bundle 变了没”：每次只回几十字节，比每 2.5 秒拉 3 MB 的 bundle 便宜得多
+      let st;
+      try { st = fs.statSync(bundlePath); } catch { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('404'); return; }
+      res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+      res.end(`${Math.round(st.mtimeMs)}-${st.size}`);
+      return;
+    }
     else if (url === '/vendor/d3.js') file = path.join(HERE, '..', 'node_modules', 'd3', 'dist', 'd3.min.js');
     else if (url.startsWith('/web/')) file = insideDir(WEB_DIR, url.slice(5));
     else file = insideDir(WEB_DIR, url.replace(/^\/+/, ''));
