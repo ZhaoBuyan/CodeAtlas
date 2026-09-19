@@ -198,8 +198,8 @@ namespace CodeAtlas
 
     /// <summary>
     /// 内置引擎：完全版 / 精简版的 exe 里都嵌了一份引擎（src / web / configs / 需要的 wasm / d3），
-    /// 首次运行释放到 %LocalAppData%\CodeAtlas\engine\&lt;版本-包大小&gt;\，之后直接用。
-    /// 目录名带版本号 + 包大小：换了版本或换了引擎包就自然重新释放，不会拿旧引擎跑新代码。
+    /// 首次运行释放到 %LocalAppData%\CodeAtlas\engine\&lt;版本-包指纹&gt;\，之后直接用。
+    /// 目录名带版本号 + **包内容指纹**：换了版本或换了引擎包就自然重新释放，不会拿旧引擎跑新代码。
     /// 完全版多一个 node.exe；精简版没有，得用系统装的 Node。
     /// </summary>
     internal static class Payload
