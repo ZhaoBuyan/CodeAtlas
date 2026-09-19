@@ -619,6 +619,25 @@ function drawTreemap(target, chart, w, h) {
     .style('display', (d) => (d.x1 - d.x0 > 52 && d.y1 - d.y0 > 32 ? null : 'none'))
     .text((d) => `${fmt(d.value)} ${METRICS[state.metric]}`);
 
+  // 近景那一档：格子够大时，把这条数据的“说明”（源码注释）也印出来 ——
+  // 远景看形状、中景看名字、近景看它到底是什么（`doc` 在 bundle 里现成，不用另算首行缓存）。
+  // 门槛卡得比较狠（宽 > 120 且高 > 52）：小格子里塞满字反而看不出结构。
+  const docFs = (d) => Math.max(8, fontSize(d) - 2);
+  const docText = (d) => {
+    const t = state.typeById.get(d.data.id);
+    if (!t || !t.doc) return '';
+    const s = t.doc.replace(/\s+/g, ' ').slice(0, 200);
+    return truncate(s, Math.max(8, Math.floor((d.x1 - d.x0 - 8) / (docFs(d) * 0.62))));
+  };
+  g.append('text')
+    .attr('class', 'node-doc').attr('x', 4).attr('y', 36)
+    .style('font-size', (d) => docFs(d))
+    .style('display', (d) => {
+      const t = state.typeById.get(d.data.id);
+      return (d.x1 - d.x0 > 120 && d.y1 - d.y0 > 52 && t && t.doc) ? null : 'none';
+    })
+    .text(docText);
+
   // 布局有时晚一步（字体/滚动条），量到的尺寸变了就补画一次，免得右侧/底部留白
   const cw = chart.clientWidth, ch = chart.clientHeight;
   if ((Math.abs(cw - w) > 4 || Math.abs(ch - h) > 4) && !chart._resizing) {

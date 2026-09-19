@@ -101,7 +101,7 @@ select option:disabled { color: #6e7681; }
 .crumbs .sep { color: var(--dim); }
 .crumbs .now { color: var(--text); font-weight: 600; }
 .crumbs .muted { margin-left: auto; }
-#chart { flex: 1; position: relative; min-height: 0; }
+#chart { flex: 1; position: relative; min-height: 0; user-select: none; }
 #chart svg { position: absolute; inset: 0; display: block; }
 .treemap rect { stroke: #0d1117; stroke-width: 1px; cursor: pointer; }
 .treemap text { pointer-events: none; }
@@ -109,6 +109,7 @@ select option:disabled { color: #6e7681; }
 .mx-label { fill: #8b949e; font-size: 11px; }
 svg .node-label, svg text { user-select: none; }
 .node-value { fill: #d0d7dea6; font-size: 10px; }
+.node-doc { fill: #8b949e; font-size: 9px; }
 .group-label { fill: #e6edf3; font-size: 11px; }
 .empty { color: var(--dim); padding: 24px; }
 
