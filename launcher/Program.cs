@@ -714,13 +714,13 @@ namespace CodeAtlas
             _pickFile.Click += (s, e) => PickFile();
 
             _tips = new ToolTip { AutoPopDelay = 12000, InitialDelay = 300 };
-            SetTip(_path, "要分析的目标：源码目录 / 编译好的 .dll、.exe / .jar；也可以直接把文件夹拖进窗口", "What to analyze: a source directory, or compiled .dll / .exe / .jar. You can also drag a folder onto the window.");
+            SetTip(_path, "要分析的目标：源码目录，或 .dll / .exe / .jar；也可将文件夹拖入窗口", "What to analyze: a source directory, or compiled .dll / .exe / .jar. You can also drag a folder onto the window.");
             SetTip(_pickDir, "选一个文件夹：源码目录，或里面放着 .dll / .exe / .jar 的目录", "Pick a folder: a source directory, or one containing .dll / .exe / .jar");
             SetTip(_pickFile, "选一个文件：.dll / .exe / .jar（没有源码的目标）", "Pick a file: .dll / .exe / .jar (targets without source code)");
-            SetTip(_run, "开始分析，完事后把地图嵌到窗口里", "Start the scan; when it finishes the map is embedded in this window");
-            SetTip(_stop, "停掉分析和服务", "Stop the scan and the local server");
+            SetTip(_run, "开始扫描；完成后地图嵌入本窗口", "Start the scan; when it finishes the map is embedded in this window");
+            SetTip(_stop, "停止扫描与本地服务", "Stop the scan and the local server");
             SetTip(_toggle, "在地图与运行日志之间切换", "Toggle between the map and the run log");
-            SetTip(_browser, "用系统浏览器另外开一个窗口看（方便左右对照）", "Open the map in your system browser (handy for side-by-side)");
+            SetTip(_browser, "在系统浏览器中打开地图", "Open the map in your system browser (handy for side-by-side)");
 
             SetText(_hint, "提示：源码目录直接扫，.dll / .exe / .jar 先反编译；也可以直接把文件夹拖进来", "Tip: source dirs are scanned directly; .dll / .exe / .jar get decompiled first.");
             _hint.ForeColor = Dim;
@@ -745,7 +745,7 @@ namespace CodeAtlas
                 Log(L.T("⚠ 配置存不下来（exe 放在只读目录了？放桌面/D盘就行）：", "⚠ Could not save the config (exe in a read-only folder? put it on the Desktop or D:): ") + Engine.ConfigSaveError);
                 Engine.ConfigSaveError = null;
             } Log(_inc.Checked ? L.T("增量扫描：开（只重解析改过的文件）", "Incremental scan: on (only changed files are re-parsed)") : L.T("增量扫描：关（每次全量）", "Incremental scan: off (full scan every time)")); };
-            SetTip(_inc, "增量扫描：只重新解析改过的文件（默认关 = 每次全量）。\r\n省的是解析；谁引用谁仍需整体重算，所以大项目才明显。", "Incremental scan: re-parse only the files that changed (off by default = full scan every time).\r\nIt only saves parsing; who-references-whom is still recomputed wholesale, so it only pays off on big projects.");
+            SetTip(_inc, "增量扫描：仅重新解析改过的文件（默认关闭，即全量）。\r\n仅节省解析开销；引用关系仍需整体重算，项目越大收益越明显。", "Incremental scan: re-parse only the files that changed (off by default = full scan every time).\r\nIt only saves parsing; who-references-whom is still recomputed wholesale, so it only pays off on big projects.");
 
             SetText(_run, "扫描", "Scan");
             Style(_run, true);
@@ -760,7 +760,7 @@ namespace CodeAtlas
             Style(_watch);
             SetBtn(_watch, true);
             _watch.Click += (s, e) => { if (IsOn(_watch)) ToggleWatch(); };
-            SetTip(_watch, "默认「内构快照」：点「扫描」扫一次就完（与 v1.3.0 一样）。\r\n切成「内构监控」会一直盯着这个项目：先分趟把地图长出来，之后改了源码约 2 秒自动重扫。",
+            SetTip(_watch, "扫描一次即结束，为默认模式。\r\n切换为「内构监控」后持续扫描：地图分阶段生成，源码改动约 2 秒后自动更新。",
                 "Default “Snapshot”: press Scan for a one-shot scan (same as v1.3.0).\r\nSwitch to “Watch” to keep the map current: it grows in stages, then rescans ~2s after a source change.");
             SetText(_stop, "停止", "Stop");
             Style(_stop);
@@ -780,21 +780,21 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            SetTip(_langs, "选择要扫描的语言（默认自动：所有代码语言，配置文件不扫）。\r\n只扫需要的语言能明显提速，也能让地图不被配置文件淹没。", "Pick which languages to scan (auto by default: all code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
+            SetTip(_langs, "要扫描的语言（默认自动：全部代码语言，不含配置文件）。\r\n限定语言可显著提速，也可避免配置文件挤占地图。", "Pick which languages to scan (auto by default: all code languages; config files are not scanned).\r\nScanning only what you need is much faster, and keeps config files from drowning the map.");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
             SetText(_wiz, "项目设置…", "Setup…");
             Style(_wiz);
             SetBtn(_wiz, true);
             _wiz.Click += (s, e) => { if (IsOn(_wiz)) OpenWizard(_path.Text.Trim().Trim('"')); };
-            SetTip(_wiz, "首次配置一个项目：选目标 → 选语言 → 自动草拟一套\"系统分组规则\"（可改名/换色/取消） → 存下来并扫描", "Set up a project once: target → languages → auto-drafted system grouping rules (rename / recolor / drop) → save and scan");
+            SetTip(_wiz, "新建项目配置：目标 → 语言 → 自动草拟\"系统分组规则\"（可改名 / 换色 / 取消）→ 保存并扫描", "Set up a project once: target → languages → auto-drafted system grouping rules (rename / recolor / drop) → save and scan");
 
             // 一键复制 MCP 配置（让 AI 客户端读这个项目）
             SetText(_mcp, "MCP 配置", "MCP config");
             Style(_mcp);
             SetBtn(_mcp, true);
             _mcp.Click += (s, e) => { if (IsOn(_mcp)) CopyMcpConfig(); };
-            SetTip(_mcp, "把「让 AI 读这个项目」的 MCP 配置复制到剪贴板。\r\n粘进 Chatbox / Claude Desktop 等客户端的 mcpServers 里即可；指向当前扫描的输出目录。", "Copy the MCP config that lets your AI read this project.\r\nPaste it into mcpServers in Chatbox / Claude Desktop etc.; it points at the current scan output directory.");
+            SetTip(_mcp, "复制 MCP 配置到剪贴板。\r\n粘贴到 Chatbox / Claude Desktop 等客户端的 mcpServers 即可；指向当前扫描的输出目录。", "Copy the MCP config that lets your AI read this project.\r\nPaste it into mcpServers in Chatbox / Claude Desktop etc.; it points at the current scan output directory.");
 
             // 界面语言：按一下在 中文 / English 之间切（环境变量 CODEATLAS_LANG 优先，见 L 类注释）
             SetText(_ui, UiLangButtonText(), UiLangButtonText());

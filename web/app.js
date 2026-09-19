@@ -22,7 +22,7 @@ const METRICS = {
   loc: T('总行数', 'Total lines'),
   complexity: T('复杂度（估）', 'Complexity (est.)'),
   members: T('成员数', 'Members'),
-  fanIn: T('被依赖 fanIn', 'Depended-on (fanIn)'),
+  fanIn: T('被依赖', 'Depended on'),
 };
 
 const KIND_COLOR = {
@@ -89,13 +89,10 @@ function boot(b) {
   if (!state.hasFacets && state.groupBy === 'system') state.groupBy = 'dir';
   if (!gitAvailable && state.colorMode === 'git') state.colorMode = 'file';   // hash 里带了这一档也不能卡住
   const gitOpt = $('#colorMode').querySelector('option[value="git"]');
-  if (gitOpt) {
-    if (!gitAvailable) {
-      gitOpt.disabled = true;
-      gitOpt.textContent = T('git 热度（这份 bundle 没有 git 信息）', 'Git heat (no git data in this bundle)');
-    } else {
-      gitOpt.textContent = T(`git 热度（最多 ${fmt(gitHeatMax)} 次改动）`, `Git heat (up to ${fmt(gitHeatMax)} changes)`);
-    }
+  if (gitOpt && !gitAvailable) {
+    // 没数据的档位禁掉，并把原因写在选项里（“没数据”与“全 0”不是一回事）
+    gitOpt.disabled = true;
+    gitOpt.textContent = T('git 热度（这份 bundle 没有 git 信息）', 'Git heat (no git data in this bundle)');
   }
 
   $('#ver').textContent = `v${b.generator.version}`;
@@ -1140,7 +1137,7 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
       <dt>${T('依赖', 'Dependencies')}</dt><dd>fanIn ${t.fanIn} · fanOut ${t.fanOut}</dd>
       <dt>${T('基类', 'Base types')}</dt><dd>${t.bases.length ? t.bases.map(esc).join(', ') : '—'}</dd>
     </div>
-    ${depsSection(T('被谁引用（fanIn）', 'Referenced by (fanIn)'), ins, 'from')}
+    ${depsSection(T('被谁引用', 'Referenced by (fanIn)'), ins, 'from')}
     ${depsSection(T('引用了谁（fanOut）', 'References (fanOut)'), outs, 'to')}
     ${t.memberList.length ? `<div class="sect"><h4>${T('成员（前 ', 'Members (first ')}${Math.min(t.memberList.length, 40)}${T('）', ')')}</h4>
       ${t.memberList.slice(0, 40).map((m) => `<div class="dep${state.q && (m.n || '').toLowerCase().includes(state.q) ? ' hit' : ''}" title="${esc(m.d || '')}"><span class="n">${esc(m.n)}</span><span class="w">${esc(m.k)} · ${m.l}</span></div>${m.d ? `<div class="m-doc">${esc(truncate(m.d, 110))}</div>` : ''}`).join('')}</div>` : ''}
