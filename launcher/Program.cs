@@ -550,7 +550,7 @@ namespace CodeAtlas
             return res;
         }
 
-        public static Process Start(string target, Config cfg, string langs, string facets, bool open, Action<string> onLine, Action<int> onExit)
+        public static Process Start(string target, Config cfg, string langs, string facets, bool open, Action<string> onLine, Action<int> onExit, bool watch = false)
         {
             string dev = FindDevRoot();
             string root = dev ?? Payload.Ensure(null);
@@ -572,6 +572,7 @@ namespace CodeAtlas
             // 语言：空串 = 引擎默认（auto）。显式选过就原样传过去。
             if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
             if (cfg.Incremental) args.Append(" --incremental");   // 只重解析改过的文件
+            if (watch) args.Append(" --watch");                   // 内构监控：分趟长出来 + 改动自动重扫（不会自己结束）
             // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
             if (!string.IsNullOrWhiteSpace(facets)) args.Append(" --facets \"").Append(facets.Trim()).Append('"');
             if (!open) args.Append(" --no-open");
@@ -610,6 +611,7 @@ namespace CodeAtlas
         private readonly TextBox _log = new TextBox();
         private readonly WebView2 _web = new WebView2();
         private readonly Button _run = new Button();
+        private readonly Button _watch = new Button();
         private readonly Button _stop = new Button();
         private readonly Button _browser = new Button();
         private readonly Button _toggle = new Button();
@@ -626,6 +628,8 @@ namespace CodeAtlas
         private readonly CheckBox _autoSwitch = new CheckBox();
         private readonly CheckBox _inc = new CheckBox();
         private Process _proc;
+        private bool _watching;          // 「内构监控」开着吗
+        private bool _watchWanted;       // 这次跑的是监控进程（它退出后要把按钮恢复成「快照」）
         private string _url;
         private bool _webReady;
         private bool _showingMap;
@@ -747,6 +751,17 @@ namespace CodeAtlas
             Style(_run, true);
             SetBtn(_run, true, true); // 必须让它处于"可用"状态（点击处理里会查 IsOn，漏了这行就会点了没反应）
             _run.Click += (s, e) => { if (IsOn(_run)) Run(); };
+            // 「内构快照 / 内构监控」双态按钮（放在「扫描」后面）：
+            //   快照 = 现在的行为：点「扫描」扫一次就完；
+            //   监控 = 起一个 `--watch` 引擎：先分趟把地图长出来，之后改了源码约 2 秒自动重扫，
+            //          窗口里那张地图会自己更新（网页在轮询 bundle）。
+            // 再点一下停 —— 直接强杀进程（引擎退出阶段会撞 libuv 的 UV_HANDLE_CLOSING，别指望优雅退）。
+            SetText(_watch, "内构快照", "Snapshot");
+            Style(_watch);
+            SetBtn(_watch, true);
+            _watch.Click += (s, e) => { if (IsOn(_watch)) ToggleWatch(); };
+            SetTip(_watch, "默认「内构快照」：点「扫描」扫一次就完（与 v1.3.0 一样）。\r\n切成「内构监控」会一直盯着这个项目：先分趟把地图长出来，之后改了源码约 2 秒自动重扫。",
+                "Default “Snapshot”: press Scan for a one-shot scan (same as v1.3.0).\r\nSwitch to “Watch” to keep the map current: it grows in stages, then rescans ~2s after a source change.");
             SetText(_stop, "停止", "Stop");
             Style(_stop);
             SetBtn(_stop, false);
@@ -799,7 +814,7 @@ namespace CodeAtlas
             SetTip(_ui, "切换界面语言：中文 / English。\r\n同时影响扫描输出与 MCP 接口；也可用环境变量 CODEATLAS_LANG=en 指定（优先级更高）。",
                         "Switch UI language: 中文 / English.\r\nAlso affects scan output and the MCP interface; you can set the env var CODEATLAS_LANG=en instead (it wins).");
 
-            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _inc, _ui, _hint, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
+            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _inc, _ui, _hint, _watch, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
             _targetLabel = targetLabel;
             _bar.Resize += (s, e) => ApplyLayout();
 
@@ -896,7 +911,7 @@ namespace CodeAtlas
             _ui.Location = new Point(_inc.Right + (int)(14 * k), rowBCenter - _ui.Height / 2);
 
             int x = w - pad;
-            foreach (var b in new[] { _mcp, _browser, _toggle, _stop, _langs, _wiz, _run })
+            foreach (var b in new[] { _mcp, _browser, _toggle, _stop, _langs, _wiz, _watch, _run })
             {
                 b.Location = new Point(x - b.PreferredSize.Width, rowB);
                 x = b.Left - gap;
@@ -1161,7 +1176,7 @@ namespace CodeAtlas
             });
         }
 
-        private void Run()
+        private void Run(bool watch = false)
         {            string target = _path.Text.Trim().Trim('"');
             if (target.Length == 0) { MessageBox.Show(this, L.T("先选一个文件夹或文件。", "Pick a folder or file first."), "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             if (!File.Exists(target) && !Directory.Exists(target)) { MessageBox.Show(this, L.T("这个路径不存在：", "This path does not exist: ") + target, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
@@ -1201,6 +1216,7 @@ namespace CodeAtlas
                 string effLangs = TargetLangs(target);
                 string effFacets = TargetFacets(target);
                 if (!string.IsNullOrWhiteSpace(effFacets)) Log(L.T("> 分组规则：", "> grouping rules: ") + effFacets);
+                _watchWanted = watch;
                 _proc = Engine.Start(target, _cfg, effLangs, effFacets, false, OnLine, code =>
                 {
                     Ui(() =>
@@ -1213,6 +1229,7 @@ namespace CodeAtlas
                     });
                     if (_url == null) Log(L.T("提示：这次没拿到服务地址，地图就不会出现在本窗口 —— 上面应该有报错原因（路径不存在 / 引擎没找到等）。", "Note: no server address this time, so the map will not appear in this window — the reason should be above (missing path / engine not found …)."));
                     _proc = null;
+                    if (_watchWanted) { _watchWanted = false; SetWatchUi(false, null); }   // 监控进程没了 → 按钮恢复成「快照」
                 });
             }
             catch (Exception ex)
@@ -1234,6 +1251,13 @@ namespace CodeAtlas
 
         private void OnLine(string line)
         {
+            // 监控模式：引擎每趟 / 每次重扫都会打「地图已更新（第 N 趟）…」，顺手把「上次更新 HH:MM」显示到按钮上
+            var l0 = line ?? "";
+            if (_watching && (l0.Contains("地图已更新") || l0.Contains("Map updated")))
+            {
+                var at = DateTime.Now;
+                Ui(() => { if (_watching) SetWatchUi(true, at); });
+            }
             var m = Regex.Match(line ?? "", @"http://localhost:\d+");
             if (m.Success && _url == null)
             {
@@ -1273,8 +1297,35 @@ namespace CodeAtlas
             if (_showingMap) ShowLog(); else ShowMap();
         }
 
+        /// <summary>
+        /// 「内构快照 / 内构监控」双态切换。
+        /// 开：起一个 `--watch` 引擎（分趟长出来 + 改动自动重扫，不会自己结束）；
+        /// 关：强杀那个进程（引擎退出阶段会撞 libuv 的 UV_HANDLE_CLOSING，别指望优雅退）。
+        /// </summary>
+        private void ToggleWatch()
+        {
+            if (_watching) { Stop(); SetWatchUi(false, null); SetBtn(_run, true, true); return; }
+            SetBtn(_run, false, true);       // 监控期间不让再点「扫描」：两个进程写同一份 dist 会打架
+            SetWatchUi(true, null);
+            Run(watch: true);
+        }
+
+        /// <summary>监控按钮的外观：开着时用主色 + 显示「上次更新 HH:MM」。</summary>
+        private void SetWatchUi(bool on, DateTime? lastAt)
+        {
+            _watching = on;
+            Style(_watch, on);
+            _watch.Text = !on
+                ? L.T("内构快照", "Snapshot")
+                : (lastAt.HasValue
+                    ? L.T($"内构监控 · 上次更新 {lastAt.Value:HH:mm}", $"Watch · updated {lastAt.Value:HH:mm}")
+                    : L.T("内构监控", "Watch"));
+            SetBtn(_watch, true);
+        }
+
         private void Stop()
         {
+            _watching = false;
             try
             {
                 if (_proc != null && !_proc.HasExited) { _proc.Kill(entireProcessTree: true); Log(L.T("> 已停止", "> stopped")); }
