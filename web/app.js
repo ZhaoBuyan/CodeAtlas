@@ -13,6 +13,7 @@ function applyHtmlLang() {
   if (LANG !== 'en') return;
   for (const el of document.querySelectorAll('[data-en]')) el.textContent = el.getAttribute('data-en');
   for (const el of document.querySelectorAll('[data-en-ph]')) el.setAttribute('placeholder', el.getAttribute('data-en-ph'));
+  for (const el of document.querySelectorAll('[data-en-title]')) el.setAttribute('title', el.getAttribute('data-en-title'));
   document.documentElement.lang = 'en';
 }
 applyHtmlLang();   // module 脚本在文档解析完才跑，这里 DOM 已经就绪
