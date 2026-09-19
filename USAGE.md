@@ -44,9 +44,11 @@ Filters on the left, the map in the middle, details on the right.
 | Find something | The search box at the top — **type names and member names both match**: search `OnPaint` and it finds "who defines this method" |
 | Inspect something | Click a block → the inspector on the right shows what it is, file and line, its members, what it depends on, what depends on it |
 | See "who references whom" | Tick "Dependency focus", or select a block and look at its links |
-| Make sense of the colors | "Color by": file / group / kind |
+| Make sense of the colors | "Color by": file / **git heat** (the busiest code lights up; uncommitted files get a bright border) / group / kind |
 | Too noisy | The "Min code lines" slider drops small fragments; "Type kinds" keeps only class / interface and friends |
 | Share a view | The address bar *is* the full state (`#q=OnPaint&v=graph`…) — copy it and someone else sees the same picture |
+| Clear the selection | 「取消选中」at the bottom-right of the map — clears the selection and empties the inspector |
+| Keep the map live while you code | The launcher's 「内构快照」button is two-state: click it to switch to 「内构监控」, then the map updates itself (incremental rescan) as you edit |
 
 Small tip: **dark blocks** are things outside the current filter/search, not an error.
 

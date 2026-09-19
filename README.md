@@ -127,6 +127,13 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # MCP server for AI cli
   (add `--extract` to only verify extraction of the bundled engine; add `--list-langs` to only verify the
   language-table wiring)
 
+### Snapshot / live mode
+
+The launcher button is **two-state**: click once to go from “structure snapshot” to “structure monitor”.
+In monitor mode the engine polls every 1.5 s and rescans **incrementally** (only the files that changed), and the map in
+your browser updates by itself; the button shows “last update HH:MM”. “Scan” is disabled while monitoring (so two paths
+never write the bundle at once), and “Stop” kills the child process too.
+
 ## Packaging and releases (two editions)
 
 No installer — just an exe you can put anywhere.
@@ -330,6 +337,9 @@ node src/cli.mjs langs [--json]                    # list supported languages (-
 - **Permalinks**: view state lives in the URL (`#by=&v=&g=&t=&m=&c=&q=&l=`; `v=graph` / `v=matrix` share the
   graph or the matrix directly; `q=` / `l=` carry the search term and the language filter) — shareable and
   reproducible.
+
+- **“Clear selection”** at the bottom-right of the map: clears the selection, empties the inspector, and drops the selection out of the URL hash.
+- **The page reloads itself**: after you change anything under `web/`, any open page refreshes on its own — no F5 needed.
 
 ## Grouping rules (facets)
 
@@ -572,6 +582,11 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] Headless self-check and diagnostics in the same exe (`--headless --path <dir> --log <file>`, `--list-langs`, `draft-facets`) — useful when somebody reports a problem
 - [x] AI interface hardening: one-click MCP config copy · `map(budget)` skeleton export · `impact` blast radius (multi-hop + honest caveats)
 - [x] UI language: 中文 / English across the launcher, the engine's output, all MCP tools and the web map (switching needs no re-scan) — the docs come in both languages too ([README_CN.md](README_CN.md) · [USAGE.md](USAGE.md))
+
+- **git heat coloring**: files are colored by how often git touched them, so the busiest code stands out (uncommitted files get a bright border)
+- **Snapshot / monitor mode** in the launcher: edit your code and the map updates incrementally — no full rescan, no page refresh
+- **“Clear selection”** at the bottom-right of the map; hovering or clicking a module's *name* now hits the module itself
+- **Evidence strength on refs**: every reference is tagged same-file / import / name-only, and the overview hot list ranks by evidenced references
 
 ## License
 
