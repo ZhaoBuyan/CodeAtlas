@@ -298,8 +298,27 @@ check(quiet.every(([b]) => freshnessNote(b) === ''), '快照新鲜度：多根 /
 // 工具描述是调用方**调用前唯一能看到的东西**，不能和实现打架：新鲜度会报“已不在磁盘”，描述里就必须说；
 // 也**不许**再写成“新增 / 删除都看不见” —— 复验报告 §5 抓到的就是这处不一致（门锁住它，防止改回去）。
 const ovDesc = tools.result.tools.find((t) => t.name === 'overview').description;
+// 门一：工具描述与实现一致 —— 取 tools/list 里的**实际描述文本**（运行时那份，不是源码）
 check(/no longer on disk/.test(ovDesc) && !/added or removed/i.test(ovDesc),
   'overview 的工具描述与新鲜度实现一致（会报“已不在磁盘”；不许写成“新增 / 删除都看不见”）');
+
+// 文档门（二轮复验的建议）：这次的教训是“同一句话说在 5 个地方”，而上面那道门只锁住了 schema 那一处 ——
+// 另外 4 处（instructions / 注释 / CHANGELOG / 两个 README）仍靠人眼。所以把**文档也纳入断言**：
+// 不许再出现旧措辞，而且 README 必须“说了对的话”（删旧词 ≠ 说了新话）。
+const DOC_FILES = ['src/mcp.mjs', 'README.md', 'README_CN.md', 'CHANGELOG.md', 'USAGE.md', '使用说明.md'];
+const docBad = [];
+const docs = {};
+for (const rel of DOC_FILES) {
+  const lines = fs.readFileSync(path.join(ROOT, rel), 'utf8').split('\n');
+  // 唯一允许带旧词的是 mcp.mjs 里那条“别把这句话写成……”的反向警示注释（它本身就是防线）
+  const kept = lines.filter((l) => !/别把这句话写成/.test(l));
+  docs[rel] = kept.join('\n');
+  if (kept.some((l) => /added or removed|新增 \/ 删除/.test(l))) docBad.push(rel);
+}
+check(docBad.length === 0, '文档门：6 份文档里不许再出现旧措辞（added or removed / 新增 / 删除）',
+  docBad.length ? docBad.join(', ') : '全部干净（含 instructions / 注释 / CHANGELOG / 中英 README / 中英使用说明）');
+check(/no longer on disk/.test(docs['README.md']) && /已不在磁盘/.test(docs['README_CN.md']),
+  '文档门：README 说了对的话（no longer on disk / 已不在磁盘），不只是删掉旧词');
 
 fresh.proc.kill('SIGKILL');
 
@@ -343,17 +362,33 @@ check(/没认出测试文件|no such mark/.test(lNoTest),
 nt.proc.kill('SIGKILL');
 imp.proc.kill('SIGKILL');
 
-// 单元级：exclude 的取值语义（三条，必须一眼能猜对）
-const exC = parseExclude('tests/fixtures');
-check(exC.length === 1 && exC[0].join('/') === 'tests/fixtures', 'exclude：逗号分隔的解析（含末尾斜杠 / 反斜杠 / 大小写）',
-  parseExclude('  Tests\\Fixtures/ ,  ').map((p) => p.join('/')).join(' | '));
-check(isExcluded(exC, 'a/tests/fixtures/b.java') && !isExcluded(exC, 'tests/x/fixtures/y'),
-  'exclude：多段项按**连续段序列**匹配（tests/x/fixtures/y 不算）');
-check(isExcluded(exC, 'tests/fixtures'), 'exclude：多段项命中目录本身');
-const exV = parseExclude('vendor');
-check(isExcluded(exV, 'src/vendor/lib.js') && isExcluded(exV, 'src/vendor.ts') && !isExcluded(exV, 'src/vendors/lib.js'),
-  'exclude：单段项 = 任意层级的目录段，或文件名的**主干**（vendor.ts 也排，vendors 不排）');
-check(!isExcluded(parseExclude('*.g.cs'), 'src/foo.g.cs'), 'exclude：不做通配（*.g.cs 当普通段名，什么也命中不了）');
+// 单元级：exclude 的取值语义 —— 先查解析（逗号 / 首尾斜杠 / 反斜杠 / 大小写 / 空白）
+const exC = parseExclude('  Tests\\Fixtures/ ,  ');
+check(exC.length === 1 && exC[0].join('/') === 'tests/fixtures',
+  'exclude：解析归一（逗号分隔 / 首尾斜杠 / 反斜杠 / 大小写 / 空白）', exC.map((p) => p.join('/')).join(' | '));
+
+// 再逐条查命中语义。这张表来自二轮复验的**独立探针**（15 条），现在成为永久门 ——
+// 每条都写清“为什么”，改动时一眼看出哪条被破了。
+const EX_CASES = [
+  ['tests/fixtures', 'tests/fixtures/java/Sample.java', true, '多段：命中'],
+  ['tests/fixtures', 'a/tests/fixtures/b.java', true, '多段：任意层级起点'],
+  ['tests/fixtures', 'tests/x/fixtures/y.java', false, '多段：不连续 → 不命中（连续段序列）'],
+  ['tests/fixtures', 'Tests\\Fixtures/Java/S.java', true, '反斜杠 + 大小写不敏感'],
+  ['/tests/fixtures/', 'src/tests/fixtures/z.ts', true, '首尾斜杠归一'],
+  ['vendor', 'src/vendor/lib.js', true, '单段：目录段'],
+  ['vendor', 'src/vendor.ts', true, '单段：文件名主干（vendor.ts 也排）'],
+  ['vendor', 'src/vendors/lib.js', false, '单段：vendors ≠ vendor（段要整段相等）'],
+  ['vendor', 'src/vendor_helper.ts', false, '单段：主干要整词相等，vendor_helper 不误伤'],
+  ['test', 'tests/a.js', false, '段必须整段相等（test 不该命中 tests/a.js）'],
+  ['test', 'src/test/a.js', true, '整段相等 ✓'],
+  ['*.g.cs', 'obj/Debug/Foo.g.cs', false, '不做通配 / 不看扩展名（那类走 atlas.ignore）'],
+  ['obj', 'obj/Debug/Foo.g.cs', true, '目录段 obj'],
+  ['tests/fixtures', 'tests/fixtures', true, '路径本身就是那个目录'],
+  ['a,b', 'b/x.js', true, '逗号分隔多条'],
+];
+for (const [pat, p, want, why] of EX_CASES) {
+  check(isExcluded(parseExclude(pat), p) === want, `exclude：${why}`, `exclude="${pat}" path="${p}" → ${want}`);
+}
 
 // 端到端：一个带 fixtures 噪声的小项目，把五个工具的 exclude 都走一遍
 const exTmp = path.join(os.tmpdir(), `codeatlas-exclude-${process.pid}`);
