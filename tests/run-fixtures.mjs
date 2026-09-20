@@ -85,6 +85,10 @@ const CASES = [
     docContains: { MultiLineDoc: ['第一段在这里', '第二段也要在', '在这里。第二段也要在', '空格——就像'] },
     // 回归：分节线不算“说明”（Dog 上方是 `── 分节线 ──`、IWalker 上方是 `── 接口 ────────`）
     docNull: ['Dog', 'IWalker'],
+    // 边权重 = 引用次数。Dog 里 Animal 这个名字出现 3 次：继承列表 `: Animal` 1 次 + 两个属性类型 2 次
+    //（继承列表里那次是**改之前就有**的行为：继承边本来单独一条，名字本身也算一次引用。
+    //  要改成“继承不算引用”是另一个决定，先按现状钉住，免得静默漂移）
+    edgeWeights: [['Dog', 'Animal', 'ref', 3]],
     memberSigs: [
       // 参数表 + 返回类型（C# 的返回类型在 returns 字段上，无参方法也要拿到 "()"）
       ['Animal', 'Greet', '(string tone, int times): string'],
@@ -167,6 +171,7 @@ const CASES = [
     importsMin: 1,
     docs: 1,
     typeSigs: [['make', '(x)']],
+    edgeWeights: [['make', 'Widget', 'ref', 2]],   // make 里 Widget 出现两次（new + instanceof）
     membersMin: 2,
     errorsMax: 0,
   },
@@ -393,6 +398,17 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
     for (const [name, frag] of c.typeSigs) {
       const t = b.types.find((x) => x.name === name);
       push(Boolean(t) && sigOf(t).includes(frag), `${name} 的签名含 "${frag}"（实际 ${t ? sigOf(t) || '（空）' : '（没这个类型）'}）`);
+    }
+  }
+  // 边权重 = 引用**次数**（同一个名字在同一个 owner 里出现几次就是几），不是"有 N 个来源"
+  if (c.edgeWeights) {
+    for (const [from, to, kind, want] of c.edgeWeights) {
+      const sel = (n) => b.types.filter((x) => x.name === n).map((x) => x.id);
+      const fromIds = sel(from);
+      const toIds = sel(to);
+      const e = b.edges.find((x) => fromIds.includes(x.from) && toIds.includes(x.to) && x.kind === kind);
+      push(Boolean(e) && e.w === want,
+        `${from} → ${to}（${kind}）权重 ${e ? e.w : '（没这条边）'}（期望 ${want}）`);
     }
   }
   if (c.errorsMax != null) {

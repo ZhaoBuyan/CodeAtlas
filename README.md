@@ -245,8 +245,8 @@ Tools provided:
 | `overview()` | Project overview: size, system breakdown, most-depended-on symbols, largest files |
 | `list(path?, limit?)` | **Browse by directory**: no `path` → the scan root; otherwise that level's folders / files with file, type and line counts. Start here when you do not know any names yet — its output (paths, file names) feeds `file()` / `search()` |
 | `search(query, scope?, kind?)` | Find symbols by name; **member names are included by default** (searching `OnPaint` finds "who defines this method"); `scope=type\|member` narrows it. Hits carry the **signature** (parameter list + return type), so same-name overloads are told apart. Returns ids for the other tools |
-| `symbol(name)` | Everything about one type: description, signature, file:line, member list (**with parameter list and return type**), base types, dependency counts, its system |
-| `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code) |
+| `symbol(name)` | Everything about one type: description, signature, file:line, member list (**with parameter list and return type**), base types, **reference counts (weighted)**, its system |
+| `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code); every edge carries `×count` and its evidence strength |
 | `subgraph(name, depth)` | Dependency subgraph ("what does changing this drag along") |
 | `file(path)` | A file's types, imports, line counts (**parse errors are called out when present**) |
 | `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply |
@@ -383,7 +383,7 @@ the output contains a `_comment` explaining the format — edit away).
 | `files[]` | path, language, LOC (whole file) / code / comment / blank lines, import list, namespace |
 | `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), **`p` / `r`** (signature: parameter list / return type — both keys absent when not extracted), file + line, LOC (this type's range), member stats and list, base types, complexity, fanIn / fanOut |
 | `namespaces` | package tree (with bottom-up totals: lines / type counts) |
-| `edges[]` | type-level dependency edges: `ref` (reference) / `inherit` (inheritance), plus weight |
+| `edges[]` | type-level dependency edges: `ref` (reference) / `inherit` (inheritance), plus **weight = how many times the name was referenced inside the owning type** |
 | `nsEdges[]` | namespace-level edges (used by the package dependency view) |
 | `unresolved` | failed name resolutions (unknown / ambiguous) — the **confidence signal** |
 | `facets` | system grouping result: which rule file was used, type/line/file counts per system, uncategorized count |

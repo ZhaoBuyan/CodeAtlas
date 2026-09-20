@@ -26,6 +26,10 @@ namespace Fixture.Sample
         public override void Speak() { }
 
         public int Legs { get; set; } = 4;
+
+        // 同一个类型引用两次 → 这条边的权重是 2（测“引用次数”，不是“有几个来源”）
+        public Animal Buddy { get; set; }
+        public Animal Rival { get; set; }
     }
 
     // ── 接口 ────────────

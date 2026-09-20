@@ -13,5 +13,7 @@ export class Widget extends Base {
 }
 
 export function make(x) {
-  return new Widget(x);
+  // 同一个类型引用两次 → 这条边的权重是 2
+  const w = new Widget(x);
+  return w instanceof Widget ? 1 : 0;
 }

@@ -92,11 +92,13 @@ check(edgeCount > 0 && tagCount === edgeCount, 'refs 每条边都标了引用证
 const hasNameOnly = /\[(仅同名|same name only)\]/.test(refsAll);
 check(!hasNameOnly || /别当真|do not trust it/.test(refsAll), 'refs 出现“仅同名”时会说明它不能当真', hasNameOnly ? '有仅同名边，已带说明' : '这个 bundle 里没有仅同名边');
 
-const hotLines = overview.split('\n').filter((l) => /被 \d+ 处引用|referenced by \d+/.test(l));
+// 措辞跟着改过两轮：`被 N 处引用` → `被引用 N 次`（边权重变成真的引用次数后，"处（来源数）" 与 "次（次数）"
+// 不再是同一个数，标签必须说清是哪个）。这里认两种语言的新措辞。
+const hotLines = overview.split('\n').filter((l) => /被引用 \d+ 次|referenced \d+ times/.test(l));
 const evOf = (l) => {
-  const m = l.match(/有证据 (\d+) 处|\((\d+) with evidence\)/);       // 括号里的是“算数的”引用数
+  const m = l.match(/有证据 (\d+) 次|\((\d+) with evidence\)/);       // 括号里的是“算数的”引用次数
   if (m) return Number(m[1] ?? m[2]);
-  const n = l.match(/被 (\d+) 处引用|referenced by (\d+)/);
+  const n = l.match(/被引用 (\d+) 次|referenced (\d+) times/);
   return Number(n[1] ?? n[2]);
 };
 const evCounts = hotLines.map(evOf);

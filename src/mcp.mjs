@@ -245,10 +245,14 @@ function evidenceTag(ev) {
   return T('  [仅同名]', '  [same name only]');
 }
 
-/** 某个类型“算数的”入边数（同文件 + 有 import 支撑）—— overview 热点榜拿它排序 */
+/**
+ * 某个类型“算数的”被引用**次数**（同文件 + 有 import 支撑的边，按权重相加）—— overview 热点榜拿它排序。
+ * 与 fanIn（全部入边权重之和）同一个口径：都是“次”；差别只是这里扣掉了“仅同名”那一档噪声。
+ * （权重以前恒为 1，这两个数等价；2026-09-20 边权重变成真的引用次数后，必须按权重加才不失真）
+ */
 function evidencedIn(idx, t) {
   let n = 0;
-  for (const e of idx.ins.get(t.id) || []) if (evidenceOf(idx, e) !== 'name') n++;
+  for (const e of idx.ins.get(t.id) || []) if (evidenceOf(idx, e) !== 'name') n += e.w || 1;
   return n;
 }
 
@@ -324,10 +328,10 @@ function toolOverview(idx) {
   else lines.push(T('没有系统分组规则（可用 configs/<项目>.facets.json 定义；否则按目录/文件看）', 'No system grouping rules (define them in configs/<project>.facets.json; otherwise browse by directory / file)'));
   const hotLine = (t) => {
     const ev = evidencedIn(idx, t);
-    const note = ev < t.fanIn ? T(`（有证据 ${ev} 处）`, ` (${ev} with evidence)`) : '';
-    return T(`  ${t.fqn} [${t.kind}] 被 ${t.fanIn} 处引用${note} · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced by ${t.fanIn}${note} · ${idx.files.get(t.file)?.path}`);
+    const note = ev < t.fanIn ? T(`（有证据 ${ev} 次）`, ` (${ev} with evidence)`) : '';
+    return T(`  ${t.fqn} [${t.kind}] 被引用 ${t.fanIn} 次${note} · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced ${t.fanIn} times${note} · ${idx.files.get(t.file)?.path}`);
   };
-  lines.push(T('被依赖最多（改动的波及面最大；按“有证据的引用”排 —— 仅同名的边不算，见 refs）：\n', 'Most depended-on (biggest blast radius; ranked by references with evidence — same-name-only edges do not count, see refs):\n') + topIn.map(hotLine).join('\n'));
+  lines.push(T('被依赖最多（改动的波及面最大；按“有证据的引用次数”排 —— 仅同名的边不算，见 refs）：\n', 'Most depended-on (biggest blast radius; ranked by references with evidence — same-name-only edges do not count, see refs):\n') + topIn.map(hotLine).join('\n'));
   lines.push(T('最大的文件：\n', 'Largest files:\n') + bigFiles.map((f) => T(`  ${f.path}  ${fmt(f.code)} 行`, `  ${f.path}  ${fmt(f.code)} lines`)).join('\n'));
   lines.push(T('深入用：search / symbol / refs / subgraph / file', 'Dig deeper with: search / symbol / refs / subgraph / file'));
   return lines.join('\n');
@@ -388,7 +392,7 @@ function toolSymbol(idx, a) {
   lines.push(`${t.fqn}${sigText(t)}  [${t.kind}]${t.tags?.length ? `  (${t.tags.join(', ')})` : ''}`);
   lines.push(T(`文件：${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   系统：${t.system ? sysLabel(t.system) : '（未分组）'}${t.systemRule ? `（规则 ${t.systemRule}）` : ''}`, `File: ${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   System: ${t.system ? sysLabel(t.system) : '(ungrouped)'}${t.systemRule ? ` (rule ${t.systemRule})` : ''}`));
   lines.push(T(`规模：${t.code} 行代码（该类型区间）· 复杂度≈${t.complexity} · 成员 ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`, `Size: ${t.code} lines of code (this type's range) · complexity≈${t.complexity} · members ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none'}`));
-  lines.push(T(`依赖：被 ${t.fanIn} 处引用 · 引用了 ${t.fanOut} 个`, `Dependencies: referenced by ${t.fanIn} · references ${t.fanOut}`));
+  lines.push(T(`依赖：被引用 ${t.fanIn} 次 · 引用别人 ${t.fanOut} 次`, `Dependencies: referenced ${t.fanIn} times · references ${t.fanOut} times`));
   if (t.bases?.length) lines.push(T(`基类/接口：${t.bases.join(', ')}`, `Base types / interfaces: ${t.bases.join(', ')}`));
   if (f?.errors) lines.push(T(`注意：该文件有 ${f.errors} 处解析异常，数据可能不全`, `Note: this file has ${f.errors} parse errors — its data may be incomplete`));
   lines.push(T(`说明：${t.doc || '（源码里没有注释说明）'}`, `Doc: ${t.doc || '(no doc comment in the source)'}`));

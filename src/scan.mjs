@@ -606,7 +606,11 @@ function extractFile(source, tree, lang) {
   const imports = [];
   const refs = [];
   const comments = [];
-  const refSeen = new Set();
+  // 引用**次数**（2026-09-20）：每一个 (owner, 名字) 出现过几次就记几次。
+  // 之前这里是两个 Set，只记"出现过没有" → 边的权重恒为 1（"A 引用了 B 3 次" 这个信息被去重丢了）。
+  // 用 Map：既当计数器，又天然保持"首次出现顺序"（跟原来 push 的顺序一模一样）。
+  const refCount = new Map();        // `${ownerIndex}|${name}` -> { owner, name, n }
+  const fileRefCount = new Map();    // 文件级（没有类型归属）的那些：name -> n
   // 参数名所在的标识符节点（这些不当"引用"算）
   const skipIds = new Set();
   const namespaces = new Set();
@@ -616,7 +620,6 @@ function extractFile(source, tree, lang) {
   let errors = 0;
   // 文件级（没有类型归属）的成员/分支/引用：给"没有类型声明的文件"合成模块节点用
   const fileScope = { members: {}, memberList: [], complexity: 1, refs: [] };
-  const fileRefSeen = new Set();
 
   const currentType = () => (typeStack.length ? typeStack[typeStack.length - 1] : null);
 
@@ -644,15 +647,13 @@ function extractFile(source, tree, lang) {
     const name = node.text;
     const t = currentType();
     if (!t) {
-      if (fileRefSeen.has(name)) return;
-      fileRefSeen.add(name);
-      fileScope.refs.push({ name });
+      fileRefCount.set(name, (fileRefCount.get(name) || 0) + 1);
       return;
     }
     const key = `${t.index}|${name}`;
-    if (refSeen.has(key)) return;
-    refSeen.add(key);
-    refs.push({ owner: t.index, name });
+    const cur = refCount.get(key);
+    if (cur) cur.n++;
+    else refCount.set(key, { owner: t.index, name, n: 1 });
   }
 
   // 有些语法会把注释挂在 import / namespace 节点里面（Kotlin 就是），收 import 时顺手把它们捞出来，别漏掉注释
@@ -813,6 +814,9 @@ function extractFile(source, tree, lang) {
   }
 
   walk(tree.rootNode);
+  // 计数表 → 引用列表（顺序 = 首次出现顺序，跟改之前一致）
+  for (const r of refCount.values()) refs.push(r);
+  for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
   return { types, imports, refs, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
@@ -1237,7 +1241,7 @@ async function extractFiles(files) {
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
       });
       for (const r of facts.refs) {
-        if (r.owner === t.index) part.refs.push({ t: id, name: r.name });
+        if (r.owner === t.index) part.refs.push({ t: id, name: r.name, n: r.n });
       }
     }
 
@@ -1277,7 +1281,7 @@ async function extractFiles(files) {
         system: null,
         systemRule: null,
       });
-      for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name });
+      for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name, n: r.n });
     }
 
     // 进度提示：文件多的时候每 150 个或每 2.5 秒报一次（小项目只有开始那一行）
@@ -1317,7 +1321,8 @@ function mergeParts(parts) {
       for (const t of pf.types || []) {
         out.allTypes.push({ ...t, id: t.id + tOff, file: fileId, parent: t.parent == null ? null : t.parent + tOff });
       }
-      for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name });
+      // n = 这个"解析前的名字"在同一个 owner 里被引用了几次（权重就是从这里来的）
+      for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name, n: r.n || 1 });
       out.fileNamespaces.push(pf.ns || {});
     }
     out.failures.push(...(p.failures || []));
@@ -1557,16 +1562,20 @@ export async function scan(opts) {
   };
 
   // ---- 建图：引用 + 继承 ----
+  // 权重 = 引用**次数**（同一个 owner 里同名字出现几次）：
+  //   · 网页里连线的粗细（stroke-width = min(4, 1 + log2(1 + w))）、依赖矩阵的浓淡都用它
+  //   · fanIn / fanOut 也是权重之和 → "被引用多少次 / 引用别人多少次"
+  //   · 同名不同含义的"仅同名边"会在读侧被标出来，别只看数字大小（见 mcp.mjs 的 evidenceOf）
   const edgeMap = new Map();
-  const addEdge = (from, to, kind) => {
+  const addEdge = (from, to, kind, n = 1) => {
     if (from == null || to == null || from === to) return;
     const key = `${from}|${to}|${kind}`;
-    edgeMap.set(key, (edgeMap.get(key) || 0) + 1);
+    edgeMap.set(key, (edgeMap.get(key) || 0) + n);
   };
 
   for (const r of allRefs) {
     const to = resolveName(r.name, r.owner);
-    if (to != null) addEdge(r.owner, to, 'ref');
+    if (to != null) addEdge(r.owner, to, 'ref', r.n || 1);
   }
   for (const t of allTypes) {
     for (const b of t.bases) {

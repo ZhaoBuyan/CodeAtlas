@@ -784,7 +784,7 @@ function updateChartInfo(extra) {
     const ty = state.typeById.get(state.selected);
     const ins = (state.ins.get(state.selected) || []).length;
     const outs = (state.outs.get(state.selected) || []).length;
-    t += T(` · 选中 ${ty.name}：被引用 ${ins} / 引用 ${outs}（已在地图上高亮）`, ` · selected ${ty.name}: referenced by ${ins} / references ${outs} (highlighted on the map)`);
+    t += T(` · 选中 ${ty.name}：${ins} 个来源引用它 / 它引用 ${outs} 处（已在地图上高亮）`, ` · selected ${ty.name}: ${ins} sources reference it / it references ${outs} (highlighted on the map)`);
   }
   if (extra) t += ` · ${extra}`;
   el.textContent = `　${t}`;
@@ -902,7 +902,7 @@ function showTip(ev, d) {
   tip.classList.remove('hidden');
   tip.innerHTML = `<b>${esc(t.name)}</b> <span class="muted">${esc(t.kind)}${t.system ? ' · ' + esc(sysLabel(t.system)) : ''}</span>
 ${esc(f.path)}:${t.line}
-${T(`代码 ${fmt(t.code)} 行（类型区间）`, `${fmt(t.code)} lines of code (type range)`)}${T(' · 复杂度 ', ' · complexity ')}${t.complexity} · fanIn ${t.fanIn} / fanOut ${t.fanOut}${t.doc ? `\n\n${esc(t.doc)}` : ''}`;
+${T(`代码 ${fmt(t.code)} 行（类型区间）`, `${fmt(t.code)} lines of code (type range)`)}${T(' · 复杂度 ', ' · complexity ')}${t.complexity}${T(` · 被引用 ${t.fanIn} 次 / 引用 ${t.fanOut} 次`, ` · referenced ${t.fanIn} times / references ${t.fanOut} times`)}${t.doc ? `\n\n${esc(t.doc)}` : ''}`;
   tip.style.left = Math.min(ev.clientX + 14, innerWidth - 400) + 'px';
   tip.style.top = Math.min(ev.clientY + 14, innerHeight - 90) + 'px';
 }
@@ -1174,11 +1174,11 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
       <dt>${T('行数（类型区间）', 'Lines (type range)')}</dt><dd>${fmt(t.loc)}${T('（代码 ', ' (code ')}${fmt(t.code)}${T(' / 注释 ', ' / comment ')}${fmt(t.comment)}${T('）', ')')}</dd>
       <dt>${T('复杂度', 'Complexity')}</dt><dd>${t.complexity} <span class="muted">${T('估算', 'estimated')}</span></dd>
       <dt>${T('成员', 'Members')}</dt><dd>${memberRows.length ? memberRows.map(([k, v]) => `${esc(k)} ${v}`).join(' · ') : '—'}</dd>
-      <dt>${T('依赖', 'Dependencies')}</dt><dd>fanIn ${t.fanIn} · fanOut ${t.fanOut}</dd>
+      <dt>${T('依赖', 'Dependencies')}</dt><dd>${T(`被引用 ${t.fanIn} 次 · 引用别人 ${t.fanOut} 次`, `referenced ${t.fanIn} times · references ${t.fanOut} times`)}</dd>
       <dt>${T('基类', 'Base types')}</dt><dd>${t.bases.length ? t.bases.map(esc).join(', ') : '—'}</dd>
     </div>
-    ${depsSection(T('被谁引用', 'Referenced by (fanIn)'), ins, 'from')}
-    ${depsSection(T('引用了谁（fanOut）', 'References (fanOut)'), outs, 'to')}
+    ${depsSection(T('被谁引用', 'Referenced by'), ins, 'from')}
+    ${depsSection(T('引用了谁', 'References'), outs, 'to')}
     ${t.memberList.length ? `<div class="sect"><h4>${T('成员（前 ', 'Members (first ')}${Math.min(t.memberList.length, 40)}${T('）', ')')}</h4>
       ${t.memberList.slice(0, 40).map((m) => `<div class="dep${state.q && (m.n || '').toLowerCase().includes(state.q) ? ' hit' : ''}" title="${esc(m.d || '')}"><span class="n">${esc(m.n + sigText(m))}</span><span class="w">${esc(m.k)} · ${m.l}</span></div>${m.d ? `<div class="m-doc">${esc(truncate(m.d, 110))}</div>` : ''}`).join('')}</div>` : ''}
   `;
@@ -1195,12 +1195,18 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
 
 function depsSection(title, list, dir) {
   if (!list.length) return `<div class="sect"><h4>${title}</h4><div class="muted">${T('无', 'none')}</div></div>`;
-  return `<div class="sect"><h4>${title}（${list.length}）</h4>
+  // 权重是真引用次数："几条边"与"一共几次"不是一回事（以前权重恒为 1，写一个就够）。
+  // 写"条边"而不是"个来源"：同一个来源可能有多条边（引用 + 继承，各自带权重）
+  const total = list.reduce((a, e) => a + (e.w || 1), 0);
+  const head = total > list.length
+    ? T(`${title}（${list.length} 条边 · 共 ${total} 次）`, `${title} (${list.length} edges · ${total} in total)`)
+    : `${title}（${list.length}）`;
+  return `<div class="sect"><h4>${head}</h4>
     ${list.slice(0, 30).map((e) => {
       const o = state.typeById.get(e[dir]);
       if (!o) return '';
       return `<div class="dep ${e.kind === 'inherit' ? 'inherit' : ''}" data-id="${o.id}" title="${esc(o.fqn)}">
-        <span class="n">${esc(o.name)}</span><span class="w">${e.kind === 'inherit' ? T('继承 · ', 'inherits · ') : ''}${e.w}</span></div>`;
+        <span class="n">${esc(o.name)}</span><span class="w">${e.kind === 'inherit' ? T('继承 · ', 'inherits · ') : ''}×${e.w}</span></div>`;
     }).join('')}</div>`;
 }
 
