@@ -579,7 +579,9 @@ namespace CodeAtlas
             args.Append('"').Append(script).Append('"');
             // scanOnly：改走 `scan` 子命令。位置参数那条路是"扫描 + 起本地服务"（服务不会自己退，
             // 启动器靠它把地图嵌进窗口）—— 自检拿它就只能等超时，所以自检走 scan（扫完就退）。
-            if (scanOnly) args.Append(" scan");
+            // watch 也**必须**走 scan：`--watch` 只在 scan 子命令里被处理，传给位置参数那条路会被默默忽略
+            //（实测：日志只出普通扫描 + 起服务，压根不进监控态 —— 「内构监控」其实没在监控）
+            if (scanOnly || watch) args.Append(" scan");
             args.Append(" \"").Append(target).Append('"');
             args.Append(" --out \"").Append(cfg.Out).Append('"');
             if (!scanOnly) args.Append(" --port ").Append(cfg.Port);

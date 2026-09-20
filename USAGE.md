@@ -107,6 +107,9 @@ come with sources**. It reads the local scan result: **no re-scan, no upload**.
 2. Hit **"MCP config"** on the toolbar → "copied to clipboard" → paste that JSON into your AI client's MCP config →
    restart the client.
 
+> **⚠ Freshness**: MCP clients do not hot-reload servers — **restart the client after upgrading CodeAtlas**
+> (or disconnect and reconnect that MCP server). Data itself is re-read on every call, so a rescan needs no reconnect.
+
 What gets copied looks like this (all paths are **absolute**, nothing to edit):
 
 ```json

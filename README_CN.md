@@ -197,6 +197,9 @@ lambda 默认参数、raw 插值字符串、变量名叫 `required`…）**全�
 node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ```
 
+> **时效提醒**：MCP 客户端不会自动重载服务器 —— 升级 CodeAtlas 后请**重启客户端**；
+> 数据本身是每次调用现读的，重扫不必重连。
+
 提供的工具：
 
 | 工具 | 干什么 |

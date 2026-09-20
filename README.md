@@ -238,6 +238,9 @@ After a scan, the AI does not need the source or the bundle in its context — i
 node src/cli.mjs mcp --out dist        # stdio JSON-RPC for MCP clients
 ```
 
+> **Freshness**: MCP clients do not hot-reload servers — after upgrading CodeAtlas, **restart the client**.
+> Data itself is re-read on every call, so a rescan needs no reconnect.
+
 Tools provided:
 
 | Tool | What it does |
