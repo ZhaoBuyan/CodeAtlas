@@ -295,6 +295,12 @@ const quiet = [
 ];
 check(quiet.every(([b]) => freshnessNote(b) === ''), '快照新鲜度：多根 / 无根 / 老 bundle / 根不在 → 一律沉默（不猜）', `${quiet.length} 种输入`);
 
+// 工具描述是调用方**调用前唯一能看到的东西**，不能和实现打架：新鲜度会报“已不在磁盘”，描述里就必须说；
+// 也**不许**再写成“新增 / 删除都看不见” —— 复验报告 §5 抓到的就是这处不一致（门锁住它，防止改回去）。
+const ovDesc = tools.result.tools.find((t) => t.name === 'overview').description;
+check(/no longer on disk/.test(ovDesc) && !/added or removed/i.test(ovDesc),
+  'overview 的工具描述与新鲜度实现一致（会报“已不在磁盘”；不许写成“新增 / 删除都看不见”）');
+
 fresh.proc.kill('SIGKILL');
 
 // ---------------------------------------------------------------------------

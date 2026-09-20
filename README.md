@@ -282,8 +282,8 @@ Four details:
   freshly scanned bundle automatically**; it will not answer from yesterday's data;
 - **If the files in the map changed on disk, `overview` says so**:
   `⚠ 3 mapped files changed after this snapshot (1 timestamp-only) — not reflected in the map`.
-  It only re-stats the files **already in the map** (no directory walking), so **files added or removed are
-  outside its scope** — a re-scan is what picks those up;
+  It only re-stats the files **already in the map** (no directory walking), so **newly added files** are not detected —
+  mapped files that have **disappeared** are reported instead (`N no longer on disk`); a re-scan is what picks up new ones;
 - **Let the caller drop what it does not need**: `overview` / `search` / `refs` / `map` / `impact` all take an optional
   `exclude` (comma-separated paths, e.g. `"tests/fixtures, vendor"`). The engine cannot know which parts of *your*
   project are sample data or generated, so that judgement is left to the caller: multi-segment patterns match a

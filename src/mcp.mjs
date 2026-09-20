@@ -71,7 +71,7 @@ const INSTRUCTIONS = [
   '  does need this server process restarted (the client reconnects and gets the new tool list);',
   '- overview also checks freshness: it re-stats the files already in the map, and when some of them changed on disk after',
   '  the scan it says so (`N mapped files changed…`, of which M are timestamp-only). It only covers files already in the',
-  '  map — files added or removed on disk are not detected there, so a re-scan is still how you pick those up;',
+  '  map — mapped files that disappeared ARE reported, while newly added files are not; a re-scan is how you pick those up;',
   '- `impact` also lists the **test files** that would be affected, recognized **by path** (test / tests / __tests__ dirs,',
   '  `.test.` / `.spec.` / `_test.` / `_spec.`, or a `test_` prefix). A project',
   '  that keeps its tests elsewhere will not be seen',
@@ -107,7 +107,7 @@ const EXCLUDE_DOC = 'Comma-separated path patterns; drops matching names from TH
 const TOOLS = [
   {
     name: 'overview',
-    description: 'Project overview: size, systems/modules, most depended-on symbols, largest files, plus a freshness check (files already in the map that changed on disk after the scan — it does not see files added or removed). Call this first to get the big picture.',
+    description: 'Project overview: size, systems/modules, most depended-on symbols, largest files, plus a freshness check (files already in the map that changed on disk after the scan, plus mapped files that are no longer on disk) — newly added files are not detected. Call this first to get the big picture.',
     inputSchema: { type: 'object', properties: { exclude: { type: 'string', description: EXCLUDE_DOC } }, additionalProperties: false },
   },
   {
@@ -362,8 +362,9 @@ function memberNote(idx, name, hits) {
  * 快照新鲜度：bundle 是一份快照，**图里那些文件在磁盘上可能已经变了**。
  *
  * 只 re-stat「已经纳入图里的文件」（N 次 stat，不遍历目录）—— 代价与收益对等：报“改动”只要知道路径，
- * 报“新增”得真去遍历目录（还要套 ignore 规则与扩展名规则），那是重新扫描的事。所以这行**只覆盖图里已有的文件**，
- * 目录级的新增 / 删除它发现不了，措辞里也如实限定（不承诺完整性）。
+ * 报“新增”得真去遍历目录（还要套 ignore 规则与扩展名规则），那是重新扫描的事。所以这行**只覆盖图里已有的文件**。
+ * ⚠ 别把这句话写成“新增 / 删除都看不见”（复验报告 §5 抓到的就是这处与实现不一致）：
+ * **「图里有、磁盘上没了」是能报的**（stat 失败即可知），发现不了的只是“图上还没有的东西”。
  * （这跟“我连的是哪份引擎代码”是两回事：这里答的是“数据是不是旧的”。）
  *
  * 三条口径都有理由：
