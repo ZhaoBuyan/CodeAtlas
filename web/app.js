@@ -566,7 +566,8 @@ function drawTreemap(target, chart, w, h) {
     // 底下留一条空带（46px）：右下角那几个键就住在那儿，不再压住格子
     .size([w, Math.max(80, h - 46)])
     .paddingOuter(3).paddingInner(2)
-    .paddingTop((d) => (d.depth ? 16 : 0))
+    // 分组头顶的标题带：只给「装得下标题」的分组留（放不下就没有意留，那些空带看着就像没占满）
+    .paddingTop((d) => (d.depth && d.children && d.children.length && d.y1 - d.y0 > 60 ? 16 : 0))
     .round(true)
     .tile(d3.treemapSquarify.ratio(1.15))(root);
 
