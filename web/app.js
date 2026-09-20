@@ -1271,3 +1271,11 @@ if (selClearBtn) selClearBtn.onclick = () => { state.selected = null; writeHash(
 // 「回正」：把缩放/平移恢复原样
 const zoomResetBtn = document.getElementById('zoomReset');
 if (zoomResetBtn) zoomResetBtn.onclick = () => { if (mapZoom) d3.select('#chart svg').call(mapZoom.transform, d3.zoomIdentity); };
+
+// 地图**外面**（左栏、图例、状态栏）右键也别弹系统菜单 —— 地图上那条 contextmenu 只管地图，
+// 手一滑出到边栏就漏出浏览器菜单（用户报的）。输入框里保留原生菜单（复制/粘贴要用）。
+d3.select(document).on('contextmenu.page', (ev) => {
+  const t = ev.target;
+  if (t instanceof Element && t.closest('input, textarea')) return;
+  ev.preventDefault();
+});
