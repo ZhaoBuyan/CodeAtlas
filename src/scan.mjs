@@ -1350,13 +1350,28 @@ export async function scan(opts) {
     bySimpleName.get(t.name).push(t.id);
   }
 
-  /** 名字解析：唯一命中就用；多个命中优先同命名空间；否则放弃（计入歧义） */
+  /**
+   * 名字解析：把一个引用名（可能是简单名，比如 `Widget`）对到一个符号上。
+   *
+   * 优先级（从强到弱）：
+   *   1. 唯一命中 → 直接用
+   *   2. **同一个文件里声明的** → 本地声明优先（语言的作用域就是本地优先；这是治同名误归的根因）
+   *   3. 唯一命中且同命名空间 → 退一步用命名空间近似
+   *   4. 唯一命中且同根包（`a.b.c` 的 `a` 相同） → 再退一步
+   *   5. 都不行 → 放弃，计入 ambiguous（宁可缺边，也不要接错）
+   *
+   * 为什么 2 要排在 3/4 前面：同一个文件里声明的同名符号，在 Java/JS/C# 这些语言里
+   * 就是引用的那个（本地作用域胜过包/命名空间近似）；反过来，同一包里另一个文件里的
+   * 同名符号只是“看起来像”，按名字接上去就是误归。
+   */
   const unresolved = { ambiguous: 0, unknown: 0 };
   const resolveName = (name, fromTypeId) => {
     const hit = bySimpleName.get(name);
     if (!hit || !hit.length) { unresolved.unknown++; return null; }
     if (hit.length === 1) return hit[0];
     const from = allTypes[fromTypeId];
+    const sameFile = hit.filter((id) => allTypes[id].file === from.file);
+    if (sameFile.length === 1) return sameFile[0];
     const sameNs = hit.filter((id) => allTypes[id].ns === from.ns);
     if (sameNs.length === 1) return sameNs[0];
     const sameRoot = hit.filter((id) => {
