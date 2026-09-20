@@ -339,6 +339,7 @@ node src/cli.mjs langs [--json]                    # list supported languages (-
   reproducible.
 
 - **“Clear selection”** at the bottom-right of the map: clears the selection, empties the inspector, and drops the selection out of the URL hash.
+- **Zoom / pan**: wheel to zoom, **right-drag to move the canvas** (the left button stays on select / drill-down), **“回正”** at the bottom-right resets to the whole map. Text scales with the zoom, and selecting a module no longer resets the zoom level.
 - **The page reloads itself**: after you change anything under `web/`, any open page refreshes on its own — no F5 needed.
 
 ## Grouping rules (facets)
