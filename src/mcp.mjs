@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // 本文件用 T(...) 而不是 t(...)：mcp.mjs 里到处是「类型对象」的局部名 t（箭头参数、const t = r.type …），
 // 导入的 t 会被它们遮住（这种错是静默的），所以这里显式取别名。
-import { t as T, sysLabel } from './i18n.mjs';
+import { t as T, isEn, sysLabel } from './i18n.mjs';
 
 export function listToolsText() {
   return TOOLS.map((t) => {
@@ -78,6 +78,11 @@ const INSTRUCTIONS = [
   '  there — and when the list is empty, impact says whether that means "no test references it" or "no test files were',
   '  recognized in this map", so an empty list is never mistaken for safety. Test files are matched by path only — a bundle',
   '  scanned by a much older engine carries no such marks at all, and impact says so instead of implying "no tests exist";',
+  '- `overview` / `search` / `refs` / `map` / `impact` take an optional **`exclude`** (comma-separated path patterns) that drops',
+  '  matching names from that call only — nothing is persisted. Use it instead of assuming the engine knows your project layout',
+  '  (sample corpora, vendored code, generated files). Multi-segment patterns (`tests/fixtures`) match a **consecutive** segment',
+  '  sequence; single-segment ones (`vendor`) match a directory segment at any level or a file-name stem; matching is',
+  '  case-insensitive; no wildcards. Every drop is counted next to the list it affected, and the project totals never change.',
 ].join('\n');
 
 export function buildIndex(b) {
@@ -94,11 +99,16 @@ export function buildIndex(b) {
   return { b, byId, files, ins, outs };
 }
 
+/**
+ * `exclude` 的**参数说明**（写在 5 个“会列出名字”的工具上）—— 调用前就看得到，不用读文档。
+ */
+const EXCLUDE_DOC = 'Comma-separated path patterns; drops matching names from THIS call only (nothing is persisted) and reports how many were dropped. Matching is fixed and simple: a multi-segment pattern like `tests/fixtures` matches a **consecutive** segment sequence (matches `a/tests/fixtures/b.java`, NOT `tests/x/fixtures/y`); a single-segment pattern like `vendor` matches a directory segment at any level OR a file-name stem (so it also drops `vendor.ts`); always **case-insensitive**. No wildcards and no extension patterns (`*.g.cs` belongs in atlas.ignore, not here). Project totals are never changed by it.';
+
 const TOOLS = [
   {
     name: 'overview',
     description: 'Project overview: size, systems/modules, most depended-on symbols, largest files, plus a freshness check (files already in the map that changed on disk after the scan — it does not see files added or removed). Call this first to get the big picture.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: { type: 'object', properties: { exclude: { type: 'string', description: EXCLUDE_DOC } }, additionalProperties: false },
   },
   {
     name: 'search',
@@ -110,6 +120,7 @@ const TOOLS = [
         scope: { type: 'string', enum: ['any', 'type', 'member'], description: 'Where to search: any (default, types + members) / type (type names only) / member (member names only; JS/TS top-level functions are types, so this scope will not find them)' },
         kind: { type: 'string', description: 'Optional: restrict to one kind (class/interface/enum/function/module...); applies to types only' },
         limit: { type: 'number', description: 'Maximum number of results, default 20' },
+        exclude: { type: 'string', description: EXCLUDE_DOC },
       },
       required: ['query'],
       additionalProperties: false,
@@ -137,6 +148,7 @@ const TOOLS = [
         name: { type: 'string' },
         direction: { type: 'string', description: 'in | out | both (default both)' },
         limit: { type: 'number', description: 'Default 30' },
+        exclude: { type: 'string', description: EXCLUDE_DOC },
       },
       required: ['name'],
       additionalProperties: false,
@@ -162,6 +174,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         budget: { type: 'number', description: 'Token budget (estimated), default 4000' },
+        exclude: { type: 'string', description: EXCLUDE_DOC },
       },
     },
   },
@@ -173,6 +186,7 @@ const TOOLS = [
       properties: {
         name: { type: 'string', description: 'Type name / qualified name / id' },
         depth: { type: 'number', description: 'How many levels, 1-4, default 2' },
+        exclude: { type: 'string', description: EXCLUDE_DOC },
       },
       required: ['name'],
     },
@@ -392,14 +406,109 @@ export function freshnessNote(b) {
     `⚠ ${cap(changed)} mapped files changed after this snapshot${timeOnly ? ` (${cap(timeOnly)} timestamp-only)` : ''}${gone ? `, and ${cap(gone)} are no longer on disk` : ''} — not reflected in the map`);
 }
 
-function toolOverview(idx) {
+// ---------------------------------------------------------------------------
+// exclude：让调用方（AI）自己排除不需要的部分
+//
+// 引擎永远认不出“这个项目里哪些是样例数据 / 生成物”——那是**项目语感**，该由调用方在调用时给。
+// 所以这里只提供一条**查询层**的通道：每次调用带、用完即弃（不落成设置；项目里固定要排除的，
+// 仍然走 atlas.ignore / 启动器里的扫描范围）。**只保留这一个**开关 —— 再开第二个（include_only 之类），
+// 引擎就开始“理解项目结构”了，又回到“按某一个项目调规则”那条老路。
+//
+// 取值语义**写死**（一眼能猜对，不需要记）：
+//   · 逗号分隔，多条
+//   · **多段项**（`tests/fixtures`）= **连续段序列**：命中 `a/tests/fixtures/b.java`，
+//     **不**命中 `tests/x/fixtures/y`（不连续就不算）
+//   · **单段项**（`vendor`）= 任意层级的**目录段**，或文件名的**主干**（排 vendor 时顺手排掉 vendor.ts）
+//   · 一律**大小写不敏感**（Windows 路径不敏感、Linux 敏感 —— 同一个 exclude 在两种机器上必须一个结果）
+//   · 只做路径段匹配：**不做通配、不看扩展名**（`*.g.cs` 那类属于项目属性，走 atlas.ignore）
+//
+// 只过滤**名单（显示）**，不改遍历、也不改项目事实（overview 的「规模」永远是整库的数）。
+// 每次排除都在名单**后面当场**写清排掉了多少 —— 尤其是“名单被排空”时必须说“全被排除”，
+// 绝不能显示成 `（0 个）` 让人读成“没有”。
+// ---------------------------------------------------------------------------
+
+/** "tests/fixtures, vendor" → [['tests','fixtures'], ['vendor']] */
+export function parseExclude(v) {
+  return String(v || '')
+    .split(',')
+    .map((s) => s.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase())
+    .filter(Boolean)
+    .map((s) => s.split('/').filter(Boolean))
+    .filter((segs) => segs.length);
+}
+
+/** 这条路径命中任一条 exclude 规则？（语义见上面那段注释） */
+export function isExcluded(patterns, filePath) {
+  if (!patterns?.length) return false;
+  const all = String(filePath || '').replace(/\\/g, '/').toLowerCase().split('/').filter(Boolean);
+  const base = all.pop() || '';
+  for (const pat of patterns) {
+    if (pat.length === 1) {
+      const stem = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
+      if (all.includes(pat[0]) || stem === pat[0]) return true;
+      continue;
+    }
+    const seq = [...all, base];   // 连续段序列：多段项必须在路径里一级不差地挨着出现
+    for (let i = 0; i + pat.length <= seq.length; i++) {
+      if (pat.every((p, j) => seq[i + j] === p)) return true;
+    }
+  }
+  return false;
+}
+
+/** 过滤一份名单（保留项 + 排除数）。调用方把 dropNote 紧跟在**这份名单**后面 */
+function applyExclude(items, patterns, pathOf) {
+  if (!patterns?.length) return { items, dropped: 0 };
+  const kept = [];
+  let dropped = 0;
+  for (const it of items) (isExcluded(patterns, pathOf(it)) ? dropped++ : kept.push(it));
+  return { items: kept, dropped };
+}
+
+/** 单位用 [中文, English] 一对传进来（i18n 那边 T() 只能挑一种） */
+const U = (pair) => (isEn ? pair[1] : pair[0]);
+
+/**
+ * exclude 的自报行（紧跟在被它过滤的那份名单后面）。
+ * `kept` 为 0 时必须明说“这个名单的项全被排除” —— 否则读者会把它读成“没有”。
+ * `pool = true` 用于“先过滤再取前 N 名”的榜（overview 热点榜 / 最大的文件 · map 骨架）：
+ * 那时被排除的不是榜单里的 8 行，而是**候选池** —— 不说清就变成“从 8 行里排掉了 134 个”这种假精度。
+ */
+function dropNote(patterns, dropped, kept, unit, pool = false) {
+  if (!dropped) return '';
+  const u = U(unit);
+  const which = patterns.map((p) => p.join('/')).join(', ');
+  if (pool) {
+    return kept
+      ? T(`  （exclude "${which}"：候选里排除了 ${fmt(dropped)} 个${u}，下面这个榜是按剩下的排的）`, `  (exclude "${which}": dropped ${fmt(dropped)} ${u} from the candidate pool; the list below is ranked from what is left)`)
+      : T(`  （exclude "${which}"：候选里的 ${fmt(dropped)} 个${u}全被排除 —— 这个榜是空的）`, `  (exclude "${which}": the whole candidate pool (${fmt(dropped)} ${u}) was dropped — this list is empty)`);
+  }
+  return kept
+    ? T(`  （exclude "${which}"：本次排除了 ${fmt(dropped)} 个${u}）`, `  (exclude "${which}": dropped ${fmt(dropped)} ${u})`)
+    : T(`  （exclude "${which}"：本次排除了 ${fmt(dropped)} 个${u} —— 这个名单的项全被排除）`, `  (exclude "${which}": dropped ${fmt(dropped)} ${u} — the whole list was dropped)`);
+}
+
+/** exclude 写了错字、在图里一条路径都没命中 → 明说（否则调用方会以为过滤生效了） */
+function excludeMissNote(patterns, b) {
+  if (!patterns?.length) return '';
+  if (b.files.some((f) => isExcluded(patterns, f.path))) return '';
+  const which = patterns.map((p) => p.join('/')).join(', ');
+  return T(`（exclude "${which}" 在图里没匹配到任何路径 —— 检查一下写法？单段项按目录段或文件名主干匹配，多段项要连续出现）`,
+    `(exclude "${which}" matched no path in this map — check the spelling? single-segment patterns match a directory segment or a file-name stem; multi-segment ones must appear consecutively)`);
+}
+
+function toolOverview(idx, a) {
   const b = idx.b;
+  const ex = parseExclude(a?.exclude);
+  const pathOfType = (t) => idx.files.get(t.file)?.path || '';
   // 热点榜按“有证据的引用数”排（并列再按原始引用数）——
   // 不这么排的话，“同名但无关”的边会把一个没人真用的类型顶到第一（实测样本上就是这样）
-  const topIn = b.types.slice()
-    .sort((a, c) => (evidencedIn(idx, c) - evidencedIn(idx, a)) || (c.fanIn - a.fanIn))
-    .slice(0, 8);
-  const bigFiles = b.files.slice().sort((a, c) => c.code - a.code).slice(0, 6);
+  // exclude 在**切片之前**生效：否则排掉两条就只剩 6 条了（名单会莫名其妙变短）
+  const hot = applyExclude(b.types.slice()
+    .sort((a, c) => (evidencedIn(idx, c) - evidencedIn(idx, a)) || (c.fanIn - a.fanIn)), ex, pathOfType);
+  const topIn = hot.items.slice(0, 8);
+  const big = applyExclude(b.files.slice().sort((a, c) => c.code - a.code), ex, (f) => f.path);
+  const bigFiles = big.items.slice(0, 6);
   const lines = [];
   lines.push(T(`项目：${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`, `Project: ${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`));
   const roots = (b.source.roots || []).join('  ');
@@ -446,7 +555,11 @@ function toolOverview(idx) {
     return T(`  ${t.fqn} [${t.kind}] 被引用 ${t.fanIn} 次${note} · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced ${t.fanIn} times${note} · ${idx.files.get(t.file)?.path}`);
   };
   lines.push(T('被依赖最多（改动的波及面最大；按“有证据的引用次数”排 —— 仅同名的边不算，见 refs）：\n', 'Most depended-on (biggest blast radius; ranked by references with evidence — same-name-only edges do not count, see refs):\n') + topIn.map(hotLine).join('\n'));
+  if (hot.dropped) lines.push(dropNote(ex, hot.dropped, topIn.length, ['类型', 'types'], true));
   lines.push(T('最大的文件（按代码行）：\n', 'Largest files (by code lines):\n') + bigFiles.map((f) => T(`  ${f.path}  ${fmt(f.code)} 代码行`, `  ${f.path}  ${fmt(f.code)} code lines`)).join('\n'));
+  if (big.dropped) lines.push(dropNote(ex, big.dropped, bigFiles.length, ['文件', 'files'], true));
+  const miss = excludeMissNote(ex, b);
+  if (miss) lines.push(miss);
   lines.push(T('深入用：search / symbol / refs / subgraph / file', 'Dig deeper with: search / symbol / refs / subgraph / file'));
   return lines.join('\n');
 }
@@ -465,7 +578,7 @@ function toolSearch(idx, a) {
   hits.sort((x, y) => y.fanIn - x.fanIn);
 
   // 成员命中：谁定义了这个成员（搜 “OnPaint” 时这是主要价值）
-  const memberHits = [];
+  let memberHits = [];
   if (scope !== 'type') {
     for (const t of idx.b.types) {
       for (const m of t.memberList || []) {
@@ -475,10 +588,27 @@ function toolSearch(idx, a) {
     memberHits.sort((x, y) => y.t.fanIn - x.t.fanIn);
   }
 
-  if (!hits.length && !memberHits.length) return T(`没有匹配 "${a.query}" 的符号（类型名和成员名都找过了）。`, `No symbol matches "${a.query}" (both type names and member names were searched).`);
+  // exclude：命中被排空的时刻**不许**说成“没有匹配”——那会读成“这个项目里没有它”
+  const ex = parseExclude(a?.exclude);
+  const pathOfType = (t) => idx.files.get(t.file)?.path || '';
+  const hAll = applyExclude(hits, ex, pathOfType);
+  const mAll = applyExclude(memberHits, ex, (h) => pathOfType(h.t));
+  hits = hAll.items;
+  memberHits = mAll.items;
+  const dropped = hAll.dropped + mAll.dropped;
+
+  if (!hits.length && !memberHits.length) {
+    if (dropped) {
+      const which = ex.map((p) => p.join('/')).join(', ');
+      return T(`匹配到 ${fmt(dropped)} 个（类型 + 成员），但都被 exclude "${which}" 排除了 —— 去掉 exclude 再看。`,
+        `${fmt(dropped)} match(es) (types + members) were all dropped by exclude "${which}" — retry without it.`);
+    }
+    return T(`没有匹配 "${a.query}" 的符号（类型名和成员名都找过了）。`, `No symbol matches "${a.query}" (both type names and member names were searched).`);
+  }
 
   const out = [];
   out.push(T(`匹配：${hits.length} 个类型 · ${memberHits.length} 个成员（按被引用次数排序）`, `Matches: ${hits.length} types · ${memberHits.length} members (sorted by reference count)`));
+  if (dropped) out.push(dropNote(ex, dropped, hits.length + memberHits.length, ['命中', 'hits']));
   if (hits.length) {
     out.push(T(`类型（显示前 ${Math.min(hits.length, limit)}）：`, `Types (first ${Math.min(hits.length, limit)}):`));
     for (const t of hits.slice(0, limit)) {
@@ -492,6 +622,8 @@ function toolSearch(idx, a) {
     }
     out.push(T('（成员名后面要看它的上下文，用 symbol 加类型名/id）', '(to see a member in context, call symbol with the type name / id)'));
   }
+  const sMiss = excludeMissNote(ex, idx.b);
+  if (sMiss) out.push(sMiss);
   return out.join('\n');
 }
 
@@ -535,8 +667,16 @@ function toolRefs(idx, a) {
   const limit = Math.min(Number(a.limit) || 30, 200);
   const out = [];
   let sawNameOnly = false;
+  const ex = parseExclude(a?.exclude);
   const show = (es, label, pick) => {
-    if (!es.length) { out.push(T(`${label}：无`, `${label}: none`)); return; }
+    const f = applyExclude(es, ex, (e) => idx.files.get(pick(e).file)?.path || '');
+    if (!f.items.length && !f.dropped) { out.push(T(`${label}：无`, `${label}: none`)); return; }
+    if (!f.items.length) {
+      // 整份名单被排空：不能说“无”（那是静默谎言），要说清是被 exclude 排掉的
+      out.push(T(`${label}：本次全部被 exclude 排除（${fmt(f.dropped)} 条边）`, `${label}: everything dropped by exclude (${fmt(f.dropped)} edges)`));
+      return;
+    }
+    es = f.items;
     // 有证据的排前面（同文件 > 有 import 支撑 > 仅同名），同档再按权重：
     // 否则一堆“仅同名”的噪声会把真正的那几条挤出 limit
     es.sort((x, y) => (EVIDENCE_RANK[evidenceOf(idx, y)] - EVIDENCE_RANK[evidenceOf(idx, x)]) || (y.w - x.w));
@@ -550,9 +690,12 @@ function toolRefs(idx, a) {
       out.push(T(`  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (继承)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`, `  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (inherits)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`) + evidenceTag(ev));
     }
     if (es.length > limit) out.push(T(`  …还有 ${fmt(es.length - limit)} 条没显示（limit 可调，上限 200）`, `  …${fmt(es.length - limit)} more not shown (limit is adjustable, max 200)`));
+    if (f.dropped) out.push(dropNote(ex, f.dropped, es.length, ['条边', 'edges']));
   };
   if (dir === 'in' || dir === 'both') show(idx.ins.get(t.id) || [], T('被谁引用', 'referenced by'), (e) => idx.byId.get(e.from));
   if (dir === 'out' || dir === 'both') show(idx.outs.get(t.id) || [], T('引用了谁', 'references'), (e) => idx.byId.get(e.to));
+  const rMiss = excludeMissNote(ex, idx.b);
+  if (rMiss) out.push(rMiss);
   const legend = sawNameOnly
     ? T('（边尾的标签：同文件 / import 有支撑 / 仅同名 —— 后两档是按模块名近似判的；“仅同名”多半只是名字巧合，别当真）\n', '(tag after each edge: same file / import-backed / same name only — the latter two are matched by module name; "same name only" is usually a coincidence, do not trust it)\n')
     : '';
@@ -692,9 +835,14 @@ function toolMap(idx, a) {
   const push = (s) => { const t = est(s); if (used + t > budget) return false; out.push(s); used += t; return true; };
   const pth = (t) => idx.files.get(t.file)?.path || '';
   const score = (t) => t.fanIn + (t.memberList?.length || 0) / 10;
+  const ex = parseExclude(a?.exclude);
+  const mt = applyExclude(b.types, ex, pth);
+  const types = mt.items;
 
   push(`# ${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}` : ''}`);
   push(T(`${fmt(b.files.length)} 文件 / ${fmt(b.totals.types)} 类型 / ${fmt(b.totals.edges)} 依赖边 / ${fmt(b.totals.code)} 行代码`, `${fmt(b.files.length)} files / ${fmt(b.totals.types)} types / ${fmt(b.totals.edges)} dependency edges / ${fmt(b.totals.code)} lines of code`));
+  // 上面这行是**项目事实**，exclude 不动它；排除了多少单独说
+  if (mt.dropped) push(dropNote(ex, mt.dropped, types.length, ['类型', 'types'], true));
   push('');
 
   const systems = b.facets?.systems || [];
@@ -702,7 +850,7 @@ function toolMap(idx, a) {
     push(T(`## 系统（${systems.length} 个，按体量排序）`, `## Systems (${systems.length}, largest first)`));
     for (const s of [...systems].sort((x, y) => y.types - x.types)) {
       if (!push(T(`[${sysLabel(s.name)}] ${s.types} 类型 / ${s.files} 文件`, `[${sysLabel(s.name)}] ${s.types} types / ${s.files} files`))) break;
-      for (const t of b.types.filter((x) => x.system === s.name).sort((x, y) => score(y) - score(x)).slice(0, 5)) {
+      for (const t of types.filter((x) => x.system === s.name).sort((x, y) => score(y) - score(x)).slice(0, 5)) {
         if (!push(T(`  - ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`, `  - ${t.fqn} [${t.kind}] refs ${t.fanIn} · ${pth(t)}`))) break;
       }
       if (used >= budget * 0.6) break;
@@ -712,7 +860,7 @@ function toolMap(idx, a) {
 
   if (used < budget) {
     push(T('## 关键类型（被引用最多 = 改动的波及面最大）', '## Key types (most referenced = biggest blast radius)'));
-    for (const t of [...b.types].sort((x, y) => y.fanIn - x.fanIn).slice(0, 25)) {
+    for (const t of [...types].sort((x, y) => y.fanIn - x.fanIn).slice(0, 25)) {
       if (!push(T(`  ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`, `  ${t.fqn} [${t.kind}] refs ${t.fanIn} · ${pth(t)}`))) break;
     }
     push('');
@@ -720,7 +868,7 @@ function toolMap(idx, a) {
 
   if (used < budget * 0.8) {
     push(T('## 关键成员（挑最重要的几个类型）', '## Key members (from the most important types)'));
-    for (const t of [...b.types].sort((x, y) => score(y) - score(x)).slice(0, 6)) {
+    for (const t of [...types].sort((x, y) => score(y) - score(x)).slice(0, 6)) {
       const ms = (t.memberList || []).slice(0, 6);
       if (!ms.length) continue;
       if (!push(`  ${t.name}: ${ms.map((m) => m.n + sigText(m)).join(', ')}`)) break;
@@ -731,6 +879,8 @@ function toolMap(idx, a) {
   const warn = [];
   if (b.unresolved?.unknown) warn.push(T(`名字没匹配上的引用 ${fmt(b.unresolved.unknown)} 处（这些依赖看不到）`, `References whose name did not match: ${fmt(b.unresolved.unknown)} (those dependencies are invisible)`));
   if (b.unresolved?.ambiguous) warn.push(T(`匹配到多个目标的引用 ${fmt(b.unresolved.ambiguous)} 处（只取了一个，可能不准）`, `References matching several targets: ${fmt(b.unresolved.ambiguous)} (only one was taken — may be off)`));
+  const mapMiss = excludeMissNote(ex, b);
+  if (mapMiss) push(mapMiss);
   if (warn.length) push(`⚠ ${warn.join('；')}`);
   push(T(`（预算 ~${budget} token，实际约 ${used}；要细节：symbol(id) / refs(名字) / impact(名字)）`, `(budget ~${budget} tokens, actual ~${used}; for detail: symbol(id) / refs(name) / impact(name))`));
   return out.join('\n');
@@ -745,6 +895,7 @@ function toolImpact(idx, a) {
   if (!r.type) return r.error;
   const t0 = r.type;
   const depth = Math.max(1, Math.min(Number(a.depth) || 2, 4));
+  const ex = parseExclude(a?.exclude);
   const b = idx.b;
   const seen = new Set([t0.id]);
   let frontier = [t0.id];
@@ -764,7 +915,10 @@ function toolImpact(idx, a) {
     }
     const list = [...next.values()].sort((x, y) => (y.w + y.t.fanIn) - (x.w + x.t.fanIn));
     if (!list.length) break;
-    layers.push({ d, list });
+    // exclude 只过滤**显示**，不改遍历（seen / frontier 仍用完整名单）—— 否则“排掉一个目录”会把它下游
+    // 的东西一起藏起来，而输出里看不出来
+    const lf = applyExclude(list, ex, (x) => idx.files.get(x.t.file)?.path || '');
+    layers.push({ d, list: lf.items, dropped: lf.dropped });
     for (const x of list) seen.add(x.t.id);
     frontier = list.map((x) => x.t.id);
   }
@@ -777,15 +931,22 @@ function toolImpact(idx, a) {
   }
   for (const L of layers) {
     out.push('');
+    if (!L.list.length) {
+      // 整层被排空：绝不说“第 N 层（0 个）” —— 那会被读成“没有”
+      out.push(T(`第 ${L.d} 层：本次全部被 exclude 排除（${fmt(L.dropped)} 个类型）`, `Level ${L.d}: everything dropped by exclude (${fmt(L.dropped)} types)`));
+      continue;
+    }
     out.push(T(`第 ${L.d} 层（${L.list.length} 个）：`, `Level ${L.d} (${L.list.length}):`));
     for (const x of L.list.slice(0, 25)) {
       const kinds = [...x.kinds].map((k) => KIND[k] || k).join('/');
       out.push(`  ${x.t.fqn} [${x.t.kind}] ${kinds} ×${x.w} · ${idx.files.get(x.t.file)?.path}`);
     }
     if (L.list.length > 25) out.push(T(`  …（还有 ${L.list.length - 25} 个）`, `  …(${L.list.length - 25} more)`));
+    if (L.dropped) out.push(dropNote(ex, L.dropped, L.list.length, ['类型', 'types']));
   }
   // 会被波及的**测试文件**：单列（用户要的）——“要跑哪些测试”与“哪些生产代码要改”是两件事。
   // 按路径规则认（files[].isTest，规则见 scan.mjs 的 isTestPath）；depth 之外的层不算，和上面的层次一致。
+  const droppedTypes = layers.reduce((acc, L) => acc + (L.dropped || 0), 0);
   const testFiles = [];
   const seenTest = new Set();
   for (const L of layers) {
@@ -811,6 +972,9 @@ function toolImpact(idx, a) {
         ? T('测试文件：没有被波及（图里没有测试文件）', 'Test files: none affected (this map has no test files)')
         : T('测试文件：图里没有这个标记（既没认出测试文件，也可能是老版本引擎扫的图 —— 重新扫一次就会带上）',
           'Test files: this map carries no such mark (either no test file was recognized, or the bundle was scanned by an older engine — a re-scan adds it)')));
+    // 名单空时尤其要说清：可能是 exclude 把唯一那几个测试类型排掉了（那就不等于“没有测试会挂”）
+    if (droppedTypes) out.push(T(`  ⚠ 但本次 exclude 排除了 ${fmt(droppedTypes)} 个类型，测试名单也可能是被它排空的 —— 去掉 exclude 再确认一次。`,
+      `  ⚠ but exclude dropped ${fmt(droppedTypes)} types in this call, so the test list may have been emptied by it — retry without exclude to be sure.`));
   }
   out.push('');
   out.push(T('要注意的：', 'Worth knowing:'));
@@ -818,6 +982,8 @@ function toolImpact(idx, a) {
   if (b.unresolved?.unknown) out.push(T(`  · 本项目有 ${fmt(b.unresolved.unknown)} 处引用没匹配上任何类型（这些边不在图里）；`, `  · ${fmt(b.unresolved.unknown)} references in this project matched no type (those edges are not in the graph);`));
   if (b.unresolved?.ambiguous) out.push(T(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标，只取了一个；`, `  · ${fmt(b.unresolved.ambiguous)} references matched several same-named targets; only one was taken;`));
   out.push(T('  · 想看更宽：depth 加大（最多 4）；某个方向：refs(名字, in|out)。', '  · go wider: raise depth (max 4); one direction only: refs(name, in|out).'));
+  const iMiss = excludeMissNote(ex, b);
+  if (iMiss) out.push(iMiss);
   return out.join('\n');
 }
 

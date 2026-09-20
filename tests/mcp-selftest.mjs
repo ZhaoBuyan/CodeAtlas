@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { freshnessNote } from '../src/mcp.mjs';
+import { freshnessNote, parseExclude, isExcluded } from '../src/mcp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -336,6 +336,75 @@ check(/没认出测试文件|no such mark/.test(lNoTest),
   'impact：图里没有这个标记时明说（不把“没认出”或“引擎旧”说成“没被波及”）', lNoTest.slice(0, 80));
 nt.proc.kill('SIGKILL');
 imp.proc.kill('SIGKILL');
+
+// 单元级：exclude 的取值语义（三条，必须一眼能猜对）
+const exC = parseExclude('tests/fixtures');
+check(exC.length === 1 && exC[0].join('/') === 'tests/fixtures', 'exclude：逗号分隔的解析（含末尾斜杠 / 反斜杠 / 大小写）',
+  parseExclude('  Tests\\Fixtures/ ,  ').map((p) => p.join('/')).join(' | '));
+check(isExcluded(exC, 'a/tests/fixtures/b.java') && !isExcluded(exC, 'tests/x/fixtures/y'),
+  'exclude：多段项按**连续段序列**匹配（tests/x/fixtures/y 不算）');
+check(isExcluded(exC, 'tests/fixtures'), 'exclude：多段项命中目录本身');
+const exV = parseExclude('vendor');
+check(isExcluded(exV, 'src/vendor/lib.js') && isExcluded(exV, 'src/vendor.ts') && !isExcluded(exV, 'src/vendors/lib.js'),
+  'exclude：单段项 = 任意层级的目录段，或文件名的**主干**（vendor.ts 也排，vendors 不排）');
+check(!isExcluded(parseExclude('*.g.cs'), 'src/foo.g.cs'), 'exclude：不做通配（*.g.cs 当普通段名，什么也命中不了）');
+
+// 端到端：一个带 fixtures 噪声的小项目，把五个工具的 exclude 都走一遍
+const exTmp = path.join(os.tmpdir(), `codeatlas-exclude-${process.pid}`);
+const { out: exOut } = scanProject(exTmp, {
+  'src/core.js': 'export class Widget { }\nexport function useWidget() { return new Widget(); }\n',
+  'src/lonely.js': 'export class Lone { }\n',
+  'tests/real.test.js': 'import { Widget } from "../src/core.js";\nexport function specWidget() { return new Widget(); }\n',
+  'tests/fixtures/sample.js': 'import { Lone } from "../../src/lonely.js";\nexport function fixtureSample() { return new Lone(); }\n',
+  'tests/fixtures/noise.test.js': 'import { Widget } from "../../src/core.js";\nexport function fixtureWidget() { return new Widget(); }\n',
+});
+const exc = spawnMcp(exOut);
+await exc.ready;
+const EX = 'tests/fixtures';
+const sizeOf = (ov) => (ov.split('\n').find((l) => /^规模：|^Size: /.test(l)) || '').trim();
+
+const ovPlain = await exc.call('overview', {});
+const ovEx = await exc.call('overview', { exclude: EX });
+check(sizeOf(ovPlain) === sizeOf(ovEx) && /规模|Size/.test(sizeOf(ovEx)),
+  'exclude：**不改项目事实**（规模那行一模一样）', sizeOf(ovEx).slice(0, 40));
+check(/exclude "/.test(ovEx) && /候选里排除了|from the candidate pool/.test(ovEx),
+  'exclude：榜类名单报“候选里排除了 N 个”（不是拿 8 行的榜单说数）',
+  (ovEx.split('\n').find((l) => /exclude "/.test(l)) || '').trim().slice(0, 70));
+
+const srAll = await exc.call('search', { query: 'fixtureSample', exclude: EX });
+check(/都被 exclude|were all dropped by exclude/.test(srAll),
+  'exclude：命中被排空时**不说“没有匹配”**（那是静默谎言）', srAll.split('\n')[0].trim().slice(0, 70));
+const srSome = await exc.call('search', { query: 'Widget', exclude: EX });
+check(/specWidget/.test(srSome) && !/fixtureWidget/.test(srSome) && /src\/core\.js/.test(srSome),
+  'exclude：search 生效（真命中留下、fixtures 里的那个没了）');
+
+const imEx = await exc.call('impact', { name: 'Widget', exclude: EX });
+const tl = (imEx.split('\n').find((l) => /^会被波及的测试文件|^Test files affected/.test(l)) || '').trim();
+check(/tests\/real\.test\.js/.test(tl) && !/fixtures/.test(tl),
+  'exclude：impact 的测试文件名单也被过滤', tl.slice(0, 70));
+
+const imLone = await exc.call('impact', { name: 'Lone', exclude: EX });
+check(/全部被 exclude 排除|everything dropped by exclude/.test(imLone) && !/（0 个）|\(0\)/.test(imLone),
+  'exclude：整层被排空时说“全被排除”，**不许出现 (0 个)**',
+  (imLone.split('\n').find((l) => /exclude/.test(l)) || '').trim().slice(0, 70));
+
+const rfLone = await exc.call('refs', { name: 'Lone', direction: 'in', exclude: EX });
+check(/全部被 exclude 排除|everything dropped by exclude/.test(rfLone) && !/：无|: none/.test(rfLone),
+  'exclude：refs 整份名单被排空时不显示“无”', (rfLone.split('\n')[1] || '').trim().slice(0, 70));
+
+const mapEx = await exc.call('map', { budget: 600, exclude: EX });
+check(/exclude "/.test(mapEx.split('\n').slice(0, 3).join('\n')),
+  'exclude：map 的自报行在开头（骨架整份就是“名单”）');
+
+const missEx = await exc.call('overview', { exclude: 'zzz-nope' });
+check(/没匹配到任何路径|matched no path/.test(missEx),
+  'exclude：写错字 / 没命中时明说（否则以为过滤生效了）',
+  (missEx.split('\n').find((l) => /exclude/.test(l)) || '').trim().slice(0, 70));
+
+// 工具范围：exclude 只给“会列出名字”的 5 个；list / symbol / file 不加（浏览、单点工具加了会让人误判“这里没有”）
+const withEx = tools.result.tools.filter((t) => t.inputSchema?.properties?.exclude).map((t) => t.name).sort().join(',');
+check(withEx === 'impact,map,overview,refs,search', 'exclude 只加在 5 个“会列出名字”的工具上（list/symbol/file 不加）', withEx);
+exc.proc.kill('SIGKILL');
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');

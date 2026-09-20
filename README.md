@@ -284,6 +284,14 @@ Four details:
   `⚠ 3 mapped files changed after this snapshot (1 timestamp-only) — not reflected in the map`.
   It only re-stats the files **already in the map** (no directory walking), so **files added or removed are
   outside its scope** — a re-scan is what picks those up;
+- **Let the caller drop what it does not need**: `overview` / `search` / `refs` / `map` / `impact` all take an optional
+  `exclude` (comma-separated paths, e.g. `"tests/fixtures, vendor"`). The engine cannot know which parts of *your*
+  project are sample data or generated, so that judgement is left to the caller: multi-segment patterns match a
+  **consecutive** segment sequence, single-segment ones match a directory segment at any level or a file-name stem,
+  matching is case-insensitive, and there are no wildcards. It applies to that call only. **Every drop count is
+  reported right after the list it affected** (a list emptied by it says "everything dropped", never `0`), and project
+  facts such as the "Size" line are never changed by it (`list` / `symbol` / `file` deliberately do not take it —
+  filtering a browsing tool would read as "there is nothing here".)
 - **The AI learns the boundaries on connect**: `initialize` carries an `instructions` field (how to use this
   data, and where it is not trustworthy), and the first screen of `overview` gives the **scan root**
   (so the AI can build absolute paths and read source itself), a **data snapshot** (generation time /

@@ -153,7 +153,17 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `impact(name, depth)` | **Blast radius**: who is affected if you change it (multi-hop), plus the test files that would be affected |
 | `file(path)` | The types inside one file |
 
-Each tool lists a bounded number of entries and says "first N of M" when it truncates (`limit` / `members` raise it).\nEvery result ends with a snapshot stamp (UTC).
+Each tool lists a bounded number of entries and says "first N of M" when it truncates (`limit` / `members` raise it).
+Every result ends with a snapshot stamp (UTC).
+
+`overview` / `search` / `refs` / `map` / `impact` also take an optional **`exclude`** (comma-separated paths, e.g.
+`exclude: "tests/fixtures, vendor"`), which drops matching names from **that call only** (nothing is persisted).
+The engine cannot know which parts of *your* project are sample data or generated — that judgement is left to the
+caller. Three rules, easy to guess: a multi-segment pattern (`tests/fixtures`) matches a **consecutive** segment
+sequence; a single-segment one (`vendor`) matches a directory segment at any level **or a file-name stem**
+(so `vendor.ts` is dropped too); matching is **case-insensitive**; no wildcards. **Every drop is counted right after
+the list it affected** (a list emptied by it says "everything dropped", never `0`), and project facts such as
+overview's "Size" line are never changed by it.
 
 Suggested flow: **`map` for the big picture → `search` to locate → `symbol` / `refs` / `impact` to go deep**. Far
 cheaper than having the AI read files one by one.
