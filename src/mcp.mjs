@@ -55,8 +55,10 @@ const INSTRUCTIONS = [
   '  unmatched and ambiguous references are reported explicitly in overview and impact;',
   '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `backed` (the',
   '  referring file imports a module of that name, or imports the target\'s namespace / package, or both sides sit in the',
-  '  same namespace / package — strong evidence, not proof) > `same name only` (usually a coincidence; do not read it as a',
-  '  real dependency). Solitary `same name only` edges are why a raw reference count can be misleading, so the `overview`',
+  '  same namespace / package, or a parent namespace in C# / VB — strong evidence, not proof) > `same name only` (this',
+  '  bucket holds both coincidences and real references we failed to recognize — a parent namespace needs no `using`, and a',
+  '  qualified name like `A.B.C` is not covered either — so check the source when in doubt). Solitary `same name only` edges are',
+  '  why a raw reference count can be misleading, so the `overview`',
   '  "most depended-on" list is ranked by references with evidence instead (the number in brackets is how many count);',
   '- Files with parse errors are flagged individually; their data may be incomplete;',
   '- Top-level functions in JS / TS are recorded as [function] **types**, not members: search(scope="member") will not find',
@@ -251,7 +253,10 @@ function evidenceOf(idx, e) {
   if (f && target.path) {
     for (const raw of f.imports || []) if (importMatchesTarget(raw, target)) return 'import';
   }
-  // 同命名空间 / 同包（C# 同 namespace、Java 同 package 里互相引用根本不需要 import）—— 也算有支撑
+  // C# / VB：子命名空间**不用 using 也能引用父命名空间里的类型**（语言语义如此）。实测一个 C# 项目里有 7 条
+  // 真引用因此被留在“仅同名”档，AI 照标签会把它们丢掉。只对 C# 家族做（Java/Kotlin 不适用）。
+  const dstExt = String(target.path || '').split('.').pop().toLowerCase();
+  if ((dstExt === 'cs' || dstExt === 'vb') && dst.ns && src.ns && src.ns.startsWith(`${dst.ns}.`)) return 'import';
   if (dst.ns && src.ns === dst.ns) return 'import';
   return 'name';
 }
@@ -789,6 +794,7 @@ function toolRefs(idx, a) {
   const limit = Math.min(Number(a.limit) || 30, 200);
   const out = [];
   let sawNameOnly = false;
+  let sawAnyEdge = false;
   const ex = parseExclude(a?.exclude);
   const show = (es, label, pick) => {
     const f = applyExclude(es, ex, (e) => idx.files.get(pick(e).file)?.path || '');
@@ -809,6 +815,7 @@ function toolRefs(idx, a) {
       const o = pick(e);
       const ev = evidenceOf(idx, e);
       if (ev === 'name') sawNameOnly = true;
+      sawAnyEdge = true;
       out.push(T(`  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (继承)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`, `  ${o.fqn} [${o.kind}]${e.kind === 'inherit' ? ' (inherits)' : ''} ×${e.w}  ${idx.files.get(o.file)?.path}:${o.line}`) + evidenceTag(ev));
     }
     if (es.length > limit) out.push(T(`  …还有 ${fmt(es.length - limit)} 条没显示（limit 可调，上限 200）`, `  …${fmt(es.length - limit)} more not shown (limit is adjustable, max 200)`));
@@ -818,15 +825,26 @@ function toolRefs(idx, a) {
   if (dir === 'out' || dir === 'both') show(idx.outs.get(t.id) || [], T('引用了谁', 'references'), (e) => idx.byId.get(e.to));
   // ② 复测报告：顶层函数（JS/TS/Python）在这套模型里是**类型**，光给边不给行号时 AI 还得自己翻文件找“第几行调的”。
   // 所以类型也照样给“调用 / 访问位置”（按名字匹配；该类型自己的声明行排掉）。
-  const typeSites = collectUses(idx, [t.name, t.fqn], new Set([`${t.file}#${t.line}`]));
+  // ① 排除集要连**同名成员**的声明行一起排 —— C#/Java/Kotlin 的**构造函数与类同名**，
+  // 不排的话每个类的回答里都会多出一条“假调用点”（实测一个 C# 项目 20 个类型各中一个，共 20 处）。
+  const typeDecl = memberDeclKeys(idx, [t.name, t.fqn]);
+  typeDecl.add(`${t.file}#${t.line}`);
+  const typeSites = collectUses(idx, [t.name, t.fqn], typeDecl);
   if (typeSites.length || !hasUseData(idx)) {
     out.push('');
     out.push(usesLines(idx, typeSites, hasUseData(idx)));
+    // 同名符号会混进来（实测：`refs(某个叫 T 的函数)` 的 557 处里混着 C# 的 `L.T(...)`）
+    const shared = idx.b.types.filter((x) => x.name === t.name).length > 1
+      || idx.b.types.some((x) => (x.memberList || []).some((m) => m.n === t.name));
+    if (typeSites.length && shared) {
+      out.push(T('  （按名字匹配：同名的成员 / 类型也会混进这份位置里）',
+        '  (matched by name: same-named members / types elsewhere are mixed in)'));
+    }
   }
   const rMiss = excludeMissNote(ex, idx.b);
   if (rMiss) out.push(rMiss);
-  const legend = sawNameOnly
-    ? T('（边尾的标签：同文件 / **有支撑**（import、或同命名空间 / 同包）/ 仅同名 —— “仅同名”多半只是名字巧合，别当真）\n', '(tag after each edge: same file / backed (an import, or the same namespace / package) / same name only — the last one is usually a coincidence, do not trust it)\n')
+  const legend = sawAnyEdge
+    ? T('（边尾的标签：同文件 / **有支撑**（import、或同命名空间 / 同包）/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (an import, or the same namespace / package) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
     : '';
   return `${t.fqn} [${t.kind}]\n${legend}${out.join('\n')}`;
 }

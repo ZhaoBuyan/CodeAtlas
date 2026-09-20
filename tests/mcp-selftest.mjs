@@ -85,7 +85,7 @@ check(refs.length > 10 && /×/.test(refs), 'refs', refs.split('\n')[0].slice(0, 
 const refsTrunc = await call('refs', { name: String(hottest.id), direction: 'in', limit: 1 });
 check(hottest.fanIn <= 1 || /还有 .*条没显示|more not shown/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
 
-// 引用证据强度：refs 每条边挂一个标签（同文件 / import 有支撑 / 仅同名），
+// 引用证据强度：refs 每条边挂一个标签（同文件 / 有支撑（import、同命名空间 / 同包、C# 父命名空间）/ 仅同名），
 // overview 热点榜按“有证据的引用数”排 —— 免得好多“同名但无关”的边把没人真用的类型顶到第一
 const refsAll = await call('refs', { name: String(hottest.id), direction: 'in', limit: 200 });
 const tagCount = (refsAll.match(/\[(同文件|有支撑|仅同名|same file|backed|same name only)\]/g) || []).length;
@@ -573,6 +573,13 @@ const { out: nsOut } = scanProject(nsTmp, {
   'a/A.cs': 'namespace Demo.A\n{\n    public class Alpha\n    {\n        public int Value() { return 1; }\n    }\n}\n',
   'a/B.cs': 'namespace Demo.A\n{\n    public class Beta\n    {\n        public Alpha Make() { return new Alpha(); }\n    }\n}\n',
   'c/C.cs': 'using Demo.A;\n\nnamespace Demo.C\n{\n    public class Gamma\n    {\n        public Alpha Make() { return new Alpha(); }\n    }\n}\n',
+  // 父命名空间：子命名空间里引用父命名空间的类型**不需要 using**（C# 语义）—— 实测一个真实 C# 项目有 7 条真引用
+  // 因此被留在“仅同名”档，AI 照标签会把它们丢掉
+  'p/Root.cs': 'namespace Demo\n{\n    public class Root\n    {\n    }\n}\n',
+  'q/Kid.cs': 'namespace Demo.Deep\n{\n    public class Kid\n    {\n        public Root Field;\n    }\n}\n',
+  // 构造函数与类同名（C#/Java/Kotlin 必然如此）：它的声明行不能算“调用点”
+  'r/Widget.cs': 'namespace Demo.R\n{\n    public class Widget\n    {\n        public Widget() { }\n    }\n}\n',
+  'r/Use.cs': 'namespace Demo.R\n{\n    public class User\n    {\n        public Widget Make() { return new Widget(); }\n    }\n}\n',
 }, 'csharp');
 const ns = spawnMcp(nsOut);
 await ns.ready;
@@ -585,6 +592,25 @@ check(backed >= 2 && nameOnly === 0,
 const ovNs = await ns.call('overview', {});
 check(/Alpha|Beta|Gamma/.test(ovNs.split('\n').find((l) => /被引用 \d+ 次|referenced \d+ times/.test(l)) || ''),
   '③ overview 热点榜能看见被真依赖的类型（实样本上以前会把第一名挤掉）');
+// 父命名空间不许 using 也算有支撑（C# 语义），且只对 C# 家族生效
+const rRoot = await ns.call('refs', { name: 'Demo.Root', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rRoot) && !/\[(仅同名|same name only)\]/.test(rRoot),
+  '③ C# 父命名空间（子ns下引用父ns类型）也算有支撑',
+  (rRoot.split('\n').find((l) => /Root/.test(l)) || '').trim().slice(0, 70));
+// 类型回答的位置段不许把“同名成员（构造函数）的声明行”当调用点 —— 实测一个 C# 项目 20 个类型各中一个
+const nsBundle = readBundle(nsOut);
+const ctorOwner = nsBundle.types.find((t) => t.name === 'Widget' && (t.memberList || []).some((m) => m.n === 'Widget' && m.k === 'ctor'));
+if (ctorOwner) {
+  const ctorLine = ctorOwner.memberList.find((m) => m.n === 'Widget' && m.k === 'ctor').l;
+  const ctorPath = nsBundle.files[ctorOwner.file].path;
+  const rW = await ns.call('refs', { name: 'Demo.R.Widget', direction: 'in' });
+  const siteRows = rW.split('\n').filter((l) => /^\s+\S+:\d+\t(调用|访问|call|access)$/.test(l));
+  check(siteRows.length > 0 && !siteRows.some((l) => l.includes(`${ctorPath}:${ctorLine}`)),
+    '① 类型回答的位置段排除“同名成员的声明行”（C# 构造函数必然与类同名）',
+    `位置 ${siteRows.length} 行，构造函数声明行 ${ctorPath}:${ctorLine}`);
+} else {
+  check(false, '① 类型回答的位置段排除“同名成员的声明行”', '夹具里没找到构造函数，门没意义');
+}
 ns.proc.kill('SIGKILL');
 
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
