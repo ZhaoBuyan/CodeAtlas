@@ -14,6 +14,15 @@ namespace Fixture.Sample
         /// <summary>打招呼：测“成员签名”（参数表 + 返回类型）的抽取。</summary>
         public virtual string Greet(string tone, int times) { return tone; }
 
+        /// <summary>普通字段：测“字段要能被列出来”（v1.4.0 复测报告 P1：计了数却不列）。</summary>
+        public int Age = 0;
+
+        /// <summary>常量字段：同上，走的是 field_declaration → variable_declaration 这条路。</summary>
+        public const string Species = "animal";
+
+        /// <summary>自定义类型的字段：名字要取字段名（Mate），不能取类型名（Animal）。</summary>
+        public Animal Mate = null;
+
         public class Nested
         {
             public int Depth { get; set; }

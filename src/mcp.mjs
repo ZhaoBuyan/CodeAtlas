@@ -305,11 +305,18 @@ function toolOverview(idx) {
   const when = String(b.generated || '').replace('T', ' ').slice(0, 19) + ' UTC';
   lines.push(T(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`, `Snapshot: ${when} · scan took ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · languages ${so.lang || 'auto'} · max file ${so.maxKb || 1024}KB · ${so.incremental ? 'incremental' : 'full'}`));
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
-  // 被默认跳过表命中的目录：AI 也该知道“这张图缺了东西”（诚实优先）。老 bundle 没这个字段 → 当空处理
-  const ignDirs = Object.entries(b.stats?.skipped?.ignoredDirs || {}).sort((x, y) => y[1] - x[1]).slice(0, 8);
+  // 被默认跳过表命中的目录：AI 也该知道“这张图缺了东西”（诚实优先）。老 bundle 没这个字段 → 当空处理。
+  // **项目规则跳掉的那几类排前面**（那是"这个项目自己选跳的"，通常才是需要注意的），
+  // 默认表命中的（.git / node_modules / dist…）跟在后面 —— 不删名字（删了就是瞒着人），只把顺序分开
+  const projDirs = new Set(Object.keys(b.stats?.skipped?.projectDirs || {}));
+  const allIgn = Object.entries(b.stats?.skipped?.ignoredDirs || {}).sort((x, y) => y[1] - x[1]);
+  const ordered = [...allIgn.filter(([n]) => projDirs.has(n)), ...allIgn.filter(([n]) => !projDirs.has(n))];
+  const ignDirs = ordered.slice(0, 8);
   if (ignDirs.length) {
-    const detail = ignDirs.map(([n, c]) => `${n}(${c})`).join(' · ');
-    lines.push(T(`跳过目录：${detail} —— 这些目录里的源码不在本图里（默认跳过表命中）`, `Skipped dirs: ${detail} — source inside them is not in this map (matched the default skip list)`));
+    const detail = ignDirs.map(([n, c]) => `${n}(${c})`).join(' · ')
+      + (ordered.length > ignDirs.length ? T(` …共 ${ordered.length} 类`, ` …${ordered.length} dir names in total`) : '')
+      + (projDirs.size ? T(`（前 ${projDirs.size} 个是项目规则跳的${ordered.length > projDirs.size ? '，其余是默认表命中' : ''}）`, ` (the first ${projDirs.size} came from project rules${ordered.length > projDirs.size ? ', the rest matched the default list' : ''})`) : '');
+    lines.push(T(`跳过目录：${detail} —— 这些目录里的源码不在本图里`, `Skipped dirs: ${detail} — source inside them is not in this map`));
   }
   if (b.totals.parseErrors) {
     const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
@@ -391,14 +398,24 @@ function toolSymbol(idx, a) {
   const lines = [];
   lines.push(`${t.fqn}${sigText(t)}  [${t.kind}]${t.tags?.length ? `  (${t.tags.join(', ')})` : ''}`);
   lines.push(T(`文件：${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   系统：${t.system ? sysLabel(t.system) : '（未分组）'}${t.systemRule ? `（规则 ${t.systemRule}）` : ''}`, `File: ${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   System: ${t.system ? sysLabel(t.system) : '(ungrouped)'}${t.systemRule ? ` (rule ${t.systemRule})` : ''}`));
-  lines.push(T(`规模：${t.code} 行代码（该类型区间）· 复杂度≈${t.complexity} · 成员 ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`, `Size: ${t.code} lines of code (this type's range) · complexity≈${t.complexity} · members ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none'}`));
+  const mKinds = Object.entries(t.members || {});
+  const mTotal = mKinds.reduce((a, [, v]) => a + v, 0);   // 真实总数（直方图求和）
+  const mListed = (t.memberList || []).length;
+  lines.push(T(`规模：${t.code} 行代码（该类型区间）· 复杂度≈${t.complexity} · 成员 ${mKinds.map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`, `Size: ${t.code} lines of code (this type's range) · complexity≈${t.complexity} · members ${mKinds.map(([k, v]) => `${k} ${v}`).join(' · ') || 'none'}`));
   lines.push(T(`依赖：被引用 ${t.fanIn} 次 · 引用别人 ${t.fanOut} 次`, `Dependencies: referenced ${t.fanIn} times · references ${t.fanOut} times`));
   if (t.bases?.length) lines.push(T(`基类/接口：${t.bases.join(', ')}`, `Base types / interfaces: ${t.bases.join(', ')}`));
   if (f?.errors) lines.push(T(`注意：该文件有 ${f.errors} 处解析异常，数据可能不全`, `Note: this file has ${f.errors} parse errors — its data may be incomplete`));
   lines.push(T(`说明：${t.doc || '（源码里没有注释说明）'}`, `Doc: ${t.doc || '(no doc comment in the source)'}`));
   if (members.length) {
-    lines.push(T(`成员（前 ${members.length} / 共 ${(t.memberList || []).length}）：`, `Members (first ${members.length} / ${(t.memberList || []).length} total):`));
+    // “共 N”写**真实总数**（分档求和），不是列表长度 —— 两者以前相等，现在不相等了就得说清
+    lines.push(T(`成员（前 ${members.length} / 共 ${mTotal}）：`, `Members (first ${members.length} / ${mTotal} total):`));
     for (const m of members) lines.push(`  ${m.l}\t${m.k} ${m.n}${sigText(m)}${m.d ? ` — ${String(m.d).slice(0, 80)}` : ''}`);
+    if (mListed < mTotal) {
+      lines.push(T(`  …另有 ${mTotal - mListed} 个成员的名字没能从语法树里取到，只计入了上面的分档`, `  …${mTotal - mListed} more members had no extractable name; they are only counted above`));
+    }
+  } else if (mTotal) {
+    // 有成员却一个也没列出来：说清楚是什么情况，别让人以为它是空类型
+    lines.push(T(`成员：共 ${mTotal} 个（${mKinds.map(([k, v]) => `${k} ${v}`).join(' · ')}），但这些成员的名字没能从语法树里取到，暂不单列`, `Members: ${mTotal} total (${mKinds.map(([k, v]) => `${k} ${v}`).join(' · ')}), but none of their names could be extracted — not listed individually`));
   }
   return lines.join('\n');
 }
@@ -416,7 +433,9 @@ function toolRefs(idx, a) {
     // 有证据的排前面（同文件 > 有 import 支撑 > 仅同名），同档再按权重：
     // 否则一堆“仅同名”的噪声会把真正的那几条挤出 limit
     es.sort((x, y) => (EVIDENCE_RANK[evidenceOf(idx, y)] - EVIDENCE_RANK[evidenceOf(idx, x)]) || (y.w - x.w));
-    out.push(`${label}（${es.length}）：`);
+    // 抬头把条数与**总次数**都写出来：AI 看单条 ×数 与看总量是两件事（只写条数会误读量级）
+    const wsum = es.reduce((a, e) => a + (e.w || 1), 0);
+    out.push(T(`${label}（${es.length} 条边 · 共 ${fmt(wsum)} 次）：`, `${label} (${es.length} edges · ${fmt(wsum)} in total):`));
     for (const e of es.slice(0, limit)) {
       const o = pick(e);
       const ev = evidenceOf(idx, e);

@@ -95,6 +95,11 @@ const CASES = [
       ['IWalker', 'Walk', '(): void'],
       // 属性：类型来自 type 字段（`Name: string`，没有参数表）
       ['Animal', 'Name', ': string'],
+      // 字段：**既要能被列出来**（v1.4.0 复测报告 P1：计了数却不列），也要带类型
+      ['Animal', 'Age', ': int'],
+      ['Animal', 'Species', ': string'],
+      // 自定义类型的字段：名字必须是 Mate，不能变成类型名 Animal（踩过：Palette 七个字段全叫 Color）
+      ['Animal', 'Mate', ': Animal'],
     ],
     membersMin: 7,
     errorsMax: 0, // 主构造函数 / file 修饰符 / 原始字符串都要能被预处理掉
@@ -410,6 +415,15 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
       push(Boolean(e) && e.w === want,
         `${from} → ${to}（${kind}）权重 ${e ? e.w : '（没这条边）'}（期望 ${want}）`);
     }
+  }
+  // 成员分档与列表必须一致：以前取不到名字的成员**只进分档、不进 memberList**，
+  // 于是 symbol / map 里整块消失（1.4.0 复测报告 P1）。名字取不到时要逐层兜底，
+  // 最后宁可拿源码那一行截取当名字，也不能让它无声消失。
+  {
+    const histSum = (t) => Object.values(t.members || {}).reduce((a, v) => a + v, 0);
+    const mism = b.types.filter((t) => histSum(t) !== (t.memberList || []).length);
+    push(mism.length === 0,
+      `成员分档与列表一致（不一致 ${mism.length} 个类型${mism.length ? '：' + mism.slice(0, 3).map((t) => `${t.name}(${histSum(t)}/${(t.memberList || []).length})`).join('、') : ''}）`);
   }
   if (c.errorsMax != null) {
     push(b.totals.parseErrors <= c.errorsMax, `解析异常 ${b.totals.parseErrors} 处（期望 ≤ ${c.errorsMax}）`);

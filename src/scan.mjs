@@ -284,7 +284,10 @@ function declaratorName(node, depth = 0) {
 const ID_TYPES = ['type_identifier', 'simple_identifier', 'scoped_identifier', 'identifier', 'dotted_name', 'qualified_name', 'name', 'value_name', 'constructor_name', 'module_name', 'type_constructor', 'value_identifier', 'module_identifier', 'symbol', 'id'];
 function nameOf(node, lang) {
   // Rust impl 块：名字取它实现的类型（field 'type'），让方法挂到同名节点上
-  if (lang && lang.nameOf) return lang.nameOf(node);   // 有专用取名钩子的语言（例如 Elixir），以它为准（返回 null 就是真没名字）
+  // 有专用取名钩子的语言（例如 Elixir）以它为准；**它没给出名字时继续往下走通用兜底**——
+  // 以前这里直接 return，钩子返回 null 就真没名字了，于是那个成员只计数、不列出（1.4.0 复测 P1 的同类）
+  const hooked = lang && lang.nameOf ? lang.nameOf(node) : null;
+  if (hooked) return hooked;
   // Rust impl 块：名字取它实现的类型（field 'type'）；有 nameFromField 的语言按字段取（如 C# 的 namespace_declaration）
   const namedField = lang && lang.nameFromField && lang.nameFromField[node.type];
   if (namedField) {
@@ -296,13 +299,36 @@ function nameOf(node, lang) {
     if (n) return f === 'declarator' ? declaratorName(n) : n.text;
   }
   // const foo = () => {}：名字在 variable_declarator 上
-  // 名字可能包在外层绑定里：Zig 的 struct 在 variable_declaration、OCaml 的在 type_binding
-  const WRAPPERS = ['variable_declarator', 'type_spec', 'type_binding', 'let_binding', 'module_binding'];
+  // 名字可能包在外层绑定里：Zig 的 struct 在 variable_declaration、OCaml 的在 type_binding、
+  // **C# 的字段在 field_declaration → variable_declaration → variable_declarator → identifier**
+  // （最后这条以前取不到名字：那样的成员会被计进 members 却不进 memberList —— 见 1.4.0 复测报告 P1）
+  const WRAPPERS = ['variable_declaration', 'variable_declarator', 'init_declarator', 'type_spec', 'type_binding', 'let_binding', 'module_binding'];
+  // "声明符"类：名字就挂在它里面。**必须比裸 identifier 先看** ——
+  // C# 的 `Color Bg = …` 里 Color（类型）也是 identifier，先扫 identifier 就会把 7 个字段全起名叫 Color（实际踩过）
+  const DECLARATORS = ['variable_declarator', 'init_declarator', 'declarator', 'pointer_declarator', 'function_declarator', 'array_declarator'];
+  const innerName = (n, depth) => {
+    if (depth > 0) {
+      const dec = n.namedChildren.find((c) => DECLARATORS.includes(c.type));
+      if (dec) {
+        const got = innerName(dec, depth - 1);
+        if (got) return got;
+      }
+    }
+    const byField = n.childForFieldName('name') || n.childForFieldName('pattern');
+    if (byField) return byField.text;
+    const id = n.namedChildren.find((c) => ID_TYPES.includes(c.type));
+    if (id) return id.text;
+    // 再往里一层：C# 的 variable_declaration 自己不叫 name，里面那层 variable_declarator 才叫
+    if (depth > 0) {
+      const deeper = n.namedChildren.find((c) => WRAPPERS.includes(c.type));
+      if (deeper) return innerName(deeper, depth - 1);
+    }
+    return null;
+  };
   const group = node.namedChildren.find((c) => WRAPPERS.includes(c.type));
   if (group) {
-    const g = group.childForFieldName('name') || group.childForFieldName('pattern')
-      || group.namedChildren.find((c) => ID_TYPES.includes(c.type));
-    if (g) return g.text;
+    const g = innerName(group, 2);
+    if (g) return g;
     if (group.type === 'type_binding') {
       const t = group.namedChildren.find((c) => c.type === 'type_constructor');
       if (t) return t.text;
@@ -326,7 +352,28 @@ function nameOf(node, lang) {
     const hit = node.namedChildren.find((c) => c.type === t);
     if (hit) return hit.text;
   }
-  return null;
+  // 通用兜底（2026-09-20）：以上都取不到就**往子树里找标识符** —— 这是"计了数却不列出来"
+  // 那个 bug 的根治（bash 的变量、PHP 的属性、OCaml 的字段、Elixir 的 struct 都栽在这条上：
+  // 名字取不到 → 只进 members 分档、不进 memberList → symbol / map 里整块消失）。
+  // 限制层数、跳过函数体与嵌套类型体，免得把函数体里的某个标识符当成名字。
+  const NAME_STOP = new Set(['block', 'statement_block', 'compound_statement', 'function_body', 'body_statement', 'class_body', 'declaration_list', 'do_block']);
+  const deepId = (n, depth) => {
+    for (const c of n.namedChildren) {
+      if (ID_TYPES.includes(c.type)) return c.text;
+      if (depth > 1 && !NAME_STOP.has(c.type)) {
+        const got = deepId(c, depth - 1);
+        if (got) return got;
+      }
+    }
+    return null;
+  };
+  const deep = deepId(node, 3);
+  if (deep) return deep;
+  // 最后一层：连标识符都没有（bash 的某些赋值、Elixir 的 defstruct、Zig 的 const 结构…）——
+  // 宁可把源码那一行截取出来当名字，也不能让成员"计了数却消失"。
+  // 有了这层，members 分档求和与 memberList 长度**恒定相等**（tests/run-fixtures.mjs 有全局断言盯着）。
+  const firstLine = String(node.text || '').split(/\r?\n/)[0].trim().replace(/\s+/g, ' ');
+  return firstLine ? firstLine.slice(0, 40) : null;
 }
 
 /** 取类型引用里最深的一个标识符（Foo.Bar<Baz> -> Baz? 不对，是取最外层类型名） */
@@ -538,10 +585,18 @@ function declSignature(lang, node, depth = 3, forType = false) {
     }
   }
   if (!rnode && pnode) {
+    // 参数表后面紧跟的"类型节点"（Kotlin 的 : Double、TS 的 : void、GraphQL 的字段类型）
     const sibs = node.namedChildren;
     for (let i = sibs.indexOf(pnode) + 1; i > 0 && i < sibs.length; i++) {
       if (TYPE_TYPES.has(sibs[i].type)) { rnode = sibs[i]; break; }
     }
+  }
+  if (!rnode) {
+    // C# 的字段类型挂在里面那层：field_declaration → variable_declaration(type) → variable_declarator
+    // （外面那层没有 type 字段，所以字段连类型也拿不到）
+    const wrap = node.namedChildren.find((c) => c.type === 'variable_declaration' || c.type === 'variable_declarator');
+    const tc = wrap && wrap.childForFieldName('type');
+    if (tc) rnode = tc;
   }
 
   const p = pnode ? cleanSig(pnode.text, MAX_PARAM_CHARS) : null;
