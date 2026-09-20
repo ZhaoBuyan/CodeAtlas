@@ -280,6 +280,10 @@ Four details:
   the same language as your interface (the env var wins; delete it and the engine speaks Chinese);
 - The bundle is a snapshot and can go stale. Before every call the server checks mtime and **switches to a
   freshly scanned bundle automatically**; it will not answer from yesterday's data;
+- **If the files in the map changed on disk, `overview` says so**:
+  `⚠ 3 mapped files changed after this snapshot (1 timestamp-only) — not reflected in the map`.
+  It only re-stats the files **already in the map** (no directory walking), so **files added or removed are
+  outside its scope** — a re-scan is what picks those up;
 - **The AI learns the boundaries on connect**: `initialize` carries an `instructions` field (how to use this
   data, and where it is not trustworthy), and the first screen of `overview` gives the **scan root**
   (so the AI can build absolute paths and read source itself), a **data snapshot** (generation time /

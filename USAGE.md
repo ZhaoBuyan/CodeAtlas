@@ -143,7 +143,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 
 | Tool | When to use it |
 | --- | --- |
-| `overview` | Get the lay of the land first: how much is there, where the usual entry points are |
+| `overview` | Get the lay of the land first: how much is there, where the usual entry points are; it also flags files that changed on disk after the scan |
 | `list(path?)` | **Browse by directory** — start here when you do not know any names yet: pass a folder (or nothing for the scan root) and get its folders / files with file, type and line counts |
 | `search(query, scope?)` | Find symbols — **member names are searched too** ("who defines `OnPaint`?"), with type hits and member hits separated |
 | `symbol(name)` | Details of one type: members (**with parameter list and return type**), bases, reference count |

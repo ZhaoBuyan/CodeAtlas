@@ -68,7 +68,10 @@ const INSTRUCTIONS = [
   '- Every path in the output is **relative to the scan root**, which overview reports (use it to build absolute paths and read source yourself);',
   '- The data is a snapshot (UTC): overview spells out the generation time (scan options included) and every tool result ends',
   '  with the same short "snapshot" stamp; a freshly scanned bundle is picked up automatically, but an **engine code update**',
-  '  does need this server process restarted (the client reconnects and gets the new tool list).',
+  '  does need this server process restarted (the client reconnects and gets the new tool list);',
+  '- overview also checks freshness: it re-stats the files already in the map, and when some of them changed on disk after',
+  '  the scan it says so (`N mapped files changed…`, of which M are timestamp-only). It only covers files already in the',
+  '  map — files added or removed on disk are not detected there, so a re-scan is still how you pick those up;',
 ].join('\n');
 
 export function buildIndex(b) {
@@ -88,7 +91,7 @@ export function buildIndex(b) {
 const TOOLS = [
   {
     name: 'overview',
-    description: 'Project overview: size, systems/modules, most depended-on symbols, largest files. Call this first to get the big picture.',
+    description: 'Project overview: size, systems/modules, most depended-on symbols, largest files, plus a freshness check (files already in the map that changed on disk after the scan — it does not see files added or removed). Call this first to get the big picture.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -335,6 +338,54 @@ function memberNote(idx, name, hits) {
   return `${head}\n${rows.join('\n')}\n${tail}`;
 }
 
+/**
+ * 快照新鲜度：bundle 是一份快照，**图里那些文件在磁盘上可能已经变了**。
+ *
+ * 只 re-stat「已经纳入图里的文件」（N 次 stat，不遍历目录）—— 代价与收益对等：报“改动”只要知道路径，
+ * 报“新增”得真去遍历目录（还要套 ignore 规则与扩展名规则），那是重新扫描的事。所以这行**只覆盖图里已有的文件**，
+ * 目录级的新增 / 删除它发现不了，措辞里也如实限定（不承诺完整性）。
+ * （这跟“我连的是哪份引擎代码”是两回事：这里答的是“数据是不是旧的”。）
+ *
+ * 三条口径都有理由：
+ *   · size 变了 → 内容确实变了；**只有 mtime 变了 → 单独计数**。等长改动（改常量、`!=`→`==`、等长重命名）
+ *     在代码里很常见，所以“仅时间戳变化”≠“内容没变”，措辞上写“时间戳变化”而不是“未改”；
+ *     但它确实有用：切分支 / git checkout 会批量刷 mtime，看到“9 个仅时间戳变化”就知道图的**内容**大体还准，
+ *     不必一律重扫。反过来也不能把这一类弱化到可忽略 —— 所以数字分开、但不单列成第二条提示。
+ *   · stat 失败 = 这个文件已经从磁盘上没了。“图还在、文件没了”图自己永远发现不了（它的引用 / 影响面会虚高），
+ *     而检测它是免费的（顺手就得到了），所以白送一句。
+ *   · 多根（roots > 1）时 bundle 里的 path 是相对**各自**根的、没记属于哪个根 → 直接不报，不猜。
+ *   · 数字超过量级就截断成 `50+`：这行的价值是“图旧了、别全信”，不是文件清单（要清单去看 git status）。
+ *
+ * 暂不做结果缓存：本仓库 67 个文件是几次毫秒级 stat；等有了大项目上的实测数据再谈节流（没证据不动）。
+ */
+export function freshnessNote(b) {
+  const roots = b?.source?.roots || [];
+  if (roots.length !== 1) return '';                                  // 多根：path 归谁无法判定，不猜
+  const root = roots[0];
+  const files = Array.isArray(b?.files) ? b.files : [];
+  if (!files.length || files.some((f) => typeof f.mtime !== 'number')) return '';   // 老 bundle 没有 mtime
+  let st0;
+  try { st0 = fs.statSync(root); } catch { return ''; }               // 图是在别的机器上扫的（连根都不在）→ 别乱报
+  if (!st0.isDirectory()) return '';
+
+  let changed = 0, timeOnly = 0, gone = 0;
+  for (const f of files) {
+    let st;
+    try { st = fs.statSync(path.join(root, f.path)); } catch { gone++; continue; }
+    if (!st.isFile()) { gone++; continue; }
+    if (st.size !== f.bytes) changed++;                               // 大小变了 → 内容确实变了
+    else if (Math.round(st.mtimeMs) !== f.mtime) { changed++; timeOnly++; }
+  }
+  if (!changed && !gone) return '';
+  const cap = (n) => (n > 50 ? '50+' : fmt(n));
+  if (!changed) {
+    return T(`⚠ 快照后有 ${cap(gone)} 个已纳入图里的文件已不在磁盘 —— 未反映在图里`,
+      `⚠ ${cap(gone)} mapped files are no longer on disk — not reflected in the map`);
+  }
+  return T(`⚠ 快照后 ${cap(changed)} 个已纳入图里的文件有改动${timeOnly ? `（其中 ${cap(timeOnly)} 个仅时间戳变化）` : ''}${gone ? `，另有 ${cap(gone)} 个已不在磁盘` : ''} —— 未反映在图里`,
+    `⚠ ${cap(changed)} mapped files changed after this snapshot${timeOnly ? ` (${cap(timeOnly)} timestamp-only)` : ''}${gone ? `, and ${cap(gone)} are no longer on disk` : ''} — not reflected in the map`);
+}
+
 function toolOverview(idx) {
   const b = idx.b;
   // 热点榜按“有证据的引用数”排（并列再按原始引用数）——
@@ -352,6 +403,8 @@ function toolOverview(idx) {
   // 否则客户端会把 18:16 当成本地时间（本地其实是次日 02:16）
   const when = String(b.generated || '').replace('T', ' ').slice(0, 19) + ' UTC';
   lines.push(T(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`, `Snapshot: ${when} · scan took ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · languages ${so.lang || 'auto'} · max file ${so.maxKb || 1024}KB · ${so.incremental ? 'incremental' : 'full'}`));
+  const fresh = freshnessNote(b);
+  if (fresh) lines.push(fresh);
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
   // 被默认跳过表命中的目录：AI 也该知道“这张图缺了东西”（诚实优先）。老 bundle 没这个字段 → 当空处理。
   // **项目规则跳掉的那几类排前面**（那是"这个项目自己选跳的"，通常才是需要注意的），

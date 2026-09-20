@@ -6,9 +6,11 @@
  * 所以换任何项目跑都成立 —— 不再硬编码某个项目的类名。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { freshnessNote } from '../src/mcp.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -177,14 +179,15 @@ if (withMember) {
   const r = await call('refs', { name: q, dir: 'in' });
   check(!/找不到匹配/.test(r) && r.includes(`id=${withMember.id}`), 'refs（类型.成员 → 指回所属类型）', q);
   const sr = await call('search', { query: m.n, scope: 'member' });
-  check(sr.includes(`所属类型 id=${withMember.id}`), 'search（成员命中带所属类型 id）', m.n);
+  check(sr.includes(`所属类型 id=${withMember.id}`) || sr.includes(`owner type id=${withMember.id}`), 'search（成员命中带所属类型 id）', m.n);
 }
-// 行数口径：overview 与 file 都要写清哪个是“代码行”
-check(/代码行/.test(overview), 'overview 写明“代码行”', '最大的文件（按代码行）');
+// 行数口径：overview 与 file 都要写清哪个是“代码行”。这两条原来只认中文 —— 而自检是可以带着
+// CODEATLAS_LANG=en 跑的（引擎本来就双语），那样这两门会假红。两语言都认。
+check(/按代码行|by code lines/.test(overview), 'overview 写明“按代码行”', '最大的文件（按代码行）');
 const anyFile = bundle.files.find((f) => f.loc > 0 && f.path);
 if (anyFile) {
   const fi = await call('file', { path: anyFile.path.split('/').pop() });
-  check(/其中代码|代码 \d/.test(fi), 'file 写明总行与代码行', `行数：${fi.match(/[\d,]+ 行[^\n]*/)?.[0] || '（读不到）'}`.slice(0, 70));
+  check(/其中代码|lines total/.test(fi), 'file 写明总行与代码行', `行数：${fi.match(/[\d,]+ 行[^\n]*|[\d,]+ lines total[^\n]*/)?.[0] || '（读不到）'}`.slice(0, 70));
 }
 
 const map600 = await call('map', { budget: 600 });
@@ -194,6 +197,88 @@ const impact = await call('impact', { name: String(hottest.id), depth: 2 });
 check(/影响面|Impact/.test(impact) && /第 1 层|没有已知的引用者|Level 1|no known referrers/.test(impact), 'impact（影响面）', impact.split('\n')[0].slice(0, 70));
 const impactMiss = await call('impact', { name: 'zzz-this-does-not-exist' });
 check(/找不到|No symbol|not found/i.test(impactMiss), 'impact（找不到时给提示）', impactMiss.split('\n')[0].slice(0, 50));
+
+// ---------------------------------------------------------------------------
+// 快照新鲜度（overview 的「⚠ 快照后…」那行）：图里那些文件在磁盘上变了没有
+// 只 re-stat 已纳入图里的文件 —— 所以这里逐个造出三种情形（内容变了 / 只动时间戳 / 文件没了），
+// 看它有没有如实、分档地报出来；再加一个反例：刚扫完的图**不该**报“图旧了”（免得成天误报）。
+// 用完的临时项目留在系统 temp 里（和语言夹具那边的做法一样），不清。
+// ---------------------------------------------------------------------------
+const freshTmp = path.join(os.tmpdir(), `codeatlas-fresh-${process.pid}`);
+const freshRoot = path.join(freshTmp, 'proj');
+const freshOut = path.join(freshTmp, 'out');
+fs.rmSync(freshTmp, { recursive: true, force: true });
+fs.mkdirSync(freshRoot, { recursive: true });
+const fA = path.join(freshRoot, 'a.js');
+const fB = path.join(freshRoot, 'b.js');
+const fC = path.join(freshRoot, 'c.js');
+fs.writeFileSync(fA, 'function alpha(x) { return x + 1; }\n');
+fs.writeFileSync(fB, 'function beta(y) { return y * 2; }\n');
+fs.writeFileSync(fC, 'function gamma(z) { return z; }\n');
+execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', freshRoot, '--lang', 'javascript', '--out', freshOut], { stdio: 'pipe' });
+
+const fc = spawn(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'mcp', '--out', freshOut], { stdio: ['pipe', 'pipe', 'pipe'], cwd: ROOT });
+let fbuf = '';
+let fseq = 0;
+const fpend = new Map();
+fc.stdout.on('data', (d) => {
+  fbuf += d;
+  let i;
+  while ((i = fbuf.indexOf('\n')) >= 0) {
+    const line = fbuf.slice(0, i).trim();
+    fbuf = fbuf.slice(i + 1);
+    if (!line) continue;
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    const p = fpend.get(msg.id);
+    if (p) { fpend.delete(msg.id); p(msg); }
+  }
+});
+fc.stderr.on('data', () => {});   // 这一段只关心 overview 的正文，不把服务端日志掺进来
+const freq = (method, params) => new Promise((res) => { const id = ++fseq; fpend.set(id, res); fc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); });
+const fcall = async (name, args) => {
+  const r = await freq('tools/call', { name, arguments: args });
+  return r.result?.content?.[0]?.text ?? '';
+};
+await freq('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'selftest', version: '1' } });
+
+// 三种措辞都要认（两语言 + “只有文件没了”那种单独形态）
+const freshLine = (o) => o.split('\n').find((l) => /快照后|after this snapshot|are no longer on disk/i.test(l)) || '';
+const grab = (line, res) => { for (const re of res) { const m = line.match(re); if (m) return Number(m[1]); } return null; };
+const cntChanged = (line) => grab(line, [/快照后 (\S+) 个已纳入图里的文件有改动/, /⚠ (\S+) mapped files changed/]);
+const cntTimeOnly = (line) => grab(line, [/其中 (\S+) 个仅时间戳变化/, /\((\S+) timestamp-only\)/]);
+const cntGone = (line) => grab(line, [/另有 (\S+) 个已不在磁盘/, /and (\S+) are no longer on disk/, /快照后有 (\S+) 个已纳入图里的文件已不在磁盘/, /⚠ (\S+) mapped files are no longer on disk/]);
+
+const oFresh = await fcall('overview', {});
+check(!freshLine(oFresh), '快照新鲜度：刚扫完的图不报“图旧了”（不误报）');
+
+fs.appendFileSync(fA, '// grow\n');                        // 内容变了（大小跟着变）
+const lGrow = freshLine(await fcall('overview', {}));
+check(!!lGrow && cntChanged(lGrow) === 1 && !cntTimeOnly(lGrow) && !cntGone(lGrow),
+  '快照新鲜度：内容变了要报（1 个改动，不混进时间戳档）', lGrow.trim().slice(0, 80));
+
+const mtimeB = fs.statSync(fB).mtimeMs;
+fs.utimesSync(fB, new Date(), new Date(mtimeB + 60000));   // 只动时间戳：大小不变
+const lTouch = freshLine(await fcall('overview', {}));
+check(!!lTouch && cntChanged(lTouch) === 2 && cntTimeOnly(lTouch) === 1 && !cntGone(lTouch),
+  '快照新鲜度：“仅时间戳变化”单独计数（也不叫“未改”——证明不了内容没变）', lTouch.trim().slice(0, 80));
+
+fs.rmSync(fC);                                             // 已纳入图里、磁盘上已经没了
+const lGone = freshLine(await fcall('overview', {}));
+check(!!lGone && cntChanged(lGone) === 2 && cntTimeOnly(lGone) === 1 && cntGone(lGone) === 1,
+  '快照新鲜度：已不在磁盘的要白送一句', lGone.trim().slice(0, 80));
+
+// 不许乱报的几种输入：多了根（path 归谁无法判定）、没有根、文件没记 mtime（老 bundle）
+const quiet = [
+  [null, '空 bundle'],
+  [{ source: { roots: ['C:/a', 'C:/b'] }, files: [{ path: 'x.js', mtime: 1, bytes: 1 }] }, '多根'],
+  [{ source: { roots: [] }, files: [{ path: 'x.js', mtime: 1, bytes: 1 }] }, '没有根'],
+  [{ source: { roots: [freshRoot] }, files: [{ path: 'a.js', bytes: 1 }] }, '老 bundle（没记 mtime）'],
+  [{ source: { roots: [path.join(freshTmp, 'gone-proj')] }, files: [{ path: 'a.js', mtime: 1, bytes: 1 }] }, '根已不在磁盘'],
+];
+check(quiet.every(([b]) => freshnessNote(b) === ''), '快照新鲜度：多根 / 无根 / 老 bundle / 根不在 → 一律沉默（不猜）', `${quiet.length} 种输入`);
+
+fc.kill('SIGKILL');
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
