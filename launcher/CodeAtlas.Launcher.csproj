@@ -11,7 +11,7 @@
     <AssemblyTitle>Code Atlas 启动台</AssemblyTitle>
     <Product>Code Atlas</Product>
     <!-- 启动器版本：界面和日志里显示的就是这个值（程序运行时从程序集读，别再写第二份） -->
-    <Version>1.4.2</Version>
+    <Version>1.5.0</Version>
     <!-- 图标：任务栏 / 窗口 / 资源管理器都用这个（多尺寸 ico，由 icon-ico.mjs 生成） -->
     <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- 高 DPI：不设这个的话进程会是非 DPI 感知的，系统会把整个窗口拉大 1.5 倍→字发虚 -->
