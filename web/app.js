@@ -45,6 +45,9 @@ let chartState = null;
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const truncate = (s, n) => (s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s);
+// 签名（`(int a, string b): bool`）：只给名字时同名重载长得一模一样，靠它区分。
+// 没抽到就是空串——含义是“没抽到”，不是“没有参数”（跟 MCP 那边口径一致，不假装）。
+const sigText = (x) => `${x?.p || ''}${x?.r ? ': ' + x.r : ''}`;
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 // 数据里的哨兵值 → 网页显示文案（映射表的源头在 src/i18n.mjs；网页目前只有中文，这里先做显示兜底）：
 // bundle 里存的是中性值 '(unclassified)'，老 bundle 里是 '(未分类)'，两种都认。
@@ -1159,7 +1162,7 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
 
   host.innerHTML = `
     <div class="insp-title">${esc(t.name)}</div>
-    <div class="insp-sub">${esc(t.fqn)}
+    <div class="insp-sub">${esc(t.fqn)}${sigText(t) ? esc(sigText(t)) : ''}
       <span class="badge" style="border-color:${KIND_COLOR[t.kind] || '#8b949e'};color:${KIND_COLOR[t.kind] || '#8b949e'}">${esc(t.kind)}</span>
       ${t.system ? `<span class="badge" title="${T('分组规则：', 'grouping rule: ')}${esc(t.systemRule || '—')}">${esc(sysLabel(t.system))}</span>` : ''}
       ${isGenerated(t) ? '<span class="badge" style="border-color:#6e7681;color:#8b949e">' + T('编译器生成物', 'compiler-generated') + '</span>' : ''}</div>
@@ -1177,7 +1180,7 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
     ${depsSection(T('被谁引用', 'Referenced by (fanIn)'), ins, 'from')}
     ${depsSection(T('引用了谁（fanOut）', 'References (fanOut)'), outs, 'to')}
     ${t.memberList.length ? `<div class="sect"><h4>${T('成员（前 ', 'Members (first ')}${Math.min(t.memberList.length, 40)}${T('）', ')')}</h4>
-      ${t.memberList.slice(0, 40).map((m) => `<div class="dep${state.q && (m.n || '').toLowerCase().includes(state.q) ? ' hit' : ''}" title="${esc(m.d || '')}"><span class="n">${esc(m.n)}</span><span class="w">${esc(m.k)} · ${m.l}</span></div>${m.d ? `<div class="m-doc">${esc(truncate(m.d, 110))}</div>` : ''}`).join('')}</div>` : ''}
+      ${t.memberList.slice(0, 40).map((m) => `<div class="dep${state.q && (m.n || '').toLowerCase().includes(state.q) ? ' hit' : ''}" title="${esc(m.d || '')}"><span class="n">${esc(m.n + sigText(m))}</span><span class="w">${esc(m.k)} · ${m.l}</span></div>${m.d ? `<div class="m-doc">${esc(truncate(m.d, 110))}</div>` : ''}`).join('')}</div>` : ''}
   `;
   $('#copyPath')?.addEventListener('click', () => {
     navigator.clipboard?.writeText(`${f.path}:${t.line}`);

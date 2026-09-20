@@ -147,6 +147,26 @@ if (owner) {
   check(true, 'search（按成员名）', '这个 bundle 里没有带名字的成员，跳过');
 }
 
+// 成员签名（参数表 + 返回类型）：同名重载靠它才分得开 —— 从 bundle 自己里挑一个真抽到签名的来验
+const sigOwner = bundle.types.find((t) => (t.memberList || []).some((m) => m.p || m.r));
+if (sigOwner) {
+  const sm = sigOwner.memberList.find((m) => m.p || m.r);
+  const sig = `${sm.p || ''}${sm.r ? `: ${sm.r}` : ''}`;
+  const symSig = await call('symbol', { name: String(sigOwner.id), members: 300 });
+  check(symSig.includes(sm.n + sig), 'symbol（成员带签名）', `${sigOwner.name}.${sm.n}${sig}`);
+  const msearch2 = await call('search', { query: sm.n, scope: 'member' });
+  check(msearch2.includes(sig), 'search（成员命中带签名）', sig.slice(0, 48));
+} else {
+  check(true, 'symbol（成员带签名）', '这个 bundle 里没有抽到签名的成员，跳过');
+}
+// 类型自己身上的签名（JS/TS 的顶层函数、record 主构造函数都在这一档）
+const typeSig = bundle.types.find((t) => t.p || t.r);
+if (typeSig) {
+  const s = `${typeSig.p || ''}${typeSig.r ? `: ${typeSig.r}` : ''}`;
+  const out = await call('symbol', { name: String(typeSig.id) });
+  check(out.includes(s), 'symbol（类型带签名）', `${typeSig.name}${s}`);
+}
+
 const map600 = await call('map', { budget: 600 });
 check(map600.length > 80 && map600.length / 4 < 600 * 1.4, 'map（token 预算）', `约 ${Math.ceil(map600.length / 4)} token / 预算 600`);
 

@@ -244,8 +244,8 @@ Tools provided:
 | --- | --- |
 | `overview()` | Project overview: size, system breakdown, most-depended-on symbols, largest files |
 | `list(path?, limit?)` | **Browse by directory**: no `path` → the scan root; otherwise that level's folders / files with file, type and line counts. Start here when you do not know any names yet — its output (paths, file names) feeds `file()` / `search()` |
-| `search(query, scope?, kind?)` | Find symbols by name; **member names are included by default** (searching `OnPaint` finds "who defines this method"); `scope=type\|member` narrows it. Returns ids for the other tools |
-| `symbol(name)` | Everything about one type: description, file:line, member list, base types, dependency counts, its system |
+| `search(query, scope?, kind?)` | Find symbols by name; **member names are included by default** (searching `OnPaint` finds "who defines this method"); `scope=type\|member` narrows it. Hits carry the **signature** (parameter list + return type), so same-name overloads are told apart. Returns ids for the other tools |
+| `symbol(name)` | Everything about one type: description, signature, file:line, member list (**with parameter list and return type**), base types, dependency counts, its system |
 | `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code) |
 | `subgraph(name, depth)` | Dependency subgraph ("what does changing this drag along") |
 | `file(path)` | A file's types, imports, line counts (**parse errors are called out when present**) |
@@ -315,6 +315,10 @@ node src/cli.mjs langs [--json]                    # list supported languages (-
 - **Area metric**: code lines / total lines / complexity / member count / fanIn.
 - **Drill-down**: click a group name, its border, or the legend on the left to see only that group; the
   breadcrumb takes you back.
+- **Signatures**: the parameter list and return type are extracted from the syntax tree (`area(int, int): double`;
+  for a property it is its declared type), so same-name overloads are no longer identical — and for JS/TS
+  top-level functions and C#/Java `record` primary constructors the signature sits on the type itself.
+  When the grammar does not expose it nothing is written: **blank means "not extracted", not "takes no arguments"**.
 - **Descriptions**: extracted from source comments (C# `/// summary`, Java/TS block comments) at both type and
   member level, shown in the inspector and tooltips; only blank lines may sit between a comment and its
   declaration (otherwise the comment belongs to the previous declaration); when there is no comment it says
@@ -327,8 +331,8 @@ node src/cli.mjs langs [--json]                    # list supported languages (-
 - **A header line** states what the current chart encodes (grouping / depth / what area means / how it is
   colored); with a selection it also shows that type's reference counts, and warns when edges point outside
   the current grouping.
-- **Inspector**: type details + description + file:line (copyable) + members + who references it / what it
-  references (clickable, jumping back to a grouping where the target is visible).
+- **Inspector**: type details + description + file:line (copyable) + members (**with signature: parameter
+  list + return type**) + who references it / what it references (clickable, jumping back to a grouping where the target is visible).
 - **Filters**: type-kind checkboxes · **language checkboxes** (only languages actually present in this scan;
   the panel is absent when there is just one) · a minimum code-lines slider to hide small fragments.
 - **Search (types + members)**: the input searches **member names too** (searching `OnPaint` finds "who defines
@@ -377,7 +381,7 @@ the output contains a `_comment` explaining the format — edit away).
 | `source` | scan roots, file count, **version stamp** (git commit + whether the tree was dirty; a timestamp when not a git repo), scan duration |
 | `languages` | file count / line count per language |
 | `files[]` | path, language, LOC (whole file) / code / comment / blank lines, import list, namespace |
-| `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), file + line, LOC (this type's range), member stats and list, base types, complexity, fanIn / fanOut |
+| `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), **`p` / `r`** (signature: parameter list / return type — both keys absent when not extracted), file + line, LOC (this type's range), member stats and list, base types, complexity, fanIn / fanOut |
 | `namespaces` | package tree (with bottom-up totals: lines / type counts) |
 | `edges[]` | type-level dependency edges: `ref` (reference) / `inherit` (inheritance), plus weight |
 | `nsEdges[]` | namespace-level edges (used by the package dependency view) |

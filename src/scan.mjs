@@ -223,6 +223,23 @@ function markRows(mask, startRow, endRow) {
   for (let r = startRow; r <= endRow && r < mask.length; r++) mask[r] = 1;
 }
 
+/**
+ * 声明符（declarator）里的**真名字**。
+ * C / C++ 的 `double shape_area(const Shape *s)` 里 declarator 是整段 `shape_area(const Shape *s)`，
+ * 直接取文本会把参数表也算进名字（地图上就显示成"shape_area(const Shape *s)"，加签名后更会重复一遍）。
+ * 顺着 declarator / name 字段往里走，拿到最里面的那个标识符。
+ */
+function declaratorName(node, depth = 0) {
+  if (!node || depth > 8) return node ? node.text : null;
+  if (ID_TYPES.includes(node.type)) return node.text;
+  for (const f of ['declarator', 'name']) {
+    const c = node.childForFieldName(f);
+    if (c) return declaratorName(c, depth + 1);
+  }
+  const id = node.namedChildren.find((c) => ID_TYPES.includes(c.type));
+  return id ? id.text : node.text;
+}
+
 /** 取节点名：优先 name/declarator 字段，没有字段就找第一个标识符子节点（Kotlin 等语法不给 name 字段） */
 const ID_TYPES = ['type_identifier', 'simple_identifier', 'scoped_identifier', 'identifier', 'dotted_name', 'qualified_name', 'name', 'value_name', 'constructor_name', 'module_name', 'type_constructor', 'value_identifier', 'module_identifier', 'symbol', 'id'];
 function nameOf(node, lang) {
@@ -236,7 +253,7 @@ function nameOf(node, lang) {
   }
   for (const f of ['name', 'declarator']) {
     const n = node.childForFieldName(f);
-    if (n) return n.text;
+    if (n) return f === 'declarator' ? declaratorName(n) : n.text;
   }
   // const foo = () => {}：名字在 variable_declarator 上
   // 名字可能包在外层绑定里：Zig 的 struct 在 variable_declaration、OCaml 的在 type_binding
@@ -396,6 +413,102 @@ function normalizeDoc(text) {
   return t ? (t.length > 300 ? `${t.slice(0, 297)}…` : t) : null;
 }
 
+// ---------- 成员 / 类型的签名（参数表 + 返回类型）----------
+// 要的形态是 `area(int, int): double`。为什么值得有：只给成员名时**同名重载长得一模一样**，
+// AI 分不清"谁调的是哪个"，问"谁调了它 / 它调了谁"就答不准。
+// 规则全部按实际语法树实测（tests/run-fixtures.mjs 里每门语言都有签名回归门），没实测的不写：
+//   参数表  ① 语言钩子 paramsOf ② 字段 parameters / parameter_list / params
+//           ③ 往下找"参数表节点"（PARAM_TYPES）——深度 ≤3，撞见函数体 / 返回类型 / 类型注解就停
+//   返回类型 ① 语言钩子 returnTypeOf ② 字段 returns / return_type / result / type
+//           ③ 参数表后面紧跟的那个"类型节点"（Kotlin 的 `: Double`、TS 的 `: void` 都没有字段名）
+// **取不到就什么都不写**（宁缺勿错）：读侧看到没有签名，含义是"没抽到"，不是"没有参数"。
+const PARAM_TYPES = new Set([
+  'formal_parameters', 'parameters', 'parameter_list', 'function_value_parameters',
+  'parameter_clause', 'method_parameters', 'arguments_definition',
+]);
+// 这些子树里的参数表一定属于**别的**东西（嵌套函数），不能再往下找：
+// 函数体、类型注解里的函数类型、返回类型容器（Solidity 的 `returns (uint256)` 也是 parameter_list 形状）、
+// 以及各种 lambda / 匿名函数（否则"类里存了个箭头函数的字段"会被当成有参数的成员）
+const SIG_STOP_TYPES = new Set([
+  'block', 'statement_block', 'compound_statement', 'function_body', 'body_statement', 'class_body',
+  'declaration_list', 'return_type_definition', 'type_annotation', 'function_type',
+  'arrow_function', 'function_expression', 'function_literal', 'anonymous_function', 'closure_expression',
+  'lambda', 'lambda_expression',
+]);
+// 认返回类型用的"类型节点"（名字太泛的如 identifier 一律不认——宁可空着）
+const TYPE_TYPES = new Set(['user_type', 'nullable_type', 'generic_type', 'parameterized_type', 'type']);
+const MAX_PARAM_CHARS = 60;
+const MAX_RET_CHARS = 30;
+
+/** 深度优先找第一个"参数表节点"（撞见 SIG_STOP_TYPES / 嵌套类型声明就不往下）
+ *  为什么连嵌套类型也要停：`const X = struct { fn go(a) … }` 这种写法里，
+ *  参数表属于**里面那个结构体**的方法，不是外层这个成员的（Zig 实测踩过）。 */
+function findParamNode(node, depth, extra, lang) {
+  for (const c of node.namedChildren) {
+    if (PARAM_TYPES.has(c.type) || (extra && extra.includes(c.type))) return c;
+    const isNestedType = Boolean(lang && lang.types && Object.hasOwn(lang.types, c.type));
+    if (depth > 1 && !isNestedType && !SIG_STOP_TYPES.has(c.type)) {
+      const hit = findParamNode(c, depth - 1, extra, lang);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** 一段签名文本：压空白、去掉 TS 的 ": " 前缀和 Solidity 的 returns 关键字、封顶长度 */
+function cleanSig(text, max) {
+  if (!text) return null;
+  let t = String(text)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^:\s*/, '');        // TS 的 type_annotation 文本自带冒号
+  // Solidity 的返回类型节点文本是 "returns (uint256)" —— 只留类型本身
+  const wrapped = t.match(/^returns\s+\((.*)\)$/);
+  if (wrapped) t = wrapped[1];
+  if (!t) return null;
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+/**
+ * 一个声明节点的签名：`{ p: 参数表, r: 返回类型 }`；两者都取不到就返回 null。
+ * 语言钩子返回的是**节点**（不是文本），这样"返回类型跟在参数表后面"这条兜底还能用上。
+ * depth 是往下找参数表的层数：成员默认 3 层（C/C++ 的参数表在 function_declarator 里），
+ * **类型只给 1 层**——接口/对象体里的方法参数不属于它自己（实测：TS interface、Java interface、
+ * Scala object 都会被 3 层那套捞出一个假 `()`）。
+ * forType 还管一件事：类型节点不认 `type` 字段——那里写的是**它自己**的类型
+ * （C 的 `typedef struct … X`、Rust 的 `impl Circle`、SystemRDL 的 `addrmap` 都实测过是噪声），
+ * 不是"返回类型"。
+ */
+function declSignature(lang, node, depth = 3, forType = false) {
+  let pnode = lang.paramsOf ? lang.paramsOf(node) : null;
+  if (!pnode) {
+    for (const f of lang.paramFields || ['parameters', 'parameter_list', 'params']) {
+      const c = node.childForFieldName(f);
+      if (c) { pnode = c; break; }
+    }
+  }
+  if (!pnode) pnode = findParamNode(node, depth, lang.paramNodes, lang);
+
+  let rnode = lang.returnTypeOf ? lang.returnTypeOf(node) : null;
+  if (!rnode) {
+    const fields = lang.returnFields || (forType ? ['returns', 'return_type', 'result'] : ['returns', 'return_type', 'result', 'type']);
+    for (const f of fields) {
+      const c = node.childForFieldName(f);
+      if (c) { rnode = c; break; }
+    }
+  }
+  if (!rnode && pnode) {
+    const sibs = node.namedChildren;
+    for (let i = sibs.indexOf(pnode) + 1; i > 0 && i < sibs.length; i++) {
+      if (TYPE_TYPES.has(sibs[i].type)) { rnode = sibs[i]; break; }
+    }
+  }
+
+  const p = pnode ? cleanSig(pnode.text, MAX_PARAM_CHARS) : null;
+  const r = rnode ? cleanSig(rnode.text, MAX_RET_CHARS) : null;
+  return p || r ? { p, r } : null;
+}
+
 /**
  * 一个节点的"说明"从哪来：
  *   ① 上面的注释（所有语言通用）；
@@ -467,9 +580,16 @@ function extractFile(source, tree, lang) {
 
   const currentType = () => (typeStack.length ? typeStack[typeStack.length - 1] : null);
 
-  function bumpMember(kind, name, line, doc) {
+  // 成员/类型都带签名（参数表 + 返回类型）：同名重载靠它才分得开。取不到就没这两个键。
+  function bumpMember(kind, name, node, doc) {
+    const sig = declSignature(lang, node);
     const t = currentType();
-    const entry = doc ? { k: kind, n: name, l: line, d: doc } : { k: kind, n: name, l: line };
+    const entry = { k: kind, n: name, l: node.startPosition.row + 1 };
+    if (doc) entry.d = doc;
+    if (sig) {
+      if (sig.p) entry.p = sig.p;
+      if (sig.r) entry.r = sig.r;
+    }
     if (t) {
       t.members[kind] = (t.members[kind] || 0) + 1;
       if (name) t.memberList.push(entry);
@@ -578,6 +698,14 @@ function extractFile(source, tree, lang) {
         complexity: 1,
         parent: currentType() ? currentType().index : null,
       };
+      // 类型本身也留一份签名：JS/TS 的顶层函数、C#/Java 的 record 主构造函数都算"类型"，
+      // 它们的参数表不在任何成员上（不给的话 symbol 里就完全看不到它收什么参数）。
+      // 只看直接子节点：接口体里的方法参数不是这个类型自己的参数。
+      const tsig = declSignature(lang, node, 1, true);
+      if (tsig) {
+        if (tsig.p) rec.p = tsig.p;
+        if (tsig.r) rec.r = tsig.r;
+      }
       types.push(rec);
       // 基类子树不再当引用重复统计
       const baseChildren = new Set();
@@ -600,7 +728,7 @@ function extractFile(source, tree, lang) {
       const many = lang.membersOf(node);
       if (many && many.length) {
         const mdoc = languageDoc(lang, node, comments, lines);
-        for (const m of many) bumpMember(m.kind, m.name, node.startPosition.row + 1, mdoc);
+        for (const m of many) bumpMember(m.kind, m.name, node, mdoc);
         for (const c of node.namedChildren) walk(c);
         return;
       }
@@ -610,7 +738,7 @@ function extractFile(source, tree, lang) {
     if (memberKind) {
       const name = nameOf(node, lang);
       const mdoc = languageDoc(lang, node, comments, lines);
-      bumpMember(memberKind, name, node.startPosition.row + 1, mdoc);
+      bumpMember(memberKind, name, node, mdoc);
       for (const c of node.namedChildren) walk(c);
       return;
     }
@@ -1057,6 +1185,10 @@ async function extractFiles(files) {
         systemRule: null,
         bases: t.bases,
         doc: t.doc,
+        // 类型自己身上的签名（JS/TS 的顶层函数、C#/Java 的 record 主构造函数都在"类型"这一档）：
+        // 没抽到就没有这两个键（不是空值）——读侧看到没有就是"不知道"
+        ...(t.p ? { p: t.p } : null),
+        ...(t.r ? { r: t.r } : null),
         members: t.members,
         memberList: t.memberList,
         complexity: t.complexity,

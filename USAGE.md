@@ -42,7 +42,7 @@ Filters on the left, the map in the middle, details on the right.
 | Another view | Bottom-left "View": **Treemap** (area = code size) / **Tree list** / **Dependency graph** (who links to whom) / **Dependency matrix** (how often modules reference each other) |
 | Look by module | "Group by": system (your drafted rules) / directory / namespace / flat; "Group depth" 1–4 |
 | Find something | The search box at the top — **type names and member names both match**: search `OnPaint` and it finds "who defines this method" |
-| Inspect something | Click a block → the inspector on the right shows what it is, file and line, its members, what it depends on, what depends on it |
+| Inspect something | Click a block → the inspector on the right shows what it is, file and line, its members (with signature), what it depends on, what depends on it |
 | See "who references whom" | Tick "Dependency focus", or select a block and look at its links |
 | Make sense of the colors | "Color by": file / **git heat** (the busiest code lights up; uncommitted files get a bright border) / group / kind |
 | Too noisy | The "Min code lines" slider drops small fragments; "Type kinds" keeps only class / interface and friends |
@@ -143,7 +143,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `overview` | Get the lay of the land first: how much is there, where the usual entry points are |
 | `list(path?)` | **Browse by directory** — start here when you do not know any names yet: pass a folder (or nothing for the scan root) and get its folders / files with file, type and line counts |
 | `search(query, scope?)` | Find symbols — **member names are searched too** ("who defines `OnPaint`?"), with type hits and member hits separated |
-| `symbol(name)` | Details of one type: members, bases, reference count |
+| `symbol(name)` | Details of one type: members (**with parameter list and return type**), bases, reference count |
 | `refs(name, dir?)` | Who references it / what it references |
 | `subgraph(name, depth)` | The dependency subgraph around one place |
 | `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members) |

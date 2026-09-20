@@ -21,6 +21,14 @@
  *   isDecision / skipNameNodes / docstring。注意：memberKindOf 一旦存在就**完全接管**成员判定，
  *   不再回退静态表（踩过这个坑）——需要两者兼得就用 membersOf 自己兜底。
  *
+ * 成员/类型签名（参数表 + 返回类型，就是 `symbol` 里那个 `foo(int, string): bool`）：扫描器有一套
+ * 通用规则（见 scan.mjs 的 declSignature），绝大多数语言不用配。配不出来的才用这几个钩子——
+ *   paramsOf(node)       → 参数表**节点**（不是文本）；如 Elixir 的参数藏在内层 call 里
+ *   paramFields          → 改字段名单（默认 parameters / parameter_list / params）
+ *   paramNodes           → 额外认的"参数表节点名"
+ *   returnTypeOf(node)   → 返回类型节点；returnFields → 改字段名单（默认 returns / return_type / result / type）
+ * 钩子一律返回节点，没找到返回 null（"没找到"与"没有"是两回事，宁可空着）。
+ *
  * status: 'ok' 已实测过 / 'wip' 配置写好但未验证
  * 注意：每种语言的语法节点名要以实际语法为准（tests/fixtures 会跑回归）。
  */
@@ -100,6 +108,18 @@ const elixirIsDecision = (node) => {
   if (!c || !/^[a-z]/.test(c)) return false;   // 模块属性等（@doc）不要算进来
   return ['if', 'unless', 'case', 'cond', 'with', 'for', 'try', 'receive'].includes(c);
 };
+/**
+ * Elixir 的参数表藏在内层：`def area(x)` 的语法树是 call(def, arguments(call(area, arguments(x))))。
+ * 不带括号的 `def speak do … end` 拿不到参数表 → null（"没抽到"，不假装它没参数）。
+ */
+const elixirParams = (node) => {
+  const outer = node.namedChildren.find((c) => c.type === 'arguments');
+  const inner = outer && outer.namedChildren.find((c) => c.type === 'call');
+  const args = inner && inner.namedChildren.find((c) => c.type === 'arguments');
+  return args || null;
+};
+/** Emacs Lisp 的参数表是函数声明里**第一个** list 子节点（第二个 list 才是函数体） */
+const elispParams = (node) => node.namedChildren.find((c) => c.type === 'list') || null;
 
 function isFunctionAssignment(node) {
   const decl = node.namedChildren.find((c) => c.type === 'variable_declarator');
@@ -647,6 +667,7 @@ export const LANGUAGES = {
       function_definition: 'function',
       special_form: 'value',
     },
+    paramsOf: elispParams,
     imports: {},
     baseFields: [],
     baseNodes: [],
@@ -849,6 +870,7 @@ export const LANGUAGES = {
     nameOf: elixirName,
     kindOf: elixirKind,
     memberKindOf: elixirMemberKind,
+    paramsOf: elixirParams,
     importKindOf: elixirImportKind,
     importTextOf: elixirImportText,
     isDecision: elixirIsDecision,

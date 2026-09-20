@@ -85,6 +85,13 @@ const CASES = [
     docContains: { MultiLineDoc: ['第一段在这里', '第二段也要在', '在这里。第二段也要在', '空格——就像'] },
     // 回归：分节线不算“说明”（Dog 上方是 `── 分节线 ──`、IWalker 上方是 `── 接口 ────────`）
     docNull: ['Dog', 'IWalker'],
+    memberSigs: [
+      // 参数表 + 返回类型（C# 的返回类型在 returns 字段上，无参方法也要拿到 "()"）
+      ['Animal', 'Greet', '(string tone, int times): string'],
+      ['IWalker', 'Walk', '(): void'],
+      // 属性：类型来自 type 字段（`Name: string`，没有参数表）
+      ['Animal', 'Name', ': string'],
+    ],
     membersMin: 7,
     errorsMax: 0, // 主构造函数 / file 修饰符 / 原始字符串都要能被预处理掉
   },
@@ -97,6 +104,9 @@ const CASES = [
     extends: ['Circle -> Figure', 'Figure -> Base'],
     importsMin: 1,
     docs: 2,
+    memberSigs: [['Figure', 'scale', '(k: number)'], ['Shape', 'area', '(): number']],
+    // 顶层函数是**类型**（不是成员）：JS/TS 的参数表挂在类型自己身上
+    typeSigs: [['helper', '(a: number)']],
     membersMin: 4,
     errorsMax: 0,
   },
@@ -108,6 +118,7 @@ const CASES = [
     kinds: { function: 1, class: 1, interface: 1 },
     importsMin: 1,
     docs: 1,
+    typeSigs: [['Button', '({ label }: { label: string })']],
     membersMin: 1,
     errorsMax: 0, // JSX 能解析干净才说明 tsx 语法挂对了
   },
@@ -120,6 +131,7 @@ const CASES = [
     names: ['Props', 'greet', 'pretty', 'crlfFn', 'fromSetup', 'double'],
     kinds: { interface: 1, function: 5, module: 1 },
     docs: 1,
+    typeSigs: [['greet', '(name: string): string'], ['double', '(n: number): number']],
     errorsMax: 0,
     typeLines: [
       ['greet', 'Comp.vue', 11],
@@ -154,6 +166,7 @@ const CASES = [
     extends: ['Widget -> Base'],
     importsMin: 1,
     docs: 1,
+    typeSigs: [['make', '(x)']],
     membersMin: 2,
     errorsMax: 0,
   },
@@ -166,6 +179,8 @@ const CASES = [
     extends: ['Circle -> Shape'],
     importsMin: 1,
     docs: 1,
+    memberSigs: [['Circle', 'compareTo', '(Circle other): int'], ['Shape', 'area', '(): double']],
+    typeSigs: [['Point', '(int x, int y)']], // record 主构造函数也挂在类型上
     membersMin: 4,
     errorsMax: 0,
     namespace: 'fixture.sample',
@@ -179,6 +194,7 @@ const CASES = [
     extends: ['Dog -> Animal'],
     importsMin: 2,
     docs: 2, // docstring
+    memberSigs: [['Animal', 'eat', '(self, food)'], ['Animal', 'speak', '(self)']],
     membersMin: 4,
     errorsMax: 0,
   },
@@ -191,6 +207,7 @@ const CASES = [
     extends: ['Circle -> Shape'],
     importsMin: 1,
     docs: 1,
+    memberSigs: [['Registry', 'register', '(s: Shape)'], ['Shape', 'area', '(): Double']],
     membersMin: 4,
     errorsMax: 0,
     namespace: 'fixture.sample',
@@ -331,6 +348,25 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
   if (c.membersMin != null) {
     const n = b.types.reduce((a, t) => a + Object.values(t.members).reduce((x, y) => x + y, 0), 0);
     push(n >= c.membersMin, `成员数 ${n}（期望 ≥ ${c.membersMin}）`);
+  }
+  // 成员签名（参数表 + 返回类型）：同名重载靠它才分得开。
+  // 注意：没抽到就什么都不写——所以断的是"含某个片段"，不是"等于"
+  const sigOf = (x) => `${x.p || ''}${x.r ? `: ${x.r}` : ''}`;
+  if (c.memberSigs) {
+    for (const [owner, member, frag] of c.memberSigs) {
+      // 同名类型可能有多个（Rust 的 `struct Circle` 与 `impl Circle` 就是两个）：全都找一遍
+      const hits = b.types.filter((x) => x.name === owner)
+        .flatMap((x) => (x.memberList || []).filter((m) => m.n === member));
+      push(hits.some((m) => sigOf(m).includes(frag)),
+        `${owner}.${member} 的签名含 "${frag}"（实际 ${hits.map(sigOf).join(' | ') || '（没这个成员）'}）`);
+    }
+  }
+  // 类型自己的签名：JS/TS 的顶层函数、C#/Java 的 record 主构造函数都在这一档
+  if (c.typeSigs) {
+    for (const [name, frag] of c.typeSigs) {
+      const t = b.types.find((x) => x.name === name);
+      push(Boolean(t) && sigOf(t).includes(frag), `${name} 的签名含 "${frag}"（实际 ${t ? sigOf(t) || '（空）' : '（没这个类型）'}）`);
+    }
   }
   if (c.errorsMax != null) {
     push(b.totals.parseErrors <= c.errorsMax, `解析异常 ${b.totals.parseErrors} 处（期望 ≤ ${c.errorsMax}）`);

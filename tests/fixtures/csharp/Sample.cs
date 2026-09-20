@@ -11,6 +11,9 @@ namespace Fixture.Sample
 
         public abstract void Speak();
 
+        /// <summary>打招呼：测“成员签名”（参数表 + 返回类型）的抽取。</summary>
+        public virtual string Greet(string tone, int times) { return tone; }
+
         public class Nested
         {
             public int Depth { get; set; }

@@ -59,6 +59,9 @@ const INSTRUCTIONS = [
   '- Files with parse errors are flagged individually; their data may be incomplete;',
   '- Top-level functions in JS / TS are recorded as [function] **types**, not members: search(scope="member") will not find',
   '  them — use the default scope (any) or scope="type";',
+  '- Members (and JS/TS top-level functions) carry a signature when the tree-sitter grammar exposes one —',
+  '  `area(int, int): double`, or just `(int, int)` when the grammar gives the return type no name. A member printed without',
+  '  a signature means "not extracted", **not** "takes no arguments" — do not read absence as fact;',
   '- Decompiled output (.dll / .exe / .jar) carries no source comments, so an empty "description" is expected;',
   '- Every path in the output is **relative to the scan root**, which overview reports (use it to build absolute paths and read source yourself);',
   '- The data is a snapshot (UTC): overview spells out the generation time (scan options included) and every tool result ends',
@@ -88,7 +91,7 @@ const TOOLS = [
   },
   {
     name: 'search',
-    description: 'Search by name: type names / qualified names / file-name fragments. **Member names are included by default** (searching "OnPaint" finds who declares that method). Returns type ids for symbol/refs. Note: top-level JS/TS functions are *types*, so scope="member" will miss them — keep the default scope=any.',
+    description: 'Search by name: type names / qualified names / file-name fragments. **Member names are included by default** (searching "OnPaint" finds who declares that method). Hits carry the signature (parameter list / return type) when the grammar exposes it, so same-name overloads are told apart. Returns type ids for symbol/refs. Note: top-level JS/TS functions are *types*, so scope="member" will miss them — keep the default scope=any.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -103,7 +106,7 @@ const TOOLS = [
   },
   {
     name: 'symbol',
-    description: 'Everything about one symbol (type): description, file:line, member list, base types, dependents/dependencies, owning system.',
+    description: 'Everything about one symbol (type): description, file:line, signature (parameter list + return type, when the grammar exposes it), member list, base types, dependents/dependencies, owning system.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -256,6 +259,15 @@ function briefDoc(s, n = 80) {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
 
+/**
+ * 签名文本：`(int a, string b): bool`（类型是顶层函数时只有后半截）。
+ * 空串的含义是**源码里没抽到**，不是"它没有参数"/"它没有返回类型"——别当成事实读。
+ * 存在价值：同名重载只给名字就长得一模一样，有了签名才分得清 AI 问的/改的是哪一个。
+ */
+function sigText(x) {
+  return `${x?.p || ''}${x?.r ? `: ${x.r}` : ''}`;
+}
+
 function resolve(idx, key) {
   const s = String(key ?? '').trim();
   if (/^\d+$/.test(s) && idx.byId.has(Number(s))) return { type: idx.byId.get(Number(s)) };
@@ -352,13 +364,13 @@ function toolSearch(idx, a) {
   if (hits.length) {
     out.push(T(`类型（显示前 ${Math.min(hits.length, limit)}）：`, `Types (first ${Math.min(hits.length, limit)}):`));
     for (const t of hits.slice(0, limit)) {
-      out.push(T(`  ${t.id}\t${t.fqn}\t[${t.kind}] 被引 ${t.fanIn} 次\t${idx.files.get(t.file)?.path}:${t.line}`, `  ${t.id}\t${t.fqn}\t[${t.kind}] referenced ${t.fanIn} times\t${idx.files.get(t.file)?.path}:${t.line}`) + (t.doc ? T(`\t说明：${briefDoc(t.doc)}`, `\tdoc: ${briefDoc(t.doc)}`) : ''));
+      out.push(T(`  ${t.id}\t${t.fqn}${sigText(t)}\t[${t.kind}] 被引 ${t.fanIn} 次\t${idx.files.get(t.file)?.path}:${t.line}`, `  ${t.id}\t${t.fqn}${sigText(t)}\t[${t.kind}] referenced ${t.fanIn} times\t${idx.files.get(t.file)?.path}:${t.line}`) + (t.doc ? T(`\t说明：${briefDoc(t.doc)}`, `\tdoc: ${briefDoc(t.doc)}`) : ''));
     }
   }
   if (memberHits.length) {
     out.push(T(`成员（显示前 ${Math.min(memberHits.length, limit)}）：`, `Members (first ${Math.min(memberHits.length, limit)}):`));
     for (const { t, m } of memberHits.slice(0, limit)) {
-      out.push(T(`  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（定义在 ${t.id} ${t.name}）`, `  ${t.fqn}.${m.n}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(defined in ${t.id} ${t.name})`) + (m.d ? T(`\t说明：${briefDoc(m.d)}`, `\tdoc: ${briefDoc(m.d)}`) : ''));
+      out.push(T(`  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（定义在 ${t.id} ${t.name}）`, `  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(defined in ${t.id} ${t.name})`) + (m.d ? T(`\t说明：${briefDoc(m.d)}`, `\tdoc: ${briefDoc(m.d)}`) : ''));
     }
     out.push(T('（成员名后面要看它的上下文，用 symbol 加类型名/id）', '(to see a member in context, call symbol with the type name / id)'));
   }
@@ -373,7 +385,7 @@ function toolSymbol(idx, a) {
   const memberCap = Math.min(Math.max(Number(a.members) || 40, 1), 300);
   const members = (t.memberList || []).slice(0, memberCap);
   const lines = [];
-  lines.push(`${t.fqn}  [${t.kind}]${t.tags?.length ? `  (${t.tags.join(', ')})` : ''}`);
+  lines.push(`${t.fqn}${sigText(t)}  [${t.kind}]${t.tags?.length ? `  (${t.tags.join(', ')})` : ''}`);
   lines.push(T(`文件：${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   系统：${t.system ? sysLabel(t.system) : '（未分组）'}${t.systemRule ? `（规则 ${t.systemRule}）` : ''}`, `File: ${f?.path}:${t.line}${t.endLine > t.line ? `-${t.endLine}` : ''}   System: ${t.system ? sysLabel(t.system) : '(ungrouped)'}${t.systemRule ? ` (rule ${t.systemRule})` : ''}`));
   lines.push(T(`规模：${t.code} 行代码（该类型区间）· 复杂度≈${t.complexity} · 成员 ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '无'}`, `Size: ${t.code} lines of code (this type's range) · complexity≈${t.complexity} · members ${Object.entries(t.members || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none'}`));
   lines.push(T(`依赖：被 ${t.fanIn} 处引用 · 引用了 ${t.fanOut} 个`, `Dependencies: referenced by ${t.fanIn} · references ${t.fanOut}`));
@@ -382,7 +394,7 @@ function toolSymbol(idx, a) {
   lines.push(T(`说明：${t.doc || '（源码里没有注释说明）'}`, `Doc: ${t.doc || '(no doc comment in the source)'}`));
   if (members.length) {
     lines.push(T(`成员（前 ${members.length} / 共 ${(t.memberList || []).length}）：`, `Members (first ${members.length} / ${(t.memberList || []).length} total):`));
-    for (const m of members) lines.push(`  ${m.l}\t${m.k} ${m.n}${m.d ? ` — ${String(m.d).slice(0, 80)}` : ''}`);
+    for (const m of members) lines.push(`  ${m.l}\t${m.k} ${m.n}${sigText(m)}${m.d ? ` — ${String(m.d).slice(0, 80)}` : ''}`);
   }
   return lines.join('\n');
 }
@@ -581,7 +593,7 @@ function toolMap(idx, a) {
     for (const t of [...b.types].sort((x, y) => score(y) - score(x)).slice(0, 6)) {
       const ms = (t.memberList || []).slice(0, 6);
       if (!ms.length) continue;
-      if (!push(`  ${t.name}: ${ms.map((m) => m.n).join(', ')}`)) break;
+      if (!push(`  ${t.name}: ${ms.map((m) => m.n + sigText(m)).join(', ')}`)) break;
     }
     push('');
   }
