@@ -17,7 +17,7 @@ import { t } from './i18n.mjs';
 import { preprocess } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
-export const VERSION = '1.4.0';
+export const VERSION = '1.4.1';
 
 /**
  * 没归到任何系统规则的哨兵值：**中性固定值**，不带任何语言。

@@ -114,7 +114,7 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # MCP server for AI cli
   Note this is a **global** setting, not per project.
 - **UI language**: the toolbar button right after "Incremental" reads `界面：中文` / `UI: English` — one click
   switches the interface and saves the choice to `launcher.config.json`. It covers the launcher (run log, status
-  bar, dialogs, error messages), the engine's scan output, all eight MCP tools **and** the web map. Switching
+  bar, dialogs, error messages), the engine's scan output, all nine MCP tools **and** the web map. Switching
   does **not** re-scan anything: the bundle stores language-neutral values and the display layer maps them.
   Without the launcher, set `CODEATLAS_LANG=en` (the env var overrides the config; anything starting with `en` works).
 - Requires **Node.js** (the engine is written in Node); no .NET SDK needed (but the .NET 9 runtime is,
