@@ -50,7 +50,7 @@ Filters on the left, the map in the middle, details on the right.
 | Clear the selection | 「取消选中」at the bottom-right of the map — clears the selection and empties the inspector |
 | Zoom in / move around | Wheel to zoom, **right-drag to pan** (left button stays on select / drill-down); 「回正」 at the bottom-right goes back to the whole map. Text scales with the zoom, and picking a module keeps your zoom level |
 | Keep the map live while you code | The launcher's 「内构快照」button is two-state: click it to switch to 「内构监控」, then the map updates itself (incremental rescan) as you edit |
-| Skip things per project | Drop an `atlas.ignore` at the scan target root (dir names / globs / `#` comments — read only if the file exists); the launcher's 「扫描范围」 picker has a **「按 .gitignore 跳过」** item at the end for the project's own `.gitignore` |
+| Skip things per project | Drop an `atlas.ignore` at the scan target root (dir names / globs / `#` comments — read only if the file exists); the launcher's 「扫描范围」 picker has a **「按 .gitignore 跳过」** item at the end for the project's own `.gitignore` (**including the ones inside subdirectories**, each scoped to its own subtree) |
 
 Small tip: **dark blocks** are things outside the current filter/search, not an error.
 

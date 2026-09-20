@@ -92,43 +92,75 @@ const GENERATED_NAME_RE = /(^<|^_003C)|(__InlineArray|__DisplayClass|PrivateImpl
 // 可选的 `.gitignore`：默认不读，传了 --gitignore 才读（启动器上有个勾选框）。
 // 语法先做简单版：一行一条 · `#` 注释 · `名字`（目录名或文件名都算）· `名字/`（只当目录）·
 // 含 `* ?` 或 `/` 的按相对路径 glob 匹配。**`!` 例外暂不支持**（遇到会计数、在报告里提示，不静默）。
+//
+// 嵌套（2026-09-20）：子目录自带的 `.gitignore` 也读，口径跟 git 一致——
+//   · 每份规则只管**它所在目录及其子目录**（模式相对它自己那个目录解释）
+//   · 越靠近文件的规则排在越后面（`!` 支持了以后这点才真起作用）
+//   · 进不去的目录不再往下走：git 不会进被排除的目录，所以里面写的 `!` 也救不回来（如实上报）
+//   · 每份 .gitignore 是在**进那一层目录时**读的（collectFiles 调 enterDir），
+//     所以"外层规则先于内层规则"这个顺序天然成立，不用事后排序
+//   · 扫描根**以上**的 .gitignore 不读（那是目标之外的东西）
 function loadIgnoreRules(roots, { gitignore } = {}) {
   const rules = [];
-  const sources = [];
+  const sources = new Set();
+  let files = 0;
   let negations = 0;
-  for (const root of roots) {
-    for (const [name, on] of [['atlas.ignore', true], ['.gitignore', !!gitignore]]) {
-      if (!on) continue;
-      let text;
-      try { text = fs.readFileSync(path.join(root, name), 'utf8'); } catch { continue; }
-      sources.push(name);
-      for (const raw of text.split(/\r?\n/)) {
-        const line = raw.trim();
-        if (!line || line.startsWith('#')) continue;
-        if (line.startsWith('!')) { negations++; continue; }
-        const body = line.replace(/^\//, '');
-        const dirOnly = body.endsWith('/');
-        const pat = dirOnly ? body.slice(0, -1) : body;
-        if (!pat) continue;
-        if (pat.includes('/') || /[*?]/.test(pat)) {
-          // 带路径/通配：按相对路径匹配；不含 `/` 的（如 *.gen.ts）再按“任意层级的名字”匹配一次
-          rules.push({ kind: 'glob', re: globToRe(pat), dirOnly, anyLevel: !pat.includes('/'), src: name });
-        } else {
-          rules.push({ kind: 'name', name: pat, dirOnly, src: name });
-        }
+
+  /** 读一份规则文件；base 是它所在目录相对扫描根的路径（根 = ''），rootIdx 标明属于哪个根 */
+  const addFile = (rootIdx, base, file, name) => {
+    let text;
+    try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
+    sources.add(name);
+    files++;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      if (line.startsWith('!')) { negations++; continue; }   // 例外（!）暂不支持
+      const body = line.replace(/^\//, '');
+      const dirOnly = body.endsWith('/');
+      const pat = dirOnly ? body.slice(0, -1) : body;
+      if (!pat) continue;
+      if (pat.includes('/') || /[*?]/.test(pat)) {
+        // 带路径/通配：按相对路径匹配；不含 `/` 的（如 *.gen.ts）再按“任意层级的名字”匹配一次
+        rules.push({ root: rootIdx, base, kind: 'glob', re: globToRe(pat), dirOnly, anyLevel: !pat.includes('/'), src: name });
+      } else {
+        rules.push({ root: rootIdx, base, kind: 'name', name: pat, dirOnly, src: name });
       }
     }
-  }
-  const hit = (rel, name, isDir) => {
-    for (const r of rules) {
-      if (r.dirOnly && !isDir) continue;
-      if (r.kind === 'name') { if (name === r.name) return r.src; continue; }
-      if (r.re.test(rel)) return r.src;
-      if (r.anyLevel && r.re.test(name)) return r.src;
-    }
-    return null;
   };
-  return { hit, sources, negations, count: rules.length };
+
+  return {
+    /**
+     * 进一层目录时调一次：把这一层自带的规则收进来。
+     * 必须在判断这一层的条目**之前**调用 —— 否则本层 .gitignore 写的规则管不到本层的文件。
+     * `names` 是这层 readdir 出来的名字（用来判断文件在不在，省一次失败的系统调用）。
+     */
+    enterDir(rootIdx, base, absDir, names) {
+      // 没勾 --gitignore 时 .gitignore 一份都不读；`atlas.ignore` 是本工具自己的约定，永远读（只有目标根那一份）
+      if (gitignore && names.has('.gitignore')) addFile(rootIdx, base, path.join(absDir, '.gitignore'), '.gitignore');
+      if (base === '' && names.has('atlas.ignore')) addFile(rootIdx, base, path.join(absDir, 'atlas.ignore'), 'atlas.ignore');
+    },
+    /** 命中就返回那条规则的来源（报告里要说清是谁干的） */
+    hit(rootIdx, rel, name, isDir) {
+      for (const r of rules) {
+        if (r.root !== rootIdx) continue;
+        if (r.dirOnly && !isDir) continue;
+        // 规则只对自己那棵子树生效：拿它所在目录的相对路径来比
+        if (r.base && !rel.startsWith(`${r.base}/`)) continue;
+        const sub = r.base ? rel.slice(r.base.length + 1) : rel;
+        if (r.kind === 'name') { if (name === r.name) return r.src; continue; }
+        if (r.re.test(sub)) return r.src;
+        if (r.anyLevel && r.re.test(name)) return r.src;
+      }
+      return null;
+    },
+    get sources() { return [...sources]; },
+    get count() { return rules.length; },
+    get fileCount() { return files; },
+    // 注意：这里必须是 getter。写成普通属性就是把"建对象那一刻的 0"定死，后面读到的永远是 0
+    // （踩过：`!` 例外计数一直报 0）
+    get negations() { return negations; },
+  };
 }
 
 function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }) {
@@ -147,7 +179,8 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   const skipped = { ignored: 0, ignoredDirs: new Map(), tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map(),
     projectDirs: new Map(), projectFiles: 0 };
 
-  for (const root of roots) {
+  for (let rootIdx = 0; rootIdx < roots.length; rootIdx++) {
+    const root = roots[rootIdx];
     const stack = [root];
     while (stack.length) {
       const dir = stack.pop();
@@ -157,13 +190,19 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
       } catch {
         continue;
       }
+      // 本层自带的跳过规则（嵌套 .gitignore）先收进来，再判断本层的条目 ——
+      // 顺序反了，本层 .gitignore 写的规则就管不到本层自己的文件
+      if (ignoreRules) {
+        const dirRel = dir === root ? '' : path.relative(root, dir).split(path.sep).join('/');
+        ignoreRules.enterDir(rootIdx, dirRel, dir, new Set(entries.map((e) => e.name)));
+      }
       for (const e of entries) {
         const abs = path.join(dir, e.name);
         const rel = path.relative(root, abs).split(path.sep).join('/');
         if (e.isDirectory()) {
           if (ignoreDirs.has(e.name) || e.name.startsWith('.git')) { skipped.ignored++; skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1); continue; }
           // 项目自己的规则（atlas.ignore / .gitignore）也走同一本账，好让“图里少了东西”始终可见
-          if (ignoreRules && ignoreRules.hit(rel, e.name, true)) {
+          if (ignoreRules && ignoreRules.hit(rootIdx, rel, e.name, true)) {
             skipped.ignored++;
             skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1);
             skipped.projectDirs.set(e.name, (skipped.projectDirs.get(e.name) || 0) + 1);
@@ -174,7 +213,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
         }
         if (!e.isFile()) continue;
         if (isIgnoredFile(e.name)) { skipped.ignored++; continue; }
-        if (ignoreRules && ignoreRules.hit(rel, e.name, false)) { skipped.ignored++; skipped.projectFiles++; continue; }
+        if (ignoreRules && ignoreRules.hit(rootIdx, rel, e.name, false)) { skipped.ignored++; skipped.projectFiles++; continue; }
         const ext = path.extname(e.name).toLowerCase();
         const lang = exts.get(ext);
         if (!lang) {
@@ -207,9 +246,10 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   // 文件预算：只取前 N 个（路径序稳定）。只有持续扫描会传它 —— 用来分趟把地图“长”出来；
   // 正常扫描不传，行为一字不变。
   if (budget && files.length > budget) files.length = budget;
-  // 自选规则的来龙去脉（哪个文件生效了、多少条、有几条 `!` 没支持）——进报告，免得“自己写的规则没生效”说不清
+  // 自选规则的来龙去脉（哪个文件生效了、多少条、读了几份、有几条 `!` 没支持）——进报告，免得“自己写的规则没生效”说不清
   skipped.ignoreSources = ignoreRules ? ignoreRules.sources : [];
   skipped.ignorePatterns = ignoreRules ? ignoreRules.count : 0;
+  skipped.ignoreFiles = ignoreRules ? ignoreRules.fileCount : 0;
   skipped.ignoreNegations = ignoreRules ? ignoreRules.negations : 0;
   return { files, skipped };
 }
@@ -1698,6 +1738,8 @@ export async function scan(opts) {
       projectFiles: skipped.projectFiles || 0,
       ignoreSources: skipped.ignoreSources || [],
       ignorePatterns: skipped.ignorePatterns || 0,
+      // 读了几份规则文件：嵌套 .gitignore 之后，光看 sources（只有名字）看不出到底读了几份
+      ignoreFiles: skipped.ignoreFiles || 0,
       ignoreNegations: skipped.ignoreNegations || 0,
       tooBig: skipped.tooBig || 0,
       unknown: skipped.unknown || 0,

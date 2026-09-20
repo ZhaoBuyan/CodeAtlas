@@ -525,7 +525,9 @@ so the whole file does not vanish from the map; their members (functions/variabl
   reference code, for instance). Better still, drop an **`atlas.ignore`** at the **scan target root**
   (`dirname` / `dirname/` / globs like `*.gen.ts` / `#` comments, one per line — read **only if the file exists**);
   the launcher's **「扫描范围」** picker (last item: **「按 .gitignore 跳过」**) or `--gitignore` on the CLI additionally honors the project's own
-  `.gitignore`. Whatever gets skipped is named in the report (`!` negations are not supported yet — also reported).
+  `.gitignore` — **including the ones inside subdirectories**, with git's semantics: each file's rules only apply to its own
+  subtree (so a monorepo does not come out half-empty); directories that are excluded are not descended into.
+  Whatever gets skipped is named in the report (along with how many rule files were read; `!` negations are not supported yet — also reported).
 
 ### What to watch out for when scanning
 

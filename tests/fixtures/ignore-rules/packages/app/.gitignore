@@ -1,0 +1,3 @@
+# rules that only apply inside packages/app (nested .gitignore, git semantics)
+generated/
+*.tmp.js

@@ -104,9 +104,13 @@ function printScanReport(b, out) {
   if (ignSrc.length) {
     const pDirs = Object.entries(b.stats.skipped?.projectDirs || {}).sort((a, c) => c[1] - a[1]);
     const pDetail = pDirs.slice(0, 6).map(([n, c]) => `${n} ${c}`).join(' · ');
+    // 读了几份：子目录自带的 .gitignore 也算了（只有名字时看不出读了 3 份还是 1 份）
+    const ignFiles = b.stats.skipped?.ignoreFiles || 0;
+    const srcText = ignSrc.join(' + ') + (ignFiles > ignSrc.length ? `${t('（共 ', ' (')}${ignFiles}${t(' 份）', ' files)')}` : '');
+    const srcTextEn = ignSrc.join(' + ') + (ignFiles > ignSrc.length ? ` (${ignFiles} files)` : '');
     console.log(t(
-      `  项目规则  ${ignSrc.join(' + ')} · ${b.stats.skipped.ignorePatterns} 条${pDetail ? ` · 目录 ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · 文件 ${b.stats.skipped.projectFiles} 个` : ''}${b.stats.skipped.ignoreNegations ? `（有 ${b.stats.skipped.ignoreNegations} 条 ! 例外暂不支持）` : ''}`,
-      `  Project   ${ignSrc.join(' + ')} · ${b.stats.skipped.ignorePatterns} pattern(s)${pDetail ? ` · dirs ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · ${b.stats.skipped.projectFiles} file(s)` : ''}${b.stats.skipped.ignoreNegations ? ` (${b.stats.skipped.ignoreNegations} "!" negation(s) not supported yet)` : ''}`,
+      `  项目规则  ${srcText} · ${b.stats.skipped.ignorePatterns} 条${pDetail ? ` · 目录 ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · 文件 ${b.stats.skipped.projectFiles} 个` : ''}${b.stats.skipped.ignoreNegations ? `（有 ${b.stats.skipped.ignoreNegations} 条 ! 例外暂不支持）` : ''}`,
+      `  Project   ${srcTextEn} · ${b.stats.skipped.ignorePatterns} pattern(s)${pDetail ? ` · dirs ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · ${b.stats.skipped.projectFiles} file(s)` : ''}${b.stats.skipped.ignoreNegations ? ` (${b.stats.skipped.ignoreNegations} "!" negation(s) not supported yet)` : ''}`,
     ));
   }
   console.log(`${t('  版本戳    ', '  Revision    ')}${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}${b.source.git.dirty ? t(' (有未提交改动)', ' (uncommitted changes)') : ''}` : t(' （非 git 仓库，用文件时间戳）', ' (not a git repo — using file timestamps)')}`);
