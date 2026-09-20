@@ -85,19 +85,9 @@ function boot(b) {
 
   // git 热度：这份 bundle 里有没有 files[].git（扫的不是 git 仓库就没有）——
   // 没有就把这一档**禁用并说明原因**，别让人选了之后以为图坏了（“没数据”与“全 0”得看得出区别）
-  const gitChanges = b.files.map((f) => (f.git ? f.git.changes : null)).filter((v) => v != null);
-  const gitAvailable = gitChanges.length > 0;
-  if (gitAvailable) gitHeatMax = gitChanges.reduce((a, v) => (v > a ? v : a), 2);
-
   readHash();
   if (!state.hasFacets && state.groupBy === 'system') state.groupBy = 'dir';
-  if (!gitAvailable && state.colorMode === 'git') state.colorMode = 'file';   // hash 里带了这一档也不能卡住
-  const gitOpt = $('#colorMode').querySelector('option[value="git"]');
-  if (gitOpt && !gitAvailable) {
-    // 没数据的档位禁掉，并把原因写在选项里（“没数据”与“全 0”不是一回事）
-    gitOpt.disabled = true;
-    gitOpt.textContent = T('git 热度（这份 bundle 没有 git 信息）', 'Git heat (no git data in this bundle)');
-  }
+  syncGitOption();
 
   $('#ver').textContent = `v${b.generator.version}`;
   renderMeta();
@@ -150,6 +140,28 @@ function renderMeta() {
       const top = Object.entries(u).sort((a, c) => c[1] - a[1]).slice(0, 4).map(([e, c]) => `${e} ${c}`).join(' · ');
       return T(`<span class="chip warn" title="这些后缀的文件被跳过了：${esc(top)}">未支持语言 <b>${fmt(total)}</b> 个文件</span>`, `<span class="chip warn" title="files with these extensions were skipped: ${esc(top)}">unsupported language <b>${fmt(total)}</b> files</span>`);
     })(),
+    (() => {
+      // 「图里少了东西」也得在网页上看得到：跳过了哪几类目录、项目规则又跳了多少个。
+      // 老 bundle 没这个字段 → 一个字都不说（"不知道"与"一个没跳"不是一回事）
+      const sk = b.stats?.skipped;
+      if (!sk) return '';
+      const dirs = Object.entries(sk.ignoredDirs || {}).sort((a, c) => c[1] - a[1]);
+      const byDir = dirs.reduce((a, [, c]) => a + c, 0);
+      const ruleDirs = Object.values(sk.projectDirs || {}).reduce((a, c) => a + c, 0);
+      const ruleFiles = sk.projectFiles || 0;
+      const ruleN = ruleDirs + ruleFiles;
+      if (!byDir && !ruleN) return '';
+      const top = dirs.slice(0, 6).map(([n, c]) => `${n} ${c}`).join(' · ');
+      const rules = (sk.ignoreSources || []).join(' + ');
+      const tip = T(
+        `默认表跳过的目录：${top || '（无）'}\n项目规则跳过的：目录 ${ruleDirs} 个 · 文件 ${ruleFiles} 个${rules ? `\n规则来自：${rules}` : ''}\n这些里面的源码不在图里`,
+        `Skipped by the default list: ${top || '(none)'}\nSkipped by project rules: ${ruleDirs} dirs · ${ruleFiles} files${rules ? `\nrules from: ${rules}` : ''}\nSource inside them is not in this map`);
+      const parts = [];
+      if (byDir) parts.push(T(`${dirs.length} 类目录（${fmt(byDir)} 个）`, `${dirs.length} dir names (${fmt(byDir)})`));
+      if (ruleN) parts.push(T(`规则跳了 ${fmt(ruleN)} 个`, `${fmt(ruleN)} by project rules`));
+      return T(`<span class="chip warn" title="${esc(tip)}">跳过 <b>${parts.join(' · ')}</b></span>`,
+        `<span class="chip warn" title="${esc(tip)}">skipped <b>${parts.join(' · ')}</b></span>`);
+    })(),
     T(`<span class="chip warn">结构 = tree-sitter 解析 · 依赖边 = 静态推断，可能漏 / 错</span>`, `<span class="chip warn">structure = tree-sitter parse · edges = static inference, may miss / be wrong</span>`),
   ];
   $('#meta').innerHTML = chips.filter(Boolean).join('');
@@ -158,6 +170,21 @@ function renderMeta() {
 // ---------------------------------------------------------------------------
 // 控件
 // ---------------------------------------------------------------------------
+/**
+ * git 那一档有没有数据：没有就禁用 + 把原因写进选项（“没数据”与“全 0”不是一回事）。
+ * boot() 与 applyBundle() 都调它 —— 以前这段只写在 boot 里，监控模式下换了 bundle 就不管了。
+ */
+function syncGitOption() {
+  const changes = state.bundle.files.map((f) => (f.git ? f.git.changes : null)).filter((v) => v != null);
+  const gitAvailable = changes.length > 0;
+  if (gitAvailable) gitHeatMax = changes.reduce((a, v) => (v > a ? v : a), 2);
+  if (!gitAvailable && state.colorMode === 'git') state.colorMode = 'file';   // hash/上次选择里带了这一档也不能卡住
+  const opt = $('#colorMode').querySelector('option[value="git"]');
+  if (opt) {
+    opt.disabled = !gitAvailable;
+    opt.textContent = gitAvailable ? T('git 热度', 'Git heat') : T('git 热度（这份 bundle 没有 git 信息）', 'Git heat (no git data in this bundle)');
+  }
+}
 function renderControls() {
   // 分组选项：「系统/模块」需要规则文件，「命名空间」对模块化项目没意义——
   // 只禁这两项，其余（目录 / 文件 / 平铺）任何时候都能用。
@@ -205,7 +232,7 @@ function renderControls() {
   $('#hideGenField').style.display = genN ? '' : 'none';
   $('#genCount').textContent = genN ? `（${genN}）` : '';
   $('#hideGen').checked = state.hideGenerated;
-  $('#hideGen').onchange = (e) => { state.hideGenerated = e.target.checked; writeHash(); draw(); renderTopList(); };
+  $('#hideGen').onchange = (e) => { hideGenTouched = true; state.hideGenerated = e.target.checked; writeHash(); draw(); renderTopList(); };
 
   $('#minCode').value = state.minCode;
   $('#minCodeVal').textContent = state.minCode;
@@ -431,6 +458,8 @@ function hashColor(key) {
 const GIT_QUIET = '#21262d';
 const GIT_UNTRACKED = '#6e7681';
 let gitHeatMax = 2;
+// 用户亲手动过“隐藏编译器生成物”没有 —— 动过就不再被新 bundle 的默认值覆盖（监控模式换数据时用）
+let hideGenTouched = false;
 
 /** 一个方格对应的 git 信息（类型 → 它所在的那个文件） */
 function gitOf(d) {
@@ -862,17 +891,23 @@ function applyEmphasis(focusId) {
     const n = Math.max(1, Math.round(Number(e.w) || 1));
     const dx = tc.x - sc.x;
     const dy = tc.y - sc.y;
-    const len = Math.hypot(dx, dy);
-    // 这一组线摊开的总宽度：短边窄、长边宽，但封顶 110px（81 根也不会铺满屏幕）；
-    // n = 1 时总宽 0 → 退化成原来那条线，一根不多一根不少
-    const spread = Math.min(110, len / 6, 6 * n);
+    const len = Math.hypot(dx, dy) || 1;
+    const px = -dy / len;                     // 垂直于 A→B 的方向
+    const py = dx / len;
+    // 这一组线在 **B 一侧** 摊开的总宽度：短边窄、长边宽；也参考目标格子的大小，
+    // 免得线散到格子外面去；封顶 160px（81 根也不会铺满屏幕）
+    const tHalf = Math.min(t.x1 - t.x0, t.y1 - t.y0) / 2;
+    const spread = Math.min(160, len / 3, 10 * n, Math.max(24, tHalf * 0.8));
     const step = n > 1 ? spread / (n - 1) : 0;
+    const bend = Math.min(60, len / 3);
     for (let i = 0; i < n; i++) {
+      const off = (i - (n - 1) / 2) * step;
       links.push({
-        sx: sc.x, sy: sc.y, tx: tc.x, ty: tc.y,
-        kind: e.kind,
-        off: (i - (n - 1) / 2) * step,   // 沿垂直方向摊开，两端点都不动 → 看上去从中心发散
-        bend: Math.min(60, len / 3),
+        sx: sc.x, sy: sc.y,                    // 起点固定在 A 的中心（“从中心发散”）
+        // 末端也摊开：全挤在 B 的中心会看成一束粗线，摊开才看得出“3 根去 B、3 根去 C”
+        tx: tc.x + px * off, ty: tc.y + py * off,
+        ex: px * off, ey: py * off,
+        kind: e.kind, bend,
       });
     }
     lines += n;
@@ -880,17 +915,10 @@ function applyEmphasis(focusId) {
   }
   linkG.selectAll('path').data(links).join('path')
     .attr('d', (l) => {
-      const mx = (l.sx + l.tx) / 2;
-      const my = (l.sy + l.ty) / 2;
-      const dx = l.tx - l.sx;
-      const dy = l.ty - l.sy;
-      const len = Math.hypot(dx, dy) || 1;
-      // 控制点往垂直方向偏 l.off px（n=1 时 off=0，与以前完全一致）
-      const px = -dy / len;
-      const py = dx / len;
-      const cx2 = mx + px * l.off;
-      const cy2 = my + py * l.off - l.bend;
-      return `M${l.sx},${l.sy} Q${cx2},${cy2} ${l.tx},${l.ty}`;
+      // 控制点跟着末端一起偏（偏一半），曲线就顺：起点集中在 A 的中心，末端散开落在 B 上
+      const mx = (l.sx + l.tx) / 2 + l.ex * 0.5;
+      const my = (l.sy + l.ty) / 2 + l.ey * 0.5 - l.bend;
+      return `M${l.sx},${l.sy} Q${mx},${my} ${l.tx},${l.ty}`;
     })
     .attr('stroke', (l) => (l.kind === 'inherit' ? '#d29922' : '#58a6ff'))
     // 一条引用一根线 → 每根都细（权重由根数承担），继承线略粗一点以便跟引用区分
@@ -966,7 +994,11 @@ function readHash() {
   const depth = Number(p.get('d'));
   if (Number.isInteger(depth) && depth >= 0 && depth <= 4) state.groupDepth = depth;
   if (p.get('g')) state.focus = p.get('g');
-  if (p.get('t')) state.selected = Number(p.get('t'));
+  // 手改的 hash（`#t=abc`）不能变成一个 NaN 选中项：不合法就当作“没选”（顺便让 writeHash 把它洗掉）
+  if (p.get('t') != null) {
+    const sel = Number(p.get('t'));
+    if (Number.isInteger(sel)) state.selected = sel;
+  }
   if (p.get('m') && METRICS[p.get('m')]) state.metric = p.get('m');
   if (p.get('dep') === '1') state.depFocus = true;
   if (p.get('nogen') === '1') state.hideGenerated = true;
@@ -1267,10 +1299,15 @@ function applyBundle(b) {
   state.sysColors = new Map((b.facets?.systems || []).map((s) => [s.name, s.color]).filter(([, c]) => c));
   state.hasFacets = Boolean(b.facets?.configFile);
   if (state.selected != null && !state.typeById.has(state.selected)) state.selected = null;   // 选中的那条没了
-  const gitChanges = b.files.map((f) => (f.git ? f.git.changes : null)).filter((v) => v != null);
-  if (gitChanges.length) gitHeatMax = gitChanges.reduce((a, v) => (v > a ? v : a), 2);
+  // ---- 下面几样是 boot() 里有、这里以前漏了的（监控模式下换 bundle 会留下陈旧状态）----
+  // 反编译产物的"默认藏编译器生成物"：没被用户动过才跟着新 bundle 走（动了就尊重用户）
+  if (!hideGenTouched) state.hideGenerated = Boolean(b.source.ingest?.tool) && (b.totals.compilerGenerated || 0) > 0;
+  // 新 bundle 没有分组规则时，“系统/模块”这一档要退到目录
+  if (!state.hasFacets && state.groupBy === 'system') state.groupBy = 'dir';
+  syncGitOption();
   $('#ver').textContent = `v${b.generator.version}`;
   renderMeta();
+  renderControls();   // hasFacets 变了的话，分组下拉得跟着变（以前只在新打开页面时才重建）
   renderKinds();
   renderLangs();
   renderTopList();

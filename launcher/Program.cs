@@ -372,13 +372,22 @@ namespace CodeAtlas
             catch (Exception ex) { ConfigSaveError = ex.Message; }
         }
 
-        /// <summary>开发模式：exe 所在目录（或上级）里就有 src/cli.mjs（源码就在手边）</summary>
+        /// <summary>开发模式：exe 所在目录（或上级）里就有 src/cli.mjs（源码就在手边）。
+        /// 层数给到 6：`dotnet build` 的产物在 launcher\bin\Release\net9.0-windows\win-x64\，
+        /// 离仓库根 5 层，4 层时够不到（实测：从那儿跑直接说"找不到引擎"）。
+        /// 光看 src/cli.mjs 不够（别的项目也可能有同名文件），再看一眼 package.json 的名字。</summary>
         public static string FindDevRoot()
         {
             DirectoryInfo dir = new DirectoryInfo(AppContext.BaseDirectory);
-            for (int i = 0; i < 4 && dir != null; i++, dir = dir.Parent)
+            for (int i = 0; i < 6 && dir != null; i++, dir = dir.Parent)
             {
-                if (File.Exists(Path.Combine(dir.FullName, "src", "cli.mjs"))) return dir.FullName;
+                if (!File.Exists(Path.Combine(dir.FullName, "src", "cli.mjs"))) continue;
+                try
+                {
+                    string pkg = Path.Combine(dir.FullName, "package.json");
+                    if (File.Exists(pkg) && File.ReadAllText(pkg).Contains("\"code-atlas\"")) return dir.FullName;
+                }
+                catch { /* 读不出来就当这个目录不是 */ }
             }
             return null;
         }
@@ -956,16 +965,33 @@ namespace CodeAtlas
             if (Payload.HasEngine && !File.Exists(Path.Combine(Payload.TargetDir(), ".ready")))
             {
                 _status.Text = L.T("正在释放内置引擎（首次运行，只做一次）…", "Unpacking the built-in engine (first run, once only)…");
-                Task.Run(() =>
+                _ = Task.Run(() =>
                 {
-                    string dir = Payload.Ensure(Log);
-                    Ui(() => _status.Text = dir != null ? L.T("内置引擎就绪，点「扫描」开始", "Engine ready — hit Scan") : L.T("就绪", "Ready"));
+                    // 不等它是故意的（几十 MB 的释放别卡住 UI），但**异常必须有人接**：
+                    // 以前下面那句 try 没包，释放失败时状态栏照样说"就绪"，用户只会觉得点了没反应。
+                    // `_ =` 是明说"故意不等"（不写就报 CS4014）
+                    try
+                    {
+                        string dir = Payload.Ensure(Log);
+                        Ui(() => _status.Text = dir != null
+                            ? L.T("内置引擎就绪，点「扫描」开始", "Engine ready — hit Scan")
+                            : L.T("内置引擎释放失败（原因见日志），点「扫描」会再试一次", "Could not unpack the built-in engine (see the log); scanning will retry"));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log(L.T("释放内置引擎时出错：", "unpacking the built-in engine failed: ") + ex.Message);
+                        Ui(() => _status.Text = L.T("内置引擎释放失败（原因见日志）", "Could not unpack the built-in engine (see the log)"));
+                    }
                 });
             }
             else if (Payload.HasEngine)
             {
                 // 引擎已经就绪：后台顺手清掉旧指纹的解包目录（不这么做的话每换一次引擎就多约 160 MB）
-                Task.Run(() => Payload.CleanupOldEngines(Log));
+                _ = Task.Run(() =>
+                {
+                    try { Payload.CleanupOldEngines(Log); }
+                    catch (Exception ex) { Log(L.T("清理旧引擎目录失败（不影响使用）：", "cleaning up old engine dirs failed (harmless): ") + ex.Message); }
+                });
             }
             // 第一次碰到这个项目（没有记录）才引导；已经有记录的就不打扰（再打开=零操作）
             string curTarget = _path.Text.Trim().Trim('"');

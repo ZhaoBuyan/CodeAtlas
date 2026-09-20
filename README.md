@@ -561,7 +561,9 @@ so the whole file does not vanish from the map; their members (functions/variabl
 ### What it cannot read (the boundaries, stated plainly)
 
 1. **Unsupported languages** (Dart / Haskell / Svelte…) are skipped, but **not silently** — the report and the UI
-   both show "unsupported languages: N files (.dart 2 · .vue 1 …)". There is also an easily confused case:
+   both show "unsupported languages: N files (.dart 2 · .vue 1 …)". The same principle covers skipped **directories**:
+   a header chip says "skipped 10 dir names (10) · 3 by project rules" and its tooltip names them (and which rule
+   file they came from). There is also an easily confused case:
    files in a language we *do* support but that were outside this scan (that language was not ticked, or a
    file-level format like JSON/YAML that is off by default) are reported separately as
    "**out of language scope**: N files not scanned", never counted as unsupported;
