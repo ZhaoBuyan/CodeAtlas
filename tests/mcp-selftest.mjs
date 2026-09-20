@@ -204,43 +204,60 @@ check(/找不到|No symbol|not found/i.test(impactMiss), 'impact（找不到时�
 // 看它有没有如实、分档地报出来；再加一个反例：刚扫完的图**不该**报“图旧了”（免得成天误报）。
 // 用完的临时项目留在系统 temp 里（和语言夹具那边的做法一样），不清。
 // ---------------------------------------------------------------------------
+// 下面两段各自要一个独立的小项目 + 一个独立的 MCP 服务，所以把“起服务 + 最小客户端”抽出来
+function spawnMcp(outDir) {
+  const proc = spawn(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'mcp', '--out', outDir], { stdio: ['pipe', 'pipe', 'pipe'], cwd: ROOT });
+  let buf = '';
+  let seq = 0;
+  const pending = new Map();
+  proc.stdout.on('data', (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+      const p = pending.get(msg.id);
+      if (p) { pending.delete(msg.id); p(msg); }
+    }
+  });
+  proc.stderr.on('data', () => {});   // 这两段只看工具正文，不把服务端日志掺进来
+  const req = (method, params) => new Promise((res) => { const id = ++seq; pending.set(id, res); proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); });
+  const call = async (name, args) => {
+    const r = await req('tools/call', { name, arguments: args });
+    return r.result?.content?.[0]?.text ?? '';
+  };
+  const ready = req('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'selftest', version: '1' } });
+  return { proc, req, call, ready };
+}
+
+/** 现造一个临时项目并扫一次（同样限制在一门语言里：同一个进程装多门语法包会崩） */
+function scanProject(tmpDir, files) {
+  const root = path.join(tmpDir, 'proj');
+  const out = path.join(tmpDir, 'out');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  for (const [rel, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), content);
+  }
+  execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', root, '--lang', 'javascript', '--out', out], { stdio: 'pipe' });
+  return { root, out };
+}
+
 const freshTmp = path.join(os.tmpdir(), `codeatlas-fresh-${process.pid}`);
-const freshRoot = path.join(freshTmp, 'proj');
-const freshOut = path.join(freshTmp, 'out');
-fs.rmSync(freshTmp, { recursive: true, force: true });
-fs.mkdirSync(freshRoot, { recursive: true });
+const { root: freshRoot, out: freshOut } = scanProject(freshTmp, {
+  'a.js': 'function alpha(x) { return x + 1; }\n',
+  'b.js': 'function beta(y) { return y * 2; }\n',
+  'c.js': 'function gamma(z) { return z; }\n',
+});
 const fA = path.join(freshRoot, 'a.js');
 const fB = path.join(freshRoot, 'b.js');
 const fC = path.join(freshRoot, 'c.js');
-fs.writeFileSync(fA, 'function alpha(x) { return x + 1; }\n');
-fs.writeFileSync(fB, 'function beta(y) { return y * 2; }\n');
-fs.writeFileSync(fC, 'function gamma(z) { return z; }\n');
-execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', freshRoot, '--lang', 'javascript', '--out', freshOut], { stdio: 'pipe' });
 
-const fc = spawn(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'mcp', '--out', freshOut], { stdio: ['pipe', 'pipe', 'pipe'], cwd: ROOT });
-let fbuf = '';
-let fseq = 0;
-const fpend = new Map();
-fc.stdout.on('data', (d) => {
-  fbuf += d;
-  let i;
-  while ((i = fbuf.indexOf('\n')) >= 0) {
-    const line = fbuf.slice(0, i).trim();
-    fbuf = fbuf.slice(i + 1);
-    if (!line) continue;
-    let msg;
-    try { msg = JSON.parse(line); } catch { continue; }
-    const p = fpend.get(msg.id);
-    if (p) { fpend.delete(msg.id); p(msg); }
-  }
-});
-fc.stderr.on('data', () => {});   // 这一段只关心 overview 的正文，不把服务端日志掺进来
-const freq = (method, params) => new Promise((res) => { const id = ++fseq; fpend.set(id, res); fc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); });
-const fcall = async (name, args) => {
-  const r = await freq('tools/call', { name, arguments: args });
-  return r.result?.content?.[0]?.text ?? '';
-};
-await freq('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'selftest', version: '1' } });
+const fresh = spawnMcp(freshOut);
+await fresh.ready;
 
 // 三种措辞都要认（两语言 + “只有文件没了”那种单独形态）
 const freshLine = (o) => o.split('\n').find((l) => /快照后|after this snapshot|are no longer on disk/i.test(l)) || '';
@@ -249,22 +266,22 @@ const cntChanged = (line) => grab(line, [/快照后 (\S+) 个已纳入图里的�
 const cntTimeOnly = (line) => grab(line, [/其中 (\S+) 个仅时间戳变化/, /\((\S+) timestamp-only\)/]);
 const cntGone = (line) => grab(line, [/另有 (\S+) 个已不在磁盘/, /and (\S+) are no longer on disk/, /快照后有 (\S+) 个已纳入图里的文件已不在磁盘/, /⚠ (\S+) mapped files are no longer on disk/]);
 
-const oFresh = await fcall('overview', {});
+const oFresh = await fresh.call('overview', {});
 check(!freshLine(oFresh), '快照新鲜度：刚扫完的图不报“图旧了”（不误报）');
 
 fs.appendFileSync(fA, '// grow\n');                        // 内容变了（大小跟着变）
-const lGrow = freshLine(await fcall('overview', {}));
+const lGrow = freshLine(await fresh.call('overview', {}));
 check(!!lGrow && cntChanged(lGrow) === 1 && !cntTimeOnly(lGrow) && !cntGone(lGrow),
   '快照新鲜度：内容变了要报（1 个改动，不混进时间戳档）', lGrow.trim().slice(0, 80));
 
 const mtimeB = fs.statSync(fB).mtimeMs;
 fs.utimesSync(fB, new Date(), new Date(mtimeB + 60000));   // 只动时间戳：大小不变
-const lTouch = freshLine(await fcall('overview', {}));
+const lTouch = freshLine(await fresh.call('overview', {}));
 check(!!lTouch && cntChanged(lTouch) === 2 && cntTimeOnly(lTouch) === 1 && !cntGone(lTouch),
   '快照新鲜度：“仅时间戳变化”单独计数（也不叫“未改”——证明不了内容没变）', lTouch.trim().slice(0, 80));
 
 fs.rmSync(fC);                                             // 已纳入图里、磁盘上已经没了
-const lGone = freshLine(await fcall('overview', {}));
+const lGone = freshLine(await fresh.call('overview', {}));
 check(!!lGone && cntChanged(lGone) === 2 && cntTimeOnly(lGone) === 1 && cntGone(lGone) === 1,
   '快照新鲜度：已不在磁盘的要白送一句', lGone.trim().slice(0, 80));
 
@@ -278,7 +295,47 @@ const quiet = [
 ];
 check(quiet.every(([b]) => freshnessNote(b) === ''), '快照新鲜度：多根 / 无根 / 老 bundle / 根不在 → 一律沉默（不猜）', `${quiet.length} 种输入`);
 
-fc.kill('SIGKILL');
+fresh.proc.kill('SIGKILL');
+
+// ---------------------------------------------------------------------------
+// 影响面单列「会被波及的测试文件」：改一个类型 → 要跑哪些测试（与“哪些生产代码要改”分开说）
+// 认测试文件只能按路径（规则见 scan.mjs 的 isTestPath）。这里把两种情况都摆上：
+// ① 测试文件引用它 → 要列出来，而且生产代码不能混进这个名单；
+// ② 只有生产代码引用它 → 要说清是“测试都不引用”而不是“图里没认出测试”（否则会被读成“没测试会挂”）。
+// ---------------------------------------------------------------------------
+const impTmp = path.join(os.tmpdir(), `codeatlas-impact-${process.pid}`);
+const { out: impOut } = scanProject(impTmp, {
+  'src/core.js': 'export class Widget { }\nexport function core() { return 1; }\n',
+  'src/user.js': 'import { Widget } from "./core.js";\nexport function useWidget() { return new Widget(); }\n',
+  'tests/core.test.js': 'import { Widget } from "../src/core.js";\nexport function specWidget() { return new Widget(); }\n',
+});
+const imp = spawnMcp(impOut);
+await imp.ready;
+const lineOf = (text) => (text.split('\n').find((l) => /测试文件|Test files/.test(l)) || '').trim();
+
+const impWidget = await imp.call('impact', { name: 'Widget', depth: 2 });
+const lWidget = lineOf(impWidget);
+check(/tests\/core\.test\.js/.test(lWidget) && !/src\/user\.js/.test(lWidget),
+  'impact：单列会被波及的测试文件（生产代码不混进这个名单）', lWidget.slice(0, 80));
+
+const impCore = await imp.call('impact', { name: 'core', depth: 2 });
+const lCore = lineOf(impCore);
+check(/没有被波及|none affected/.test(lCore),
+  'impact：测试都不引用它时，说明是“没被波及”而不是“没认出测试”（不留误读空间）', lCore.slice(0, 80));
+
+// 图里根本没认出测试文件时，也得说清（不然 AI 会把空名单当成“安全”）
+const noTestTmp = path.join(os.tmpdir(), `codeatlas-notest-${process.pid}`);
+const { out: noTestOut } = scanProject(noTestTmp, {
+  'src/a.js': 'export class Gadget { }\n',
+  'src/b.js': 'import { Gadget } from "./a.js";\nexport function useGadget() { return new Gadget(); }\n',
+});
+const nt = spawnMcp(noTestOut);
+await nt.ready;
+const lNoTest = lineOf(await nt.call('impact', { name: 'Gadget', depth: 2 }));
+check(/没认出测试文件|no such mark/.test(lNoTest),
+  'impact：图里没有这个标记时明说（不把“没认出”或“引擎旧”说成“没被波及”）', lNoTest.slice(0, 80));
+nt.proc.kill('SIGKILL');
+imp.proc.kill('SIGKILL');
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');

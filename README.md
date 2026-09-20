@@ -253,7 +253,7 @@ Tools provided:
 | `subgraph(name, depth)` | Dependency subgraph ("what does changing this drag along") |
 | `file(path)` | A file's types, imports, line counts (**parse errors are called out when present**) |
 | `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply |
-| `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus an explicit list of what is invisible (dynamic calls / reflection) |
+| `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus the **test files** that would be affected (recognized by path), plus an explicit list of what is invisible (dynamic calls / reflection) |
 
 Every tool lists a bounded number of entries and says "first N of M" when it truncates (`search` 20 · `symbol` members 40 · `subgraph` 40 per level · `list` 40 — raise with `limit` / `members`).
 Each result ends with a **snapshot stamp (UTC)**, so even a single call tells you how fresh the data is.
@@ -388,7 +388,7 @@ the output contains a `_comment` explaining the format — edit away).
 | --- | --- |
 | `source` | scan roots, file count, **version stamp** (git commit + whether the tree was dirty; a timestamp when not a git repo), scan duration |
 | `languages` | file count / line count per language |
-| `files[]` | path, language, LOC (whole file) / code / comment / blank lines, import list, namespace |
+| `files[]` | path, language, LOC (whole file) / code / comment / blank lines, import list, namespace, `isTest` (present only for files recognized as tests **by path**) |
 | `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), **`p` / `r`** (signature: parameter list / return type — both keys absent when not extracted), file + line, LOC (this type's range), member stats and list (**each entry: `k` kind, `n` name, `l` line, `d` description, and the same `p` / `r` signature fields**), base types, complexity, fanIn / fanOut |
 | `namespaces` | package tree (with bottom-up totals: lines / type counts) |
 | `edges[]` | type-level dependency edges: `ref` (reference) / `inherit` (inheritance), plus **weight = how many times the name was referenced inside the owning type** |

@@ -72,6 +72,12 @@ const INSTRUCTIONS = [
   '- overview also checks freshness: it re-stats the files already in the map, and when some of them changed on disk after',
   '  the scan it says so (`N mapped files changed…`, of which M are timestamp-only). It only covers files already in the',
   '  map — files added or removed on disk are not detected there, so a re-scan is still how you pick those up;',
+  '- `impact` also lists the **test files** that would be affected, recognized **by path** (test / tests / __tests__ dirs,',
+  '  `.test.` / `.spec.` / `_test.` / `_spec.`, or a `test_` prefix). A project',
+  '  that keeps its tests elsewhere will not be seen',
+  '  there — and when the list is empty, impact says whether that means "no test references it" or "no test files were',
+  '  recognized in this map", so an empty list is never mistaken for safety. Test files are matched by path only — a bundle',
+  '  scanned by a much older engine carries no such marks at all, and impact says so instead of implying "no tests exist";',
 ].join('\n');
 
 export function buildIndex(b) {
@@ -161,7 +167,7 @@ const TOOLS = [
   },
   {
     name: 'impact',
-    description: 'Impact analysis: who is affected if this type changes — multi-hop expansion along "who references it" (2 levels by default), plus an explicit statement of what is invisible (static name matching cannot see dynamic calls or reflection).',
+    description: 'Impact analysis: who is affected if this type changes — multi-hop expansion along "who references it" (2 levels by default), the test files that would be affected (recognized by path), plus an explicit statement of what is invisible (static name matching cannot see dynamic calls or reflection).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -777,6 +783,34 @@ function toolImpact(idx, a) {
       out.push(`  ${x.t.fqn} [${x.t.kind}] ${kinds} ×${x.w} · ${idx.files.get(x.t.file)?.path}`);
     }
     if (L.list.length > 25) out.push(T(`  …（还有 ${L.list.length - 25} 个）`, `  …(${L.list.length - 25} more)`));
+  }
+  // 会被波及的**测试文件**：单列（用户要的）——“要跑哪些测试”与“哪些生产代码要改”是两件事。
+  // 按路径规则认（files[].isTest，规则见 scan.mjs 的 isTestPath）；depth 之外的层不算，和上面的层次一致。
+  const testFiles = [];
+  const seenTest = new Set();
+  for (const L of layers) {
+    for (const x of L.list) {
+      const f = idx.files.get(x.t.file);
+      if (f?.isTest && !seenTest.has(f.path)) { seenTest.add(f.path); testFiles.push(f.path); }
+    }
+  }
+  if (testFiles.length) {
+    const show = testFiles.slice(0, 8);
+    out.push(T(`会被波及的测试文件（${testFiles.length} 个）：${show.join(' · ')}${testFiles.length > show.length ? ` …还有 ${testFiles.length - show.length} 个` : ''}`,
+      `Test files affected (${testFiles.length}): ${show.join(' · ')}${testFiles.length > show.length ? ` …${testFiles.length - show.length} more` : ''}`));
+    out.push(T('  （测试文件是按**路径**认的：test / tests / __tests__ 目录 · `.test.` / `.spec.` / `_test.` / `_spec.` · `test_` 开头；认不出的不在这个名单里）',
+      '  (test files are recognized **by path**: test / tests / __tests__ dirs · `.test.` / `.spec.` / `_test.` / `_spec.` · a `test_` prefix; anything else is not in this list)'));
+  } else {
+    // 一个字节都不许懒：名单为空要能分出“测试都不引用它” / “图里真没测试” / “这份图根本没带这个标记”
+    // （老引擎扫的图没有 isTest 键，直接说“没认出测试文件”会把“引擎旧”说成“项目没测试”）
+    const inMap = b.files.filter((f) => f.isTest).length;
+    const hasMark = b.files.some((f) => 'isTest' in f);
+    out.push(inMap
+      ? T(`测试文件：没有被波及（图里认出 ${fmt(inMap)} 个测试文件，都不引用它）`, `Test files: none affected (the map recognizes ${fmt(inMap)} test files; none of them references it)`)
+      : (hasMark
+        ? T('测试文件：没有被波及（图里没有测试文件）', 'Test files: none affected (this map has no test files)')
+        : T('测试文件：图里没有这个标记（既没认出测试文件，也可能是老版本引擎扫的图 —— 重新扫一次就会带上）',
+          'Test files: this map carries no such mark (either no test file was recognized, or the bundle was scanned by an older engine — a re-scan adds it)')));
   }
   out.push('');
   out.push(T('要注意的：', 'Worth knowing:'));

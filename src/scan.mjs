@@ -1358,10 +1358,36 @@ async function extractFiles(files) {
       imports: facts.imports,
       types: typeIds,
     };
+    if (isTestPath(f.rel)) part.file.isTest = true;
     part.ns = facts.namespaces;
     parts.push(part);
   }
   return { files: parts, failures };
+}
+
+/**
+ * 按**路径**认“测试文件”：引擎没有比这更聪明的办法 —— 大多数语言里测试就是普通函数，语法树上分不出来。
+ * 规则就这几条，宁可漏也不硬猜：
+ *   · 目录段（任意层级）：`test` / `tests` / `__tests__`
+ *   · 文件名：`.test.` / `.spec.` / `_test.` / `_spec.`（扩展名之前）
+ *   · 文件名以 `test_` 开头（Python 的 `test_*.py` 惯例）
+ * 故意**不认** `spec/` 这个目录名：它很常常是 API 规范（OpenAPI 之类）而不是测试，认了会误报；
+ * 而 Jasmine / RSpec 风格的文件靠文件名 `.spec.` / `_spec.` 已经能抓住。
+ * 同样**不做** `fixtures` / `__fixtures__` 目录的特判（试过、已撤）：那类目录一般放样例数据，
+ * 但“要不要算测试”是因项目而异的判断 —— 写进分类器就成了“按某一个项目调的规则”，而且会**静默**
+ * 把一批文件从名单里划掉。宁可让名单带点噪音（本项目自扫 54 个里有 53 个是 tests/fixtures 语料），
+ * 也不替读者做这个决定。
+ * 结果写进 files[].isTest，**只在是测试时才带这个键**（没有这个键 = 不是测试，或者 bundle 是老版本扫的）。
+ */
+function isTestPath(rel) {
+  const segs = String(rel || '').replace(/\\/g, '/').split('/');
+  const base = segs.pop() || '';
+  if (segs.includes('test') || segs.includes('tests') || segs.includes('__tests__')) return true;
+  if (!base) return false;
+  // 只切**最后一个**扩展名：`foo.test.js` 要留 `foo.test` 才能匹配上 `.test.`
+  //（`component.test.mjs` / `handler_test.go` / `foo_spec.rb` 都对）
+  const stem = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
+  return /[._](test|spec)$/i.test(stem) || /^test_/i.test(stem);
 }
 
 /** 合并各子进程/缓存的产出：把局部 id 平移到全局 id（文件、类型、parent、refs.owner 都要移） */

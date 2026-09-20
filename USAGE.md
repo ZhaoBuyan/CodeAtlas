@@ -150,7 +150,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `refs(name, dir?)` | Who references it / what it references (each edge shows `×count` and an evidence tag). Member names / `Type.Member` are accepted too (you get the owning type and its referrers — an upper bound) |
 | `subgraph(name, depth)` | The dependency subgraph around one place |
 | `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members) |
-| `impact(name, depth)` | **Blast radius**: who is affected if you change it (multi-hop) |
+| `impact(name, depth)` | **Blast radius**: who is affected if you change it (multi-hop), plus the test files that would be affected |
 | `file(path)` | The types inside one file |
 
 Each tool lists a bounded number of entries and says "first N of M" when it truncates (`limit` / `members` raise it).\nEvery result ends with a snapshot stamp (UTC).

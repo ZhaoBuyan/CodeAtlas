@@ -70,6 +70,32 @@ function makePlainFixture() {
 makeGitFixture();
 makePlainFixture();
 
+// ---- “测试文件”路径规则用的夹具 ----
+// 认测试文件只能按**路径**（大多数语言里测试就是普通函数，语法树上分不出来），所以每条规则各摆一个，
+// 再加两个**故意不认**的：`spec/`（很常常是 API 规范，不是测试）、`latest.js` / `tester.js`（名字里带 test 但不是测试）。
+// 注：`fixtures` 目录**不特判**（试过、已撤）—— “样例语料算不算测试”是因项目而异的判断，写进分类器就是按某一个项目调规则。
+const TESTPATH_FIXTURE = path.join(TMPROOT, 'testpath');
+function makeTestPathFixture() {
+  fs.rmSync(TESTPATH_FIXTURE, { recursive: true, force: true });
+  const files = {
+    'src/app.js': 'export function app() { return 1; }\n',
+    'src/latest.js': 'export function latest() { return 2; }\n',
+    'src/tester.js': 'export function tester() { return 3; }\n',
+    'src/util.spec.js': 'export function utilSpec() { return 4; }\n',
+    'src/helper_test.js': 'export function helperTest() { return 5; }\n',
+    'src/test_worker.js': 'export function worker() { return 6; }\n',
+    'tests/app.test.js': 'export function t1() { return 7; }\n',
+    'test/legacy.js': 'export function legacy() { return 8; }\n',
+    '__tests__/ui.js': 'export function ui() { return 9; }\n',
+    'spec/api.js': 'export function apiSpec() { return 10; }\n',
+  };
+  for (const [p, c] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(TESTPATH_FIXTURE, p)), { recursive: true });
+    fs.writeFileSync(path.join(TESTPATH_FIXTURE, p), c);
+  }
+}
+makeTestPathFixture();
+
 const CASES = [
   {
     dir: 'csharp',
@@ -274,6 +300,15 @@ const CASES = [
       },
     },
   },
+  {
+    // 测试文件路径规则（不是某一门语言的事，借 javascript 扫一份把规则全摆上）
+    dir: 'testpath',
+    lang: 'javascript',
+    rootAbs: TESTPATH_FIXTURE,
+    files: 10,
+    testFiles: ['tests/app.test.js', 'test/legacy.js', '__tests__/ui.js', 'src/util.spec.js', 'src/helper_test.js', 'src/test_worker.js'],
+    notTestFiles: ['src/app.js', 'src/latest.js', 'src/tester.js', 'spec/api.js'],
+  },
 ];
 
 const results = [];
@@ -300,6 +335,16 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
         push(got === want, `未提交的文件：${got || '（无）'}（期望 ${want || '（无）'}）`);
       }
     }
+  }
+
+  // 测试文件按路径认（files[].isTest）：列出来的必须正好是那几个，
+  // 而且 latest.js / tester.js / spec 目录这些“名字像但不是测试”的一个都不许误判
+  if (c.testFiles) {
+    const got = b.files.filter((f) => f.isTest).map((f) => f.path).sort();
+    push(got.join(' | ') === [...c.testFiles].sort().join(' | '),
+      `测试文件认出来的正好这 ${c.testFiles.length} 个（实际 ${got.join(', ') || '（无）'}）`);
+    const wrong = c.notTestFiles.filter((p) => got.includes(p));
+    push(wrong.length === 0, wrong.length ? `这些不该是测试文件：${wrong.join(', ')}` : '不该误判的都没误判（latest / tester / spec 目录）');
   }
 
   if (c.types != null) push(b.totals.types === c.types, `类型数 ${b.totals.types}（期望 ${c.types}）`);
