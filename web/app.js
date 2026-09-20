@@ -621,11 +621,16 @@ function drawTreemap(target, chart, w, h) {
   // 各层都是 svg 的直接子节点，所以把 transform 套给它们全部：文字就画在格子里，
   // 会自然跟着一起放大（不需要上次那套 ÷k / non-scaling-stroke 的反缩）。
   // 滚轮 = 放大，右键拖动 = 移动画布（左键仍留给选中/钻取），右键不再弹系统菜单。
+  // 布局指纹：分组/深度/视图/钻取目标/度量/画布尺寸 —— 只有它没变时才保留视野
+  const viewKey = () => `${state.groupBy}|${state.groupDepth}|${state.view}|${state.focus}|${state.metric}|${state.hideGenerated}|${w}x${h}`;
+  if (mapTf && viewKey() !== mapKey) { mapTf = null; }
   mapZoom = d3.zoom()
     .scaleExtent([0.3, 8])
     .filter((ev) => ev.type === 'wheel' || ev.button === 2)
-    .on('zoom', (ev) => svg.selectAll(':scope > g').attr('transform', ev.transform));
+    .on('zoom', (ev) => { mapTf = ev.transform; mapKey = viewKey(); svg.selectAll(':scope > g').attr('transform', ev.transform); });
   svg.call(mapZoom).on('contextmenu', (ev) => ev.preventDefault());
+  // 重绘之后把上一次的视图恢复回来（点选模块会重绘，不恢复的话倍率会跳回 1×）
+  if (mapTf) svg.call(mapZoom.transform, mapTf);
   chartState = { leafSel: g, linkG, leafNodes: new Map(leaves.map((d) => [d.data.id, d])) };
 
   g.selectAll('rect')
@@ -1255,6 +1260,8 @@ async function pollBundle() {
 setInterval(pollBundle, 2500);
 
 let mapZoom = null;          // 当前地图的 d3.zoom（每次重绘会换新的）
+let mapTf = null;            // 当前缩放/平移（重绘后恢复用；选中不会把视野冲掉）
+let mapKey = '';             // 上一次缩放时的“布局指纹”：布局变了就丢掉旧视野
 
 // 地图右下角的「取消选中」：键放在 #stage 里而不是 #chart 里 —— 画布每次重绘都会清空
 const selClearBtn = document.getElementById('selClear');
