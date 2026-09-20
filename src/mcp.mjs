@@ -59,7 +59,9 @@ const INSTRUCTIONS = [
   '- Files with parse errors are flagged individually; their data may be incomplete;',
   '- Top-level functions in JS / TS are recorded as [function] **types**, not members: search(scope="member") will not find',
   '  them — use the default scope (any) or scope="type";',
-  '- Members (and JS/TS top-level functions) carry a signature when the tree-sitter grammar exposes one —',
+  '- Dependency edges are **type-level**: there are no per-call-site edges, so "who calls method X" cannot be answered',
+  '  exactly. `refs` / `symbol` do accept a member name or `Type.Member`, and answer with the owning type plus that type\'s',
+  '  referrers (an upper bound); for exact call sites, search the method name inside those referrer files;',
   '  `area(int, int): double`, or just `(int, int)` when the grammar gives the return type no name. A member printed without',
   '  a signature means "not extracted", **not** "takes no arguments" — do not read absence as fact;',
   '- Decompiled output (.dll / .exe / .jar) carries no source comments, so an empty "description" is expected;',
@@ -106,7 +108,7 @@ const TOOLS = [
   },
   {
     name: 'symbol',
-    description: 'Everything about one symbol (type): description, file:line, signature (parameter list + return type, when the grammar exposes it), member list, base types, dependents/dependencies, owning system.',
+    description: 'Everything about one symbol (type): description, file:line, signature (parameter list + return type, when the grammar exposes it), member list, base types, dependents/dependencies, owning system. Members are listed with their own id/line; a **member** name or `Type.Member` is accepted too and answered with its owning type.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -280,11 +282,57 @@ function resolve(idx, key) {
   if (exact.length === 1) return { type: exact[0] };
   const hits = idx.b.types.filter((t) => t.name.toLowerCase().includes(low) || t.fqn.toLowerCase().includes(low));
   if (hits.length === 1) return { type: hits[0] };
-  if (!hits.length) return { error: T(`找不到匹配 "${s}" 的符号。用 search 先找找。`, `No symbol matches "${s}". Try search first.`) };
+  if (!hits.length) {
+    // 给的是**成员名**（或 `类型.成员`）时，不要拿“找不到符号”把人顶回去：
+    // 依赖边只记类型级，但我们可以把“所属类型”指出来（用户要查调用点时这就是最窄的超集）。
+    const mem = memberHitsOf(idx, s);
+    if (mem.length) return { error: memberNote(idx, s, mem) };
+    return { error: T(`找不到匹配 "${s}" 的符号。用 search 先找找。`, `No symbol matches "${s}". Try search first.`) };
+  }
   return {
     error: T(`"${s}" 匹配到 ${hits.length} 个，请用更精确的名字或 id：\n`, `"${s}" matched ${hits.length} symbols — use a more precise name or id:\n`) +
       hits.slice(0, 12).map((t) => `  ${t.id}  ${t.fqn}  [${t.kind}]  ${idx.files.get(t.file)?.path}`).join('\n'),
   };
+}
+
+/**
+ * 成员名（或 `类型.成员`）→ [{ t: 所属类型, m: 成员 }]。
+ * 为什么要有：图的依赖边**只到类型这一级**（`refs` 答的是“谁引用了这个类型”）；
+ * 所以拿方法名去问 refs 时，以前直接答“找不到匹配的符号”—— 既不准确（符号明明在），
+ * 也帮不上“找出这个方法的调用点”这个真实需求。2026-09-20 用户实测报告里那条“硬伤”。
+ */
+function memberHitsOf(idx, raw) {
+  const s = String(raw ?? '').trim();
+  const found = [];
+  const claim = (t, m) => { if (m && !found.some((x) => x.t.id === t.id && x.m.l === m.l)) found.push({ t, m }); };
+  const lastDot = s.lastIndexOf('.');
+  if (lastDot > 0) {   // 类型.成员（C# 的 `MuSync.SteamStatusManager.ClearStatus` 走这条）
+    const owner = s.slice(0, lastDot);
+    const mName = s.slice(lastDot + 1);
+    const owners = idx.b.types.filter((t) => t.name === owner || t.fqn === owner || t.fqn.toLowerCase().endsWith('.' + owner.toLowerCase()));
+    for (const t of owners) for (const m of t.memberList || []) if (m.n === mName || m.n === `${mName}()`) claim(t, m);
+  }
+  if (!found.length) {  // 光一个成员名：在所有类型里找（可能有多个候选）
+    for (const t of idx.b.types) {
+      for (const m of t.memberList || []) if (m.n === s || m.n === `${s}()` || (m.n || '').startsWith(`${s}(`)) claim(t, m);
+    }
+  }
+  return found;
+}
+
+/** 成员名被交给 refs / symbol / subgraph / impact 时的回答（诚实地讲清“能答什么”与“怎么接下一步”） */
+function memberNote(idx, name, hits) {
+  const head = T(`「${name}」是**成员**，不是类型。本图的依赖边只记**类型级**（成员级的调用点没有逐个记录），所以不能直接列出“谁调用了它”。`,
+    `"${name}" is a **member**, not a type. Dependency edges here are **type-level** (per-call-site references are not recorded), so we cannot list "who calls it" directly.`);
+  const rows = hits.slice(0, 12).map(({ t, m }) => {
+    const f = idx.files.get(t.file);
+    const ev = evidencedIn(idx, t);
+    return T(`  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  （所属类型 id=${t.id}，被引 ${t.fanIn} 次${ev < t.fanIn ? `，其中算数的 ${ev} 次` : ''}）`,
+      `  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  (owner type id=${t.id}, referenced ${t.fanIn} times${ev < t.fanIn ? `, ${ev} with evidence` : ''})`);
+  });
+  const tail = T(`→ 想看“谁可能调用它”：对上面每个类型调 refs(id) —— 那是**超集**，不等于该方法的调用点；\n  要精确的调用点，就在那些引用方的文件里搜方法名。`,
+    `→ To narrow down callers: call refs(id) on each owner type above — that is an **upper bound**, not the exact call sites;\n  for exact call sites, search the method name inside those referrer files.`);
+  return `${head}\n${rows.join('\n')}\n${tail}`;
 }
 
 function toolOverview(idx) {
@@ -339,7 +387,7 @@ function toolOverview(idx) {
     return T(`  ${t.fqn} [${t.kind}] 被引用 ${t.fanIn} 次${note} · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced ${t.fanIn} times${note} · ${idx.files.get(t.file)?.path}`);
   };
   lines.push(T('被依赖最多（改动的波及面最大；按“有证据的引用次数”排 —— 仅同名的边不算，见 refs）：\n', 'Most depended-on (biggest blast radius; ranked by references with evidence — same-name-only edges do not count, see refs):\n') + topIn.map(hotLine).join('\n'));
-  lines.push(T('最大的文件：\n', 'Largest files:\n') + bigFiles.map((f) => T(`  ${f.path}  ${fmt(f.code)} 行`, `  ${f.path}  ${fmt(f.code)} lines`)).join('\n'));
+  lines.push(T('最大的文件（按代码行）：\n', 'Largest files (by code lines):\n') + bigFiles.map((f) => T(`  ${f.path}  ${fmt(f.code)} 代码行`, `  ${f.path}  ${fmt(f.code)} code lines`)).join('\n'));
   lines.push(T('深入用：search / symbol / refs / subgraph / file', 'Dig deeper with: search / symbol / refs / subgraph / file'));
   return lines.join('\n');
 }
@@ -381,7 +429,7 @@ function toolSearch(idx, a) {
   if (memberHits.length) {
     out.push(T(`成员（显示前 ${Math.min(memberHits.length, limit)}）：`, `Members (first ${Math.min(memberHits.length, limit)}):`));
     for (const { t, m } of memberHits.slice(0, limit)) {
-      out.push(T(`  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（定义在 ${t.id} ${t.name}）`, `  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(defined in ${t.id} ${t.name})`) + (m.d ? T(`\t说明：${briefDoc(m.d)}`, `\tdoc: ${briefDoc(m.d)}`) : ''));
+      out.push(T(`  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（所属类型 id=${t.id}，被引 ${t.fanIn} 次）`, `  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(owner type id=${t.id}, referenced ${t.fanIn} times)`) + (m.d ? T(`\t说明：${briefDoc(m.d)}`, `\tdoc: ${briefDoc(m.d)}`) : ''));
     }
     out.push(T('（成员名后面要看它的上下文，用 symbol 加类型名/id）', '(to see a member in context, call symbol with the type name / id)'));
   }
@@ -488,7 +536,7 @@ function toolFile(idx, a) {
   if (!f) return T(`没有匹配 "${a.path}" 的文件。用 search 可以按文件名片段搜符号。`, `No file matches "${a.path}". Use search to find symbols by file-name fragment.`);
   const types = idx.b.types.filter((t) => t.file === f.id);
   const lines = [
-    T(`${f.path}  [${f.lang}]  ${f.loc} 行（整文件：代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines (whole file: code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
+    T(`${f.path}  [${f.lang}]  ${f.loc} 行（其中代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines total (code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
   ];
   if (f.errors) lines.push(T(`注意：${f.errors} 处解析异常`, `Note: ${f.errors} parse errors`));
   lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.fqn && t.fqn !== t.name ? t.fqn : t.name}[${t.kind}]`).join('  '));

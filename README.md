@@ -249,7 +249,7 @@ Tools provided:
 | `list(path?, limit?)` | **Browse by directory**: no `path` → the scan root; otherwise that level's folders / files with file, type and line counts. Start here when you do not know any names yet — its output (paths, file names) feeds `file()` / `search()` |
 | `search(query, scope?, kind?)` | Find symbols by name; **member names are included by default** (searching `OnPaint` finds "who defines this method"); `scope=type\|member` narrows it. Hits carry the **signature** (parameter list + return type), so same-name overloads are told apart. Returns ids for the other tools |
 | `symbol(name)` | Everything about one type: description, signature, file:line, member list (**with parameter list and return type**), base types, **reference counts (weighted)**, its system |
-| `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code); every edge carries `×count` and its evidence strength |
+| `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code); every edge carries `×count` and its evidence strength. **Member names and `Type.Member` are accepted too** — member-level edges are not recorded, so you get the owning type and its referrers (an upper bound) plus how to find the exact call sites |
 | `subgraph(name, depth)` | Dependency subgraph ("what does changing this drag along") |
 | `file(path)` | A file's types, imports, line counts (**parse errors are called out when present**) |
 | `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply |

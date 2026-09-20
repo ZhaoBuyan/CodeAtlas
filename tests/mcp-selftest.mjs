@@ -169,6 +169,24 @@ if (typeSig) {
   check(out.includes(s), 'symbol（类型带签名）', `${typeSig.name}${s}`);
 }
 
+// 成员级提问：refs 拿到“类型.成员”要指回所属类型与它的引用方，而不是答“找不到”（用户实测的硬伤）
+const withMember = bundle.types.find((t) => (t.memberList || []).some((x) => x.n) && t.fqn);
+if (withMember) {
+  const m = withMember.memberList.find((x) => x.n);
+  const q = `${withMember.fqn}.${m.n}`;
+  const r = await call('refs', { name: q, dir: 'in' });
+  check(!/找不到匹配/.test(r) && r.includes(`id=${withMember.id}`), 'refs（类型.成员 → 指回所属类型）', q);
+  const sr = await call('search', { query: m.n, scope: 'member' });
+  check(sr.includes(`所属类型 id=${withMember.id}`), 'search（成员命中带所属类型 id）', m.n);
+}
+// 行数口径：overview 与 file 都要写清哪个是“代码行”
+check(/代码行/.test(overview), 'overview 写明“代码行”', '最大的文件（按代码行）');
+const anyFile = bundle.files.find((f) => f.loc > 0 && f.path);
+if (anyFile) {
+  const fi = await call('file', { path: anyFile.path.split('/').pop() });
+  check(/其中代码|代码 \d/.test(fi), 'file 写明总行与代码行', `行数：${fi.match(/[\d,]+ 行[^\n]*/)?.[0] || '（读不到）'}`.slice(0, 70));
+}
+
 const map600 = await call('map', { budget: 600 });
 check(map600.length > 80 && map600.length / 4 < 600 * 1.4, 'map（token 预算）', `约 ${Math.ceil(map600.length / 4)} token / 预算 600`);
 

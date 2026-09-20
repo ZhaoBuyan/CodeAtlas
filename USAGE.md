@@ -147,7 +147,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `list(path?)` | **Browse by directory** — start here when you do not know any names yet: pass a folder (or nothing for the scan root) and get its folders / files with file, type and line counts |
 | `search(query, scope?)` | Find symbols — **member names are searched too** ("who defines `OnPaint`?"), with type hits and member hits separated |
 | `symbol(name)` | Details of one type: members (**with parameter list and return type**), bases, reference count |
-| `refs(name, dir?)` | Who references it / what it references (each edge shows `×count` and an evidence tag) |
+| `refs(name, dir?)` | Who references it / what it references (each edge shows `×count` and an evidence tag). Member names / `Type.Member` are accepted too (you get the owning type and its referrers — an upper bound) |
 | `subgraph(name, depth)` | The dependency subgraph around one place |
 | `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members) |
 | `impact(name, depth)` | **Blast radius**: who is affected if you change it (multi-hop) |
