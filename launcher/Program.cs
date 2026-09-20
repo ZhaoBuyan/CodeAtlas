@@ -1414,9 +1414,9 @@ namespace CodeAtlas
                 // 默认（cur 为空）→ 勾非 OptIn；已保存的选择 → 照它说的勾，但“当时是全选”时把新语言补上
                 _list.SetItemChecked(i, cur.Length == 0 ? !l.OptIn : (Array.IndexOf(cur, l.Id) >= 0 || (savedWasAll && !l.OptIn)));
             }
-            // 列表最后一项：.gitignore（用户要求：复选框加一项 .gitignore，默认不勾）。
-            // 它是“开关”不是语言，所以 SetChecks / UpdateHint / ComputeResult 都只扫到 _langs.Length 为止，天然不受影响。
-            _list.Items.Add(L.T("按 .gitignore 跳过（目录和文件都跳）", "Skip what .gitignore ignores (dirs and files)"));
+            // 和上面那些语言项同一个语义：勾 = 纳入（对它是“用上这套 .gitignore 规则”）。
+            // 文案就只写 .gitignore（用户要求），不要再写“跳过”之类反向字眼。
+            _list.Items.Add(L.T(".gitignore", ".gitignore"));
             _list.SetItemChecked(_langs.Length, GitignoreWanted);
             // 勾选状态在 ItemCheck 之后才变，所以推到消息循环下一轮再算摘要
             _list.ItemCheck += (s, e) => BeginInvoke(new Action(UpdateHint));
