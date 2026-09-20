@@ -172,7 +172,7 @@ node src/cli.mjs ingest "game.jar" --decompiler "C:/tools/cfr.jar"
   扫 `.jar` 用**自带的裁剪版 Java 运行时 + cfr**——都不需要你先去装 ilspycmd / sfextract / Java。
   精简版不带 Java 运行时（它本来就要求机器上有 .NET 9 + Node），所以扫 `.jar` 仍需自己装 Java；
   直接跑引擎（`node src/cli.mjs`）也仍是开发模式：扫 `.dll` / `.jar` 需要自己装工具。
-- 反编译产物没有源码注释，所以“说明”是空的；行数含语法糖展开（实测比源码高 ~6%），界面上会明确标出来。
+- 反编译产物没有源码注释，所以“说明”是空的；行数含语法糖展开（实测比源码高约 6%），界面上会明确标出来。
 - **编译器生成物自动识别**：形如 `<PrivateImplementationDetails>`、`_003C...`（ILSpy 转义）、`__InlineArray`、`__DisplayClass` 的类型会自动打上 `compiler-generated` 标签，反编译产物默认在界面里隐藏（可取消勾选看）。
 
 ## C# 语法（不再需要预处理了）
@@ -399,7 +399,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 **语法包与“分进程解析”**：升到 `web-tree-sitter` 0.27.0 之后，单门语法包加载后常驻约 **11 MB**（曾经是 150–180 MB），同进程里装 105 门也只是 1.2 GB 级别（实测：20 门共 104 MB、自然退出 exit=0）。
 分进程**仍然保留**，但理由换成了**崩溃隔离**：语法包在特定输入上硬崩（wasm 层 abort，JS 拦不住）时，
-只丢那一门、其余照常进地图。参考实测：老运行时同进程装 9 门必崩（退出码 `0xC0000409`），1~3 门正常。
+只丢那一门、其余照常进地图。参考实测：老运行时同进程装 9 门必崩（退出码 `0xC0000409`），1–3 门正常。
 注意这**不是“内存不够”**：本机 Node 能分配到 50 GB+ 才叫不够。
 
 **所以扫描是这么跑的**：父进程只负责收集文件 / 建索引 / 写 bundle，**每门语言的解析都在自己的子进程里做**（每个子进程只装一门语法包）。
@@ -411,9 +411,9 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 调这个可以用：`npm run probe:mem`（语法包内存探针，逐行落盘）。
 
-**语法包来源与规模**（用哪个就在 `src/languages.mjs` 里加 profile，一般 5~10 行）：
+**语法包来源与规模**（用哪个就在 `src/languages.mjs` 里加 profile，一般 5–10 行）：
 
-- 主来源：npm 包 `tree-sitter-wasm`（**105 个语法包**；当前运行时 `web-tree-sitter` 0.27.0，兼容语法 ABI 13~15）；
+- 主来源：npm 包 `tree-sitter-wasm`（**105 个语法包**；当前运行时 `web-tree-sitter` 0.27.0，兼容语法 ABI 13–15）；
 - 自己补的：`vendor/wasm/`（TLA+；SystemRDL 是自己用 emscripten 编的）；
 - 全量冒烟：`npm run probe:abi` → 实测两个来源里的 wasm 全部能加载并解析。
 

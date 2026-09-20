@@ -157,7 +157,7 @@ runtime (about 30 MB).
 
 - Extracted size: about 163 MB (full) / 45 MB (lite); delete it and it is re-extracted automatically.
   Old extraction directories for other versions are cleaned up **on every start**, keeping only the one in
-  use plus the most recently used one — so switching versions does not leave ~160 MB behind each time.
+  use plus the most recently used one — so switching versions does not leave about 160 MB behind each time.
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
@@ -207,7 +207,7 @@ Known limits:
   Running the engine directly (`node src/cli.mjs`) stays in development mode, where `.dll` / `.jar` need
   ilspycmd / java installed.
 - Decompiled output has no source comments, so "description" is empty; line counts include expanded
-  syntactic sugar (measured ~6% above source), and the UI says so.
+  syntactic sugar (measured about 6% above source), and the UI says so.
 - **Compiler-generated types are detected**: names like `<PrivateImplementationDetails>`, `_003C…`
   (ILSpy escaping), `__InlineArray`, `__DisplayClass` are tagged `compiler-generated` and hidden in the UI by
   default (there is a checkbox to show them).
