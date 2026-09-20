@@ -894,20 +894,18 @@ function applyEmphasis(focusId) {
     const len = Math.hypot(dx, dy) || 1;
     const px = -dy / len;                     // 垂直于 A→B 的方向
     const py = dx / len;
-    // 这一组线在 **B 一侧** 摊开的总宽度：短边窄、长边宽；也参考目标格子的大小，
-    // 免得线散到格子外面去；封顶 160px（81 根也不会铺满屏幕）
-    const tHalf = Math.min(t.x1 - t.x0, t.y1 - t.y0) / 2;
-    const spread = Math.min(160, len / 3, 10 * n, Math.max(24, tHalf * 0.8));
+    // 每组线摊开的总宽度（只作用在**中段的控制点**上）：短边窄、长边宽，封顶 160px。
+    // 两端端点不动 → 线永远落在两个模块的中心，不会散到模块外面（试过末端也摊开，会落出格子）
+    const spread = Math.min(160, len / 3, 10 * n);
     const step = n > 1 ? spread / (n - 1) : 0;
     const bend = Math.min(60, len / 3);
     for (let i = 0; i < n; i++) {
-      const off = (i - (n - 1) / 2) * step;
       links.push({
-        sx: sc.x, sy: sc.y,                    // 起点固定在 A 的中心（“从中心发散”）
-        // 末端也摊开：全挤在 B 的中心会看成一束粗线，摊开才看得出“3 根去 B、3 根去 C”
-        tx: tc.x + px * off, ty: tc.y + py * off,
-        ex: px * off, ey: py * off,
-        kind: e.kind, bend,
+        sx: sc.x, sy: sc.y, tx: tc.x, ty: tc.y,
+        px, py,
+        kind: e.kind,
+        off: (i - (n - 1) / 2) * step,   // 控制点沿垂直方向铺开；n=1 时 off=0，与原来那根线一模一样
+        bend,
       });
     }
     lines += n;
@@ -915,9 +913,9 @@ function applyEmphasis(focusId) {
   }
   linkG.selectAll('path').data(links).join('path')
     .attr('d', (l) => {
-      // 控制点跟着末端一起偏（偏一半），曲线就顺：起点集中在 A 的中心，末端散开落在 B 上
-      const mx = (l.sx + l.tx) / 2 + l.ex * 0.5;
-      const my = (l.sy + l.ty) / 2 + l.ey * 0.5 - l.bend;
+      // 两端端点在模块中心，只把中段的控制点沿垂直方向偏 l.off —— 同一组线就分开了
+      const mx = (l.sx + l.tx) / 2 + l.px * l.off;
+      const my = (l.sy + l.ty) / 2 + l.py * l.off - l.bend;
       return `M${l.sx},${l.sy} Q${mx},${my} ${l.tx},${l.ty}`;
     })
     .attr('stroke', (l) => (l.kind === 'inherit' ? '#d29922' : '#58a6ff'))
