@@ -344,7 +344,7 @@ node src/cli.mjs langs [--json]                    # list supported languages (-
   reproducible.
 
 - **“Clear selection”** at the bottom-right of the map: clears the selection, empties the inspector, and drops the selection out of the URL hash.
-- **Zoom / pan**: wheel to zoom, **right-drag to move the canvas** (the left button stays on select / drill-down), **“回正”** at the bottom-right resets to the whole map. Text scales with the zoom, and selecting a module no longer resets the zoom level.
+- **Zoom / pan**: wheel to zoom, **right-drag to move the canvas** (the left button stays on select / drill-down), **“Reset view”** at the bottom-right resets to the whole map. Text scales with the zoom, and selecting a module no longer resets the zoom level.
 - **The page reloads itself**: after you change anything under `web/`, any open page refreshes on its own — no F5 needed.
 
 ## Grouping rules (facets)
@@ -382,7 +382,7 @@ the output contains a `_comment` explaining the format — edit away).
 | `source` | scan roots, file count, **version stamp** (git commit + whether the tree was dirty; a timestamp when not a git repo), scan duration |
 | `languages` | file count / line count per language |
 | `files[]` | path, language, LOC (whole file) / code / comment / blank lines, import list, namespace |
-| `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), **`p` / `r`** (signature: parameter list / return type — both keys absent when not extracted), file + line, LOC (this type's range), member stats and list, base types, complexity, fanIn / fanOut |
+| `types[]` | name, `fqn`, kind, namespace, `dir`, `system` + `systemRule` (which rule matched), **`doc`** (description from source comments), **`p` / `r`** (signature: parameter list / return type — both keys absent when not extracted), file + line, LOC (this type's range), member stats and list (**each entry: `k` kind, `n` name, `l` line, `d` description, and the same `p` / `r` signature fields**), base types, complexity, fanIn / fanOut |
 | `namespaces` | package tree (with bottom-up totals: lines / type counts) |
 | `edges[]` | type-level dependency edges: `ref` (reference) / `inherit` (inheritance), plus **weight = how many times the name was referenced inside the owning type** |
 | `nsEdges[]` | namespace-level edges (used by the package dependency view) |
@@ -525,7 +525,7 @@ so the whole file does not vanish from the map; their members (functions/variabl
 - **Whatever your project rules say**: `facets.json`'s `exclude` adds directories to ignore (upstream
   reference code, for instance). Better still, drop an **`atlas.ignore`** at the **scan target root**
   (`dirname` / `dirname/` / globs like `*.gen.ts` / `#` comments, one per line — read **only if the file exists**);
-  the launcher's **「扫描范围」** picker (last item: **「按 .gitignore 跳过」**) or `--gitignore` on the CLI additionally honors the project's own
+  the launcher's **“Scan scope”** picker (last item: **`.gitignore`**) or `--gitignore` on the CLI additionally honors the project's own
   `.gitignore` — **including the ones inside subdirectories**, with git's semantics: each file's rules only apply to its own
   subtree (so a monorepo does not come out half-empty); directories that are excluded are not descended into.
   Whatever gets skipped is named in the report (along with how many rule files were read; `!` negations are not supported yet — also reported).
@@ -594,6 +594,10 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] Headless self-check and diagnostics in the same exe (`--headless --path <dir> --log <file>`, `--list-langs`, `draft-facets`) — useful when somebody reports a problem
 - [x] AI interface hardening: one-click MCP config copy · `map(budget)` skeleton export · `impact` blast radius (multi-hop + honest caveats)
 - [x] UI language: 中文 / English across the launcher, the engine's output, all MCP tools and the web map (switching needs no re-scan) — the docs come in both languages too ([README_CN.md](README_CN.md) · [USAGE.md](USAGE.md))
+- [x] **Scan scope**: the toolbar picker (formerly "Language") also honors the project's own `.gitignore` — **including the ones inside subdirectories** — and an `atlas.ignore` lets a project declare its own skips; everything skipped is named in the scan report
+- [x] **Member signatures**: `symbol` / `search` / the inspector show parameter lists and return types (`area(int, int): double`), so same-name overloads are told apart
+- [x] **Reference counts**: edge weights are real reference counts — the map draws **one line per reference**, and reference counts elsewhere are weighted too
+- [x] Zoom / pan on the map (wheel + right-drag + “Reset view”), plus a header chip that states what was skipped
 
 - **git heat coloring**: files are colored by how often git touched them, so the busiest code stands out (uncommitted files get a bright border)
 - **Snapshot / monitor mode** in the launcher: edit your code and the map updates incrementally — no full rescan, no page refresh
