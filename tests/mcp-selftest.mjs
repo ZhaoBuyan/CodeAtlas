@@ -92,7 +92,7 @@ const tagCount = (refsAll.match(/\[(同文件|有支撑|仅同名|same file|back
 const edgeCount = (refsAll.match(/×/g) || []).length;
 check(edgeCount > 0 && tagCount === edgeCount, 'refs 每条边都标了引用证据强度', `${tagCount}/${edgeCount} 条带标签`);
 const hasNameOnly = /\[(仅同名|same name only)\]/.test(refsAll);
-check(!hasNameOnly || /别当真|do not trust it/.test(refsAll), 'refs 出现“仅同名”时会说明它不能当真', hasNameOnly ? '有仅同名边，已带说明' : '这个 bundle 里没有仅同名边');
+check(!hasNameOnly || /真引用|real references/.test(refsAll), 'refs 的图例把“仅同名”说准（既有巧合、也可能有没认出来的真引用）', hasNameOnly ? '有仅同名边，已带说明' : '这个 bundle 里没有仅同名边');
 
 // 措辞跟着改过两轮：`被 N 处引用` → `被引用 N 次`（边权重变成真的引用次数后，"处（来源数）" 与 "次（次数）"
 // 不再是同一个数，标签必须说清是哪个）。这里认两种语言的新措辞。
@@ -526,12 +526,13 @@ check(/widget\.js:8\t(访问|access)/.test(rTitle),
 const rNone = await us.call('refs', { name: 'no_such_member_zzz' });
 check(!/调用 \/ 访问位置/.test(rNone), '① 查不存在的名字时不扯调用位置');
 
-// 老 bundle（没有 uses 字段）：绝不能把“没记录”说成“一处都没找到”（跟 impact 的测试文件同一个口径）
+// 老图：判据是**引擎版本**（不是“图里有没有 uses 字段”—— 新引擎扫的小工程本来就可能一条都没有）
 const oldOut = path.join(useTmp, 'out-old');
 {
   fs.mkdirSync(oldOut, { recursive: true });
   const b = JSON.parse(fs.readFileSync(path.join(useOut, 'bundle.json'), 'utf8'));
-  for (const t of b.types) delete t.uses;
+  b.generator.version = '1.4.2';              // 老引擎版本
+  for (const t of b.types) delete t.uses;     // 而且老引擎根本不会产生 uses —— 两样都要模拟，否则位置段照常列位置
   for (const f of b.files) delete f.uses;
   fs.writeFileSync(path.join(oldOut, 'bundle.json'), JSON.stringify(b));
 }
@@ -539,7 +540,7 @@ const usOld = spawnMcp(oldOut);
 await usOld.ready;
 const rOld = await usOld.call('refs', { name: 'render' });
 check(/没有这类记录|carries no such records/.test(rOld) && !/一处都没找到|none found/.test(rOld),
-  '① 老 bundle（没 uses）明说“没记录”，不说“一处都没找到”',
+  '① 引擎 < 1.5.0 的图明说“没记录”，不说“一处都没找到”',
   (rOld.split('\n').find((l) => /调用 \/ 访问位置|Call \/ access sites/.test(l)) || '').trim().slice(0, 70));
 usOld.proc.kill('SIGKILL');
 us.proc.kill('SIGKILL');
@@ -579,7 +580,9 @@ const { out: nsOut } = scanProject(nsTmp, {
   'q/Kid.cs': 'namespace Demo.Deep\n{\n    public class Kid\n    {\n        public Root Field;\n    }\n}\n',
   // 构造函数与类同名（C#/Java/Kotlin 必然如此）：它的声明行不能算“调用点”
   'r/Widget.cs': 'namespace Demo.R\n{\n    public class Widget\n    {\n        public Widget() { }\n    }\n}\n',
-  'r/Use.cs': 'namespace Demo.R\n{\n    public class User\n    {\n        public Widget Make() { return new Widget(); }\n    }\n}\n',
+  'r/Use.cs': 'namespace Demo.R\n{\n    public class User\n    {\n        public User() { }\n        public Widget Make() { return new Widget(); }\n    }\n}\n',
+  // 别的类型里有个成员叫 Widget —— 这才是真正会混进 `refs("…Widget")` 的那种同名风险
+  's/Holder.cs': 'namespace Demo.S\n{\n    public class Holder\n    {\n        public int Widget;\n    }\n}\n',
 }, 'csharp');
 const ns = spawnMcp(nsOut);
 await ns.ready;
@@ -611,7 +614,44 @@ if (ctorOwner) {
 } else {
   check(false, '① 类型回答的位置段排除“同名成员的声明行”', '夹具里没找到构造函数，门没意义');
 }
+// 复测第三轮 §3-b：不能把“自己那个与类同名的构造函数”算成同名风险
+const rUser = await ns.call('refs', { name: 'Demo.R.User' });
+check(!/同名的成员|same-named members/.test(rUser),
+  '③b 类只有“自己的构造函数”同名时不打同名提示（C# 上否则几乎每个类都会多一句废话）');
+const rWidget2 = await ns.call('refs', { name: 'Demo.R.Widget' });
+check(/同名的成员|same-named members/.test(rWidget2),
+  '③b **别的**类型里有这个成员名时才提示“同名会混进来”');
 ns.proc.kill('SIGKILL');
+
+// ③c 复测第三轮：小工程“没有位置”不能被说成“老版本引擎扫的图”
+//（判据改成**引擎版本**，不看“图里有没有 uses 字段”—— 新引擎扫的小工程本来就可能一条都没有）
+const declTmp = path.join(os.tmpdir(), `codeatlas-declonly-${process.pid}`);
+const { out: declOut } = scanProject(declTmp, {
+  'decl.js': 'export class OnlyDecl { render() { return 1; } }\n',
+});
+const ds = spawnMcp(declOut);
+await ds.ready;
+const rDeclM = await ds.call('refs', { name: 'render' });   // 成员：正文总会出，措辞得是“一处都没找到”
+check(/一处都没找到|none found/.test(rDeclM) && !/老版本引擎|older engine/.test(rDeclM),
+  '③c 新引擎扫的小工程没有位置 → 说“一处都没找到”，不说“老版本引擎扫的图”',
+  (rDeclM.split('\n').find((l) => /调用 \/ 访问位置|Call \/ access/.test(l)) || '').trim().slice(0, 60));
+const rDeclT = await ds.call('refs', { name: 'OnlyDecl' });  // 类型：没有位置就干脆不打印，不瞎报一句
+check(!/调用 \/ 访问位置|Call \/ access sites/.test(rDeclT),
+  '③c 类型没有位置时**不打印**位置段（不瞎报“老版本引擎”）');
+ds.proc.kill('SIGKILL');
+// 真·老图：把同一份 bundle 的引擎版本改小 → 必须走“没记录”那个分支
+const oldTmp2 = path.join(os.tmpdir(), `codeatlas-oldeng-${process.pid}`);
+fs.rmSync(oldTmp2, { recursive: true, force: true });
+fs.mkdirSync(oldTmp2, { recursive: true });
+const oldB = JSON.parse(JSON.stringify(readBundle(declOut)));
+oldB.generator.version = '1.4.2';
+fs.writeFileSync(path.join(oldTmp2, 'bundle.json'), JSON.stringify(oldB));
+const os2 = spawnMcp(oldTmp2);
+await os2.ready;
+const rOld2 = await os2.call('refs', { name: 'OnlyDecl' });
+check(/老版本引擎|older engine/.test(rOld2),
+  '③c 引擎 < 1.5.0 的图才说“没有这类记录 … 重新扫一次就会带上”');
+os2.proc.kill('SIGKILL');
 
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);

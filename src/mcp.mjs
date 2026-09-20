@@ -386,9 +386,20 @@ function memberUses(idx, name) {
   return collectUses(idx, [name], memberDeclKeys(idx, [name]));
 }
 
-/** 这份 bundle 有没有记录过“调用 / 访问位置”（老图没有 → 措辞得说“没记录”，不能说“没有”） */
-function hasUseData(idx) {
-  return idx.b.types.some((t) => t.uses) || idx.b.files.some((f) => f.uses);
+/**
+ * 这份 bundle 的**引擎版本**支不支持“调用 / 访问位置”记录（1.5.0 起）。
+ * ⚠ 不能拿“图里有没有 uses 字段”当判据：**新引擎扫的小工程本来就可能一条都没有**（没有名字出现在调用位），
+ * 那时说“老版本引擎扫的图，重扫一次就会带上”就是把“没有”错说成“没记录”（复测第三轮抓到的）。
+ */
+function engineHasUses(idx) {
+  const parts = (v) => String(v || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const a = parts(idx.b.generator?.version);
+  const b = parts('1.5.0');
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] || 0, y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
 }
 
 /** 调用 / 访问位置的正文（成员回答与类型回答共用） */
@@ -396,7 +407,7 @@ function usesLines(idx, sites, withData) {
   const CAP = 12;
   if (!sites.length) {
     return withData
-      ? T('调用 / 访问位置：一处都没找到（这个名字在全图里没出现在调用位或成员访问位）',
+      ? T('调用 / 访问位置：一处都没找到（这个图里没有名字出现在调用位或成员访问位）',
         'Call / access sites: none found (this name never appears in a call or member-access position in the map)')
       : T('调用 / 访问位置：这份图里没有这类记录（老版本引擎扫的图 —— 重新扫一次就会带上）',
         'Call / access sites: this map carries no such records (it was scanned by an older engine — a re-scan adds them)');
@@ -432,7 +443,7 @@ function memberNote(idx, name, hits) {
     }
   }
   sites.sort((a, b) => (a.fileId - b.fileId) || (a.l - b.l));
-  const siteBlock = usesLines(idx, sites, hasUseData(idx));
+  const siteBlock = usesLines(idx, sites, engineHasUses(idx));
   const tail = T(`→ 这些位置是**按名字匹配**的：不解析接收者类型，同名的其它成员会混进来；动态调用 / 别名 / 反射，\n  以及 Lisp 那种 \`(foo x)\` 写法**抓不到**。要交叉核对：对上面每个所属类型调 refs(id)（那是超集）。`,
     `→ These sites are matched **by name only**: the receiver type is not resolved, so same-named members elsewhere are mixed in;\n  dynamic calls / aliases / reflection — and Lisp-style \`(foo x)\` calls — are invisible. To cross-check: refs(id) on each owner type above (an upper bound).`);
   return `${head}\n${rows.join('\n')}\n${siteBlock}\n${tail}`;
@@ -830,12 +841,14 @@ function toolRefs(idx, a) {
   const typeDecl = memberDeclKeys(idx, [t.name, t.fqn]);
   typeDecl.add(`${t.file}#${t.line}`);
   const typeSites = collectUses(idx, [t.name, t.fqn], typeDecl);
-  if (typeSites.length || !hasUseData(idx)) {
+  if (typeSites.length || !engineHasUses(idx)) {
     out.push('');
-    out.push(usesLines(idx, typeSites, hasUseData(idx)));
-    // 同名符号会混进来（实测：`refs(某个叫 T 的函数)` 的 557 处里混着 C# 的 `L.T(...)`）
+    out.push(usesLines(idx, typeSites, engineHasUses(idx)));
+    // 同名符号会混进来（实测：`refs(某个叫 T 的函数)` 的 557 处里混着 C# 的 `L.T(...)`）。
+    // ⚠ 不能把“自己那个与类同名的构造函数”算成同名风险 —— 否则 C# 上几乎每个类都会多打一句废话
+    //（复测第三轮抓到）。只有**别的**类型里有这个成员名、或者另有同名类型时才提示。
     const shared = idx.b.types.filter((x) => x.name === t.name).length > 1
-      || idx.b.types.some((x) => (x.memberList || []).some((m) => m.n === t.name));
+      || idx.b.types.some((x) => x !== t && (x.memberList || []).some((m) => m.n === t.name));
     if (typeSites.length && shared) {
       out.push(T('  （按名字匹配：同名的成员 / 类型也会混进这份位置里）',
         '  (matched by name: same-named members / types elsewhere are mixed in)'));
@@ -844,7 +857,7 @@ function toolRefs(idx, a) {
   const rMiss = excludeMissNote(ex, idx.b);
   if (rMiss) out.push(rMiss);
   const legend = sawAnyEdge
-    ? T('（边尾的标签：同文件 / **有支撑**（import、或同命名空间 / 同包）/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (an import, or the same namespace / package) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
+    ? T('（边尾的标签：同文件 / **有支撑**（import、或同命名空间 / 同包、C# / VB 父命名空间）/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (an import, or the same namespace / package; a parent namespace in C# / VB) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
     : '';
   return `${t.fqn} [${t.kind}]\n${legend}${out.join('\n')}`;
 }
