@@ -146,7 +146,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `overview` | Get the lay of the land first: how much is there, where the usual entry points are; it also flags files that changed on disk after the scan |
 | `list(path?)` | **Browse by directory** — start here when you do not know any names yet: pass a folder (or nothing for the scan root) and get its folders / files with file, type and line counts |
 | `search(query, scope?)` | Find symbols — **member names are searched too** ("who defines `OnPaint`?"), with type hits and member hits separated |
-| `symbol(name)` | Details of one type: members (**with parameter list and return type**), bases, reference count |
+| `symbol(name, neighbors?)` | Details of one type: members (**with parameter list and return type**), bases, reference count |
 | `refs(name, dir?)` | Who references it / what it references (each edge shows `×count` and an evidence tag). Member names / `Type.Member` are accepted too (you get the owning type and its referrers — an upper bound) |
 | `subgraph(name, depth)` | The dependency subgraph around one place |
 | `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members) |
@@ -164,6 +164,10 @@ sequence; a single-segment one (`vendor`) matches a directory segment at any lev
 (so `vendor.ts` is dropped too); matching is **case-insensitive**; no wildcards. **Every drop is counted right after
 the list it affected** (a list emptied by it says "everything dropped", never `0`), and project facts such as
 overview's "Size" line are never changed by it.
+
+`symbol` has another optional parameter, **`neighbors: true`** (**off by default**): it appends who references it /
+what it references / related test files, top 5 each (same wording as `refs`). For evidence tags and full lists use
+`refs`. Without it the output is **byte-for-byte unchanged**.
 
 Suggested flow: **`map` for the big picture → `search` to locate → `symbol` / `refs` / `impact` to go deep**. Far
 cheaper than having the AI read files one by one.

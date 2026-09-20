@@ -447,6 +447,53 @@ const withEx = tools.result.tools.filter((t) => t.inputSchema?.properties?.exclu
 check(withEx === 'impact,map,overview,refs,search', 'exclude 只加在 5 个“会列出名字”的工具上（list/symbol/file 不加）', withEx);
 exc.proc.kill('SIGKILL');
 
+// ---------------------------------------------------------------------------
+// symbol(neighbors: true)：默认输出一个字节不变，显式要才追加“邻居”块
+// （上一轮复验嫌 symbol 啰嗦，两方诉求相反 —— 所以默认关，而且验的就是“默认真的一字节没变”）
+// ---------------------------------------------------------------------------
+const nbTmp = path.join(os.tmpdir(), `codeatlas-neighbors-${process.pid}`);
+const { out: nbOut } = scanProject(nbTmp, {
+  'src/core.js': 'export class Widget { }\nexport class Lone { }\n',
+  'src/a.js': 'import { Widget } from "./core.js";\nexport function a() { return new Widget(); }\n',
+  'src/b.js': 'import { Widget } from "./core.js";\nexport function b() { return new Widget(); }\n',
+  'src/c.js': 'import { Widget } from "./core.js";\nexport function c() { return new Widget(); }\n',
+  'src/d.js': 'import { Widget } from "./core.js";\nexport function d() { return new Widget(); }\n',
+  'src/e.js': 'import { Widget } from "./core.js";\nexport function e() { return new Widget(); }\n',
+  'src/f.js': 'import { Widget } from "./core.js";\nexport function f() { return new Widget(); }\n',
+  'tests/one.test.js': 'import { Widget } from "../src/core.js";\nexport function t1() { return new Widget(); }\n',
+  'tests/two.test.js': 'import { Widget } from "../src/core.js";\nexport function t2() { return new Widget(); }\n',
+  'src/loneUser.js': 'import { Lone } from "./core.js";\nexport function loneUser() { return new Lone(); }\n',
+});
+const nb = spawnMcp(nbOut);
+await nb.ready;
+const symDef = await nb.call('symbol', { name: 'Widget', members: 0 });
+const symOff = await nb.call('symbol', { name: 'Widget', members: 0, neighbors: false });
+const symOn = await nb.call('symbol', { name: 'Widget', members: 0, neighbors: true });
+// 最后一行是每个工具都挂的快照时间，比较前去掉它
+const strip = (s) => s.split('\n').filter((l) => !/^（快照 |^\(snapshot /.test(l)).join('\n');
+check(symDef === symOff && !/邻居|Neighbors/.test(symDef),
+  'symbol：不带 neighbors 时输出**一个字节不变**（邻居块默认不显示）');
+check(strip(symOn).startsWith(strip(symDef)),
+  'symbol(neighbors:true)：只是在原有输出后面**追加**（原有内容一字不动）');
+check(/被谁引用|referenced by/.test(symOn) && /引用了谁|references/.test(symOn),
+  'symbol(neighbors:true)：给出“被谁引用”与“引用了谁”两行');
+check(/tests\/one\.test\.js/.test(symOn) && /tests\/two\.test\.js/.test(symOn),
+  'symbol(neighbors:true)：列出相关测试文件',
+  (symOn.split('\n').find((l) => /相关测试文件|Related test files/.test(l)) || '').trim().slice(0, 60));
+check((symOn.match(/×1/g) || []).length === 5 && /前 5|first 5/.test(symOn),
+  'symbol(neighbors:true)：来源多于 5 个时只给前 5 个并标明', `${(symOn.match(/×1/g) || []).length} 条列出来`);
+// 口径一致：邻居块的“N 条边 · 共 M 次”与 refs 对同一个类型说的同一句话
+const refsIn = await nb.call('refs', { name: 'Widget', direction: 'in' });
+// 不硬编码条数：从 refs 自己那句抬头里取出来，再看 symbol 那边说的是不是同一句
+const rm = refsIn.match(/（(\d+) 条边 · 共 ([\d,]+) 次）/) || refsIn.match(/\((\d+) edges · ([\d,]+) in total\)/);
+check(!!rm && (symOn.includes(`${rm[1]} 条边 · 共 ${rm[2]} 次`) || symOn.includes(`${rm[1]} edges · ${rm[2]} in total`)),
+  'symbol 的邻居块与 refs **同一个口径**（N 条边 · 共 M 次）', rm ? `refs 说「${rm[1]} 条边 · 共 ${rm[2]} 次」` : '（refs 抬头解析失败）');
+const symLone = await nb.call('symbol', { name: 'Lone', members: 0, neighbors: true });
+check(/相关测试文件：无（图里 \d+ 个测试文件，都不引用它）|Related test files: none \(the map has/.test(symLone),
+  'symbol(neighbors:true)：有测试文件但都不引用它时说清楚（不把“没被引用”说成“没有测试”）',
+  (symLone.split('\n').find((l) => /相关测试文件|Related test files/.test(l)) || '').trim().slice(0, 60));
+nb.proc.kill('SIGKILL');
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;

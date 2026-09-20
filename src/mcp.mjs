@@ -78,6 +78,8 @@ const INSTRUCTIONS = [
   '  there — and when the list is empty, impact says whether that means "no test references it" or "no test files were',
   '  recognized in this map", so an empty list is never mistaken for safety. Test files are matched by path only — a bundle',
   '  scanned by a much older engine carries no such marks at all, and impact says so instead of implying "no tests exist";',
+  '- `symbol(name, neighbors: true)` adds a compact neighborhood (top 5 referrers, top 5 out-edges, related test files). It is',
+  '  **off by default** — the default `symbol` output is unchanged; use `refs` when you need evidence tags and full lists;',
   '- `overview` / `search` / `refs` / `map` / `impact` take an optional **`exclude`** (comma-separated path patterns) that drops',
   '  matching names from that call only — nothing is persisted. Use it instead of assuming the engine knows your project layout',
   '  (sample corpora, vendored code, generated files). Multi-segment patterns (`tests/fixtures`) match a **consecutive** segment',
@@ -128,12 +130,13 @@ const TOOLS = [
   },
   {
     name: 'symbol',
-    description: 'Everything about one symbol (type): description, file:line, signature (parameter list + return type, when the grammar exposes it), member list, base types, dependents/dependencies, owning system. Members are listed with their own id/line; a **member** name or `Type.Member` is accepted too and answered with its owning type.',
+    description: 'Everything about one symbol (type): description, file:line, signature (parameter list + return type, when the grammar exposes it), member list, base types, dependents/dependencies, owning system. Members are listed with their own id/line; a **member** name or `Type.Member` is accepted too and answered with its owning type. Pass `neighbors: true` to also get a compact neighborhood (top 5 referrers, top 5 out-edges, related test files) — off by default so the output stays small.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'id (number) or a name / qualified name' },
         members: { type: 'number', description: 'Max members to list, default 40 (max 300) — raise it when you need the whole member list' },
+        neighbors: { type: 'boolean', description: 'Also print a compact neighborhood block: who references it (top 5), what it references (top 5), related test files — ranked by evidence strength like refs. Off by default: without it the output is unchanged. Use refs for evidence tags and full lists.' },
       },
       required: ['name'],
       additionalProperties: false,
@@ -628,6 +631,50 @@ function toolSearch(idx, a) {
   return out.join('\n');
 }
 
+/**
+ * `symbol(…, neighbors: true)` 才追加的“邻居”块：改一个类型时最常接着问的三件事 ——
+ * 谁直接引用它 / 它直接引用了谁 / 相关测试文件。
+ *
+ * 为什么**默认关**：`symbol` 的输出本来就长，上一轮复验明确嫌它啰嗦（两方诉求相反），所以默认一个字节都不变。
+ * 排序与 `refs` 一致：先按证据强度（同文件 > import 支撑 > 仅同名）、同档再按权重 —— 否则一堆“仅同名”的边会先把
+ * 前 5 个位置占满。要证据标签与**完整**列表，仍然去 `refs`（这里只给“顺手看一眼”的量）。
+ */
+function neighborBlock(idx, t) {
+  const lines = [];
+  const rank = (es, other) => (es || []).map((e) => ({ e, o: other(e) })).filter((x) => x.o)
+    .sort((x, y) => (EVIDENCE_RANK[evidenceOf(idx, y.e)] - EVIDENCE_RANK[evidenceOf(idx, x.e)]) || ((y.e.w || 1) - (x.e.w || 1)));
+  const inb = rank(idx.ins.get(t.id) || [], (e) => idx.byId.get(e.from));
+  const outb = rank(idx.outs.get(t.id) || [], (e) => idx.byId.get(e.to));
+  const wsum = (l) => l.reduce((a, x) => a + (x.e.w || 1), 0);
+  const show = (list, label) => {
+    if (!list.length) { lines.push(T(`${label}：无`, `${label}: none`)); return; }
+    const top = list.slice(0, 5).map((x) => `${x.o.fqn} [${x.o.kind}] ×${x.e.w || 1}`).join(' · ');
+    // 抬头跟 refs **同一个口径**（“N 条边 · 共 M 次”）—— 同一个数在两个工具里不该是两种说法
+    lines.push(T(`${label}（${list.length} 条边 · 共 ${fmt(wsum(list))} 次${list.length > 5 ? '，前 5' : ''}）：${top}`,
+      `${label} (${list.length} edges · ${fmt(wsum(list))} in total${list.length > 5 ? ', first 5' : ''}): ${top}`));
+  };
+  lines.push('');
+  lines.push(T('邻居（neighbors: true；默认不显示）：', 'Neighbors (neighbors: true; hidden by default):'));
+  show(inb, T('被谁引用', 'referenced by'));
+  show(outb, T('引用了谁', 'references'));
+  // 相关测试文件：口径跟 impact 一致（按路径认的 files[].isTest），三种情况分开说，不把“没认出”说成“没有”
+  const tests = [];
+  const seen = new Set();
+  for (const x of inb) {
+    const tf = idx.files.get(x.o.file);
+    if (tf?.isTest && !seen.has(tf.path)) { seen.add(tf.path); tests.push(tf.path); }
+  }
+  const mapTests = idx.b.files.filter((x) => x.isTest).length;
+  lines.push(tests.length
+    ? T(`相关测试文件（${tests.length} 个）：${tests.slice(0, 5).join(' · ')}${tests.length > 5 ? ` …还有 ${tests.length - 5} 个` : ''}`,
+      `Related test files (${tests.length}): ${tests.slice(0, 5).join(' · ')}${tests.length > 5 ? ` …${tests.length - 5} more` : ''}`)
+    : (mapTests
+      ? T(`相关测试文件：无（图里 ${fmt(mapTests)} 个测试文件，都不引用它）`, `Related test files: none (the map has ${fmt(mapTests)} test files; none of them references it)`)
+      : T('相关测试文件：无（图里没认出测试文件）', 'Related test files: none (no test file was recognized in this map)')));
+  lines.push(T('（这里只给前 5 个；要证据标签与完整列表：refs(名字, in|out)）', '(top 5 only; for evidence tags and the full lists: refs(name, in|out))'));
+  return lines;
+}
+
 function toolSymbol(idx, a) {
   const r = resolve(idx, a.name);
   if (r.error) return r.error;
@@ -657,6 +704,8 @@ function toolSymbol(idx, a) {
     // 有成员却一个也没列出来：说清楚是什么情况，别让人以为它是空类型
     lines.push(T(`成员：共 ${mTotal} 个（${mKinds.map(([k, v]) => `${k} ${v}`).join(' · ')}），但这些成员的名字没能从语法树里取到，暂不单列`, `Members: ${mTotal} total (${mKinds.map(([k, v]) => `${k} ${v}`).join(' · ')}), but none of their names could be extracted — not listed individually`));
   }
+  // 邻居块：**默认不输出**（`a.neighbors` 没给就是 falsy → 一个字节都不变），只有显式要才追加
+  if (a.neighbors) lines.push(...neighborBlock(idx, t));
   return lines.join('\n');
 }
 
