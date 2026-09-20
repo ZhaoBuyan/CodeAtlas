@@ -88,7 +88,7 @@ check(hottest.fanIn <= 1 || /还有 .*条没显示|more not shown/.test(refsTrun
 // 引用证据强度：refs 每条边挂一个标签（同文件 / import 有支撑 / 仅同名），
 // overview 热点榜按“有证据的引用数”排 —— 免得好多“同名但无关”的边把没人真用的类型顶到第一
 const refsAll = await call('refs', { name: String(hottest.id), direction: 'in', limit: 200 });
-const tagCount = (refsAll.match(/\[(同文件|import|仅同名|same file|same name only)\]/g) || []).length;
+const tagCount = (refsAll.match(/\[(同文件|有支撑|仅同名|same file|backed|same name only)\]/g) || []).length;
 const edgeCount = (refsAll.match(/×/g) || []).length;
 check(edgeCount > 0 && tagCount === edgeCount, 'refs 每条边都标了引用证据强度', `${tagCount}/${edgeCount} 条带标签`);
 const hasNameOnly = /\[(仅同名|same name only)\]/.test(refsAll);
@@ -233,8 +233,8 @@ function spawnMcp(outDir) {
   return { proc, req, call, ready };
 }
 
-/** 现造一个临时项目并扫一次（同样限制在一门语言里：同一个进程装多门语法包会崩） */
-function scanProject(tmpDir, files) {
+/** 现造一个临时项目并扫一次（默认限制在一门语言里：同一个进程装多门语法包会崩） */
+function scanProject(tmpDir, files, lang = 'javascript') {
   const root = path.join(tmpDir, 'proj');
   const out = path.join(tmpDir, 'out');
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -242,9 +242,12 @@ function scanProject(tmpDir, files) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), content);
   }
-  execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', root, '--lang', 'javascript', '--out', out], { stdio: 'pipe' });
+  execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', root, '--lang', lang, '--out', out], { stdio: 'pipe' });
   return { root, out };
 }
+
+/** 读一份 bundle（gate 里查边 / 查 unresolved 用） */
+const readBundle = (outDir) => JSON.parse(fs.readFileSync(path.join(outDir, 'bundle.json'), 'utf8'));
 
 const freshTmp = path.join(os.tmpdir(), `codeatlas-fresh-${process.pid}`);
 const { root: freshRoot, out: freshOut } = scanProject(freshTmp, {
@@ -540,6 +543,73 @@ check(/没有这类记录|carries no such records/.test(rOld) && !/一处都没�
   (rOld.split('\n').find((l) => /调用 \/ 访问位置|Call \/ access sites/.test(l)) || '').trim().slice(0, 70));
 usOld.proc.kill('SIGKILL');
 us.proc.kill('SIGKILL');
+
+// ---------------------------------------------------------------------------
+// 复测报告（2026-09-20）三个发现的回归门：① 同名歧义丢边 ② 顶层函数没有行号 ③ 命名空间语言证据塔掉
+// ---------------------------------------------------------------------------
+// ① 同名两处 + 第三方调用（JS 没命名空间）：import 已指名目标，就该接上，而不是整条丢掉
+const ambTmp = path.join(os.tmpdir(), `codeatlas-ambig-${process.pid}`);
+const { out: ambOut } = scanProject(ambTmp, {
+  'f1.js': 'export function dup() { return 1; }\n',
+  'f2.js': 'import { dup } from "./f1.js";\nexport function use1() { return dup(); }\n',
+  'f3.js': 'export function dup() { return 2; }\nexport function use2() { return dup(); }\n',
+});
+const ambB = readBundle(ambOut);
+const dup1 = ambB.types.find((t) => t.name === 'dup' && ambB.files[t.file].path === 'f1.js');
+const dup3 = ambB.types.find((t) => t.name === 'dup' && ambB.files[t.file].path === 'f3.js');
+const use1 = ambB.types.find((t) => t.name === 'use1');
+const use2 = ambB.types.find((t) => t.name === 'use2');
+check(ambB.edges.some((e) => e.from === use1.id && e.to === dup1.id),
+  '① 同名歧义：**import 指名的那一个**被接上了（以前整条边静默丢掉）',
+  `use1 → ${dup1 ? 'f1.js 的 dup' : '?'} 的边${ambB.edges.some((e) => e.from === use1.id) ? '在' : '缺'}`);
+check(ambB.edges.some((e) => e.from === use2.id && e.to === dup3.id),
+  '① 另一个调用方仍然接到它自己那份（没被消歧带到错的地方）');
+check(ambB.unresolved.ambiguous === 0,
+  '① 消歧成功后不再计入 ambiguous（以前这里会 +1）', `ambiguous=${ambB.unresolved.ambiguous}`);
+
+// ③ 命名空间语言：同命名空间 / 用了 using 的都算“有支撑”，不能整片塔成“仅同名”
+const nsTmp = path.join(os.tmpdir(), `codeatlas-ns-${process.pid}`);
+const { out: nsOut } = scanProject(nsTmp, {
+  'a/A.cs': 'namespace Demo.A\n{\n    public class Alpha\n    {\n        public int Value() { return 1; }\n    }\n}\n',
+  'a/B.cs': 'namespace Demo.A\n{\n    public class Beta\n    {\n        public Alpha Make() { return new Alpha(); }\n    }\n}\n',
+  'c/C.cs': 'using Demo.A;\n\nnamespace Demo.C\n{\n    public class Gamma\n    {\n        public Alpha Make() { return new Alpha(); }\n    }\n}\n',
+}, 'csharp');
+const ns = spawnMcp(nsOut);
+await ns.ready;
+const rAlpha = await ns.call('refs', { name: 'Demo.A.Alpha', direction: 'in' });
+const backed = (rAlpha.match(/\[(有支撑|backed)\]/g) || []).length;
+const nameOnly = (rAlpha.match(/\[(仅同名|same name only)\]/g) || []).length;
+check(backed >= 2 && nameOnly === 0,
+  '③ 命名空间语言：“同命名空间”与“using 了目标命名空间”都算有支撑（以前全塔成仅同名）',
+  `有支撑 ${backed} 条 · 仅同名 ${nameOnly} 条`);
+const ovNs = await ns.call('overview', {});
+check(/Alpha|Beta|Gamma/.test(ovNs.split('\n').find((l) => /被引用 \d+ 次|referenced \d+ times/.test(l)) || ''),
+  '③ overview 热点榜能看见被真依赖的类型（实样本上以前会把第一名挤掉）');
+ns.proc.kill('SIGKILL');
+
+// ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
+const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);
+const { out: topOut } = scanProject(topTmp, {
+  'tpl.js': 'export function inner() { return 1; }\nexport function user() { const a = `${inner()}`; const b = inner(); return a + b; }\n',
+});
+const tf = spawnMcp(topOut);
+await tf.ready;
+const rInner = await tf.call('refs', { name: 'inner', direction: 'in' });
+check(/tpl\.js:2\t(调用|call)/.test(rInner),
+  '② 顶层函数（类型）也给调用位置（以前位置被“只留成员名”的筛选筛掉）',
+  (rInner.split('\n').find((l) => /调用 \/ 访问位置|Call \/ access sites/.test(l)) || '').trim().slice(0, 60));
+// ④ 两个“被引”不同义：成员回答里要说清哪个是**该类型**的数（实测样本上两个数并排容易被读成矛盾）
+const mOwner = bundle.types.find((t) => (t.memberList || []).some((m) => m.n && m.n.length >= 4));
+if (mOwner) {
+  const mn = mOwner.memberList.find((m) => m.n && m.n.length >= 4).n;
+  const r = await call('refs', { name: mn });
+  check(/该类型|that type/.test(r),
+    '④ 成员回答标明“被引 N 次”是**该类型**的数（不是本成员的位置数）',
+    (r.split('\n').find((l) => /被引|referenced/.test(l)) || '').trim().slice(0, 60));
+} else {
+  check(true, '④ 成员回答的类型级数字标注', '这份 bundle 里没有带名字的成员，跳过');
+}
+tf.proc.kill('SIGKILL');
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');

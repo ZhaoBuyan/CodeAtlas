@@ -21,6 +21,8 @@ import path from 'node:path';
 // 本文件用 T(...) 而不是 t(...)：mcp.mjs 里到处是「类型对象」的局部名 t（箭头参数、const t = r.type …），
 // 导入的 t 会被它们遮住（这种错是静默的），所以这里显式取别名。
 import { t as T, isEn, sysLabel } from './i18n.mjs';
+// 模块名归一 / import 是否能指到目标 —— 与扫描期（scan.mjs 的 resolveName）**共用同一套口径**
+import { moduleKey, importMatchesTarget } from './modules.mjs';
 
 export function listToolsText() {
   return TOOLS.map((t) => {
@@ -51,11 +53,11 @@ const INSTRUCTIONS = [
   '- Types / members / line counts / imports come from the syntax tree and are trustworthy; dependency edges come from static',
   '  **name matching** — dynamic calls, reflection and names built by string concatenation are invisible, and the counts of',
   '  unmatched and ambiguous references are reported explicitly in overview and impact;',
-  '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `import-backed` (the',
-  '  referring file imports a module of that name — matched by module name, so treat it as strong evidence, not proof) >',
-  '  `same name only` (usually a coincidence; do not read it as a real dependency). Solitary `same name only` edges are why',
-  '  a raw reference count can be misleading, so the `overview` "most depended-on" list is ranked by references with',
-  '  evidence instead (the number in brackets is how many count);',
+  '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `backed` (the',
+  '  referring file imports a module of that name, or imports the target\'s namespace / package, or both sides sit in the',
+  '  same namespace / package — strong evidence, not proof) > `same name only` (usually a coincidence; do not read it as a',
+  '  real dependency). Solitary `same name only` edges are why a raw reference count can be misleading, so the `overview`',
+  '  "most depended-on" list is ranked by references with evidence instead (the number in brackets is how many count);',
   '- Files with parse errors are flagged individually; their data may be incomplete;',
   '- Top-level functions in JS / TS are recorded as [function] **types**, not members: search(scope="member") will not find',
   '  them — use the default scope (any) or scope="type";',
@@ -228,41 +230,29 @@ function fmt(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
-function basename(p) {
-  return String(p).split('/').pop();
-}
-
-/** 源码后缀：判“import 是否指到这个文件”时用来去掉尾部扩展名（'util.log-or-console' 这种不能被当成扩展名切掉） */
-const SRC_EXT = new Set([
-  'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'py', 'java', 'cs', 'kt', 'kts', 'go', 'rs', 'rb', 'php',
-  'lua', 'swift', 'scala', 'ex', 'exs', 'zig', 'hcl', 'tf', 'sol', 'tla', 'res', 're', 'ml', 'mli', 'graphql', 'gql',
-  'sh', 'bash', 'ps1', 'el', 'c', 'h', 'hpp', 'cpp', 'cc', 'dart', 'jl', 'pl', 'r', 'json', 'yaml', 'yml', 'toml', 'html',
-]);
-
-/** 模块名归一：'x/y/util.log-or-console.js' 与 './util.log-or-console' 都算 'util.log-or-console' */
-function moduleKey(p) {
-  const b = basename(String(p || ''));
-  const m = b.match(/\.([A-Za-z0-9]+)$/);
-  return m && SRC_EXT.has(m[1].toLowerCase()) ? b.slice(0, -m[0].length) : b;
-}
+// 模块名归一（basename / SRC_EXT / moduleKey）已挑到 src/modules.mjs —— 扫描器与读期必须判得一样
 
 /**
  * 引用证据强度 —— 依赖边是静态名字匹配，所以“同名但无关”的边会混进来：实测（一个真实 monorepo 样本）
  * 有个函数 145 条入边里 141 条来自别的文件里同名对象的方法调用，跟它根本无关。
- * 读侧分三档（不动引擎数据）：同文件最硬；引用方文件的 imports 能指到被引用方那个文件 = 有 import 支撑；
- * 剩下只共享一个名字的归“仅同名”，噪声主要在这一档。
+ * 读侧分三档（不动引擎数据）：同文件最硬；引用方文件的 imports 能指到被引用方（模块名 / 命名空间 / 包）
+ * = 有支撑；剩下只共享一个名字的归“仅同名”，噪声主要在这一档。
+ * ⚠ 复测报告 §3：以前只比“被引用文件的文件名主干”，于是**命名空间语言（C#/Java/Kotlin）全军塔成“仅同名”**
+ * （一个 C# 项目 53 条边里“有支撑”0 条，连 `using MuSync.Models;` 都认不出来），overview 热点榜跟着失真。
+ * 现在改走 modules.mjs 的 `importMatchesTarget`（模块名 + 命名空间 + 包路径）。
  */
 function evidenceOf(idx, e) {
   const src = idx.byId.get(e.from);
   const dst = idx.byId.get(e.to);
   if (!src || !dst) return 'name';
   if (src.file === dst.file) return 'same';
-  const dstPath = idx.files.get(dst.file)?.path;
   const f = idx.files.get(src.file);
-  if (dstPath && f) {
-    const key = moduleKey(dstPath);
-    for (const raw of f.imports || []) if (moduleKey(raw) === key) return 'import';
+  const target = { ns: dst.ns, fqn: dst.fqn, path: idx.files.get(dst.file)?.path };
+  if (f && target.path) {
+    for (const raw of f.imports || []) if (importMatchesTarget(raw, target)) return 'import';
   }
+  // 同命名空间 / 同包（C# 同 namespace、Java 同 package 里互相引用根本不需要 import）—— 也算有支撑
+  if (dst.ns && src.ns === dst.ns) return 'import';
   return 'name';
 }
 
@@ -271,12 +261,12 @@ const EVIDENCE_RANK = { same: 2, import: 1, name: 0 };
 /** refs 每行尾的短标签（有证据的排前面，标了才看得出来哪几条是噪声） */
 function evidenceTag(ev) {
   if (ev === 'same') return T('  [同文件]', '  [same file]');
-  if (ev === 'import') return T('  [import]', '  [import]');
+  if (ev === 'import') return T('  [有支撑]', '  [backed]');
   return T('  [仅同名]', '  [same name only]');
 }
 
 /**
- * 某个类型“算数的”被引用**次数**（同文件 + 有 import 支撑的边，按权重相加）—— overview 热点榜拿它排序。
+ * 某个类型“算数的”被引用**次数**（同文件 + 有支撑的边，按权重相加）—— overview 热点榜拿它排序。
  * 与 fanIn（全部入边权重之和）同一个口径：都是“次”；差别只是这里扣掉了“仅同名”那一档噪声。
  * （权重以前恒为 1，这两个数等价；2026-09-20 边权重变成真的引用次数后，必须按权重加才不失真）
  */
@@ -356,34 +346,75 @@ function memberHitsOf(idx, raw) {
  *   · **声明处要排掉**：声明名后面也常跟 `(`（`void ClearStatus() {`），那不是调用点。
  * 数据来自扫描端的 `types[].uses`（类型内）与 `files[].uses`（类型之外，如脚本末尾的 `main()`）。
  */
-function memberUses(idx, name) {
-  const want = String(name || '').toLowerCase();
-  const declLines = new Set();
-  for (const t of idx.b.types) {
-    for (const m of t.memberList || []) {
-      if ((m.n || '').toLowerCase() === want) declLines.add(`${t.file}#${m.l}`);
-    }
-  }
+/** 按名字收集“调用 / 访问位置”，并排掉声明行（`<fileId>#<line>` 在 declKeys 里的一律不算调用点） */
+function collectUses(idx, names, declKeys) {
+  const want = new Set([...names].filter(Boolean).map((s) => String(s).toLowerCase()));
+  if (!want.size) return [];
   const out = [];
+  const seen = new Set();
   const push = (fileId, u) => {
-    if (declLines.has(`${fileId}#${u.l}`)) return;
+    if (!want.has(String(u.n || '').toLowerCase())) return;
+    if (declKeys.has(`${fileId}#${u.l}`)) return;
+    const k = `${fileId}#${u.l}#${u.c}`;
+    if (seen.has(k)) return;
+    seen.add(k);
     out.push({ fileId, l: u.l, c: u.c });
   };
-  for (const t of idx.b.types) for (const u of t.uses || []) if ((u.n || '').toLowerCase() === want) push(t.file, u);
-  for (const f of idx.b.files) for (const u of f.uses || []) if ((u.n || '').toLowerCase() === want) push(f.id, u);
+  for (const t of idx.b.types) for (const u of t.uses || []) push(t.file, u);
+  for (const f of idx.b.files) for (const u of f.uses || []) push(f.id, u);
   out.sort((a, b) => (a.fileId - b.fileId) || (a.l - b.l));
   return out;
+}
+
+/** 同名成员的声明行（从“调用位置”里排掉：`void ClearStatus() {` 后面也跟括号，但那不是调用） */
+function memberDeclKeys(idx, names) {
+  const want = new Set(names.map((s) => String(s || '').toLowerCase()));
+  const keys = new Set();
+  for (const t of idx.b.types) {
+    for (const m of t.memberList || []) if (want.has((m.n || '').toLowerCase())) keys.add(`${t.file}#${m.l}`);
+  }
+  return keys;
+}
+
+/** 成员名的调用 / 访问位置 */
+function memberUses(idx, name) {
+  return collectUses(idx, [name], memberDeclKeys(idx, [name]));
+}
+
+/** 这份 bundle 有没有记录过“调用 / 访问位置”（老图没有 → 措辞得说“没记录”，不能说“没有”） */
+function hasUseData(idx) {
+  return idx.b.types.some((t) => t.uses) || idx.b.files.some((f) => f.uses);
+}
+
+/** 调用 / 访问位置的正文（成员回答与类型回答共用） */
+function usesLines(idx, sites, withData) {
+  const CAP = 12;
+  if (!sites.length) {
+    return withData
+      ? T('调用 / 访问位置：一处都没找到（这个名字在全图里没出现在调用位或成员访问位）',
+        'Call / access sites: none found (this name never appears in a call or member-access position in the map)')
+      : T('调用 / 访问位置：这份图里没有这类记录（老版本引擎扫的图 —— 重新扫一次就会带上）',
+        'Call / access sites: this map carries no such records (it was scanned by an older engine — a re-scan adds them)');
+  }
+  const callCount = sites.filter((s) => s.c).length;
+  return T(`调用 / 访问位置（按名字匹配，共 ${fmt(sites.length)} 处${callCount ? `，其中调用 ${fmt(callCount)} 处` : ''}）：\n`,
+    `Call / access sites (matched by name: ${fmt(sites.length)}${callCount ? `, ${fmt(callCount)} of them calls` : ''}):\n`)
+    + sites.slice(0, CAP).map((s) => T(`  ${idx.files.get(s.fileId)?.path}:${s.l}\t${s.c ? '调用' : '访问'}`,
+      `  ${idx.files.get(s.fileId)?.path}:${s.l}\t${s.c ? 'call' : 'access'}`)).join('\n')
+    + (sites.length > CAP ? T(`\n  …还有 ${fmt(sites.length - CAP)} 处`, `\n  …${fmt(sites.length - CAP)} more`) : '');
 }
 
 /** 成员名被交给 refs / symbol / subgraph / impact 时的回答（诚实地讲清“能答什么”与“怎么接下一步”） */
 function memberNote(idx, name, hits) {
   const head = T(`「${name}」是**成员**，不是类型（所以没有类型级依赖边）。成员级的**调用 / 访问位置**在下面，按名字匹配。`,
     `"${name}" is a **member**, not a type (so it has no type-level edges). Its per-name **call / access sites** are below.`);
+  // ④ 复测报告：两个“被引”不同义（387 = 类型名出现次数；下面那行 = 本成员的位置数），同屏并列容易被读成矛盾
+  // → 这里写明这是**该类型**的数；本成员的数在下面那段里。
   const rows = hits.slice(0, 12).map(({ t, m }) => {
     const f = idx.files.get(t.file);
     const ev = evidencedIn(idx, t);
-    return T(`  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  （所属类型 id=${t.id}，被引 ${t.fanIn} 次${ev < t.fanIn ? `，其中算数的 ${ev} 次` : ''}）`,
-      `  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  (owner type id=${t.id}, referenced ${t.fanIn} times${ev < t.fanIn ? `, ${ev} with evidence` : ''})`);
+    return T(`  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  （所属类型 id=${t.id}；**该类型**被引 ${t.fanIn} 次${ev < t.fanIn ? `，其中算数的 ${ev} 次` : ''}）`,
+      `  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  (owner type id=${t.id}; **that type** is referenced ${t.fanIn} times${ev < t.fanIn ? `, ${ev} with evidence` : ''})`);
   });
   // 注意：要拿**成员名**去找位置，不能拿整串查询（`Widget.render` 不是名字）；同名多命中时取并集
   const memberNames = [...new Set(hits.map((h) => h.m.n).filter(Boolean))];
@@ -396,21 +427,7 @@ function memberNote(idx, name, hits) {
     }
   }
   sites.sort((a, b) => (a.fileId - b.fileId) || (a.l - b.l));
-  const callCount = sites.filter((s) => s.c).length;
-  const CAP = 12;
-  // 老 bundle 根本没有 uses 字段（不是“没有调用点”）—— 跟 impact 的测试文件一样，绝不能把“没记录”说成“没有”
-  const hasUseData = idx.b.types.some((t) => t.uses) || idx.b.files.some((f) => f.uses);
-  const siteBlock = sites.length
-    ? T(`调用 / 访问位置（按名字匹配，共 ${fmt(sites.length)} 处${callCount ? `，其中调用 ${fmt(callCount)} 处` : ''}）：\n`,
-      `Call / access sites (matched by name: ${fmt(sites.length)}${callCount ? `, ${fmt(callCount)} of them calls` : ''}):\n`)
-      + sites.slice(0, CAP).map((s) => T(`  ${idx.files.get(s.fileId)?.path}:${s.l}\t${s.c ? '调用' : '访问'}`,
-        `  ${idx.files.get(s.fileId)?.path}:${s.l}\t${s.c ? 'call' : 'access'}`)).join('\n')
-      + (sites.length > CAP ? T(`\n  …还有 ${fmt(sites.length - CAP)} 处`, `\n  …${fmt(sites.length - CAP)} more`) : '')
-    : (hasUseData
-      ? T('调用 / 访问位置：一处都没找到（这个名字在全图里没出现在调用位或成员访问位）',
-        'Call / access sites: none found (this name never appears in a call or member-access position in the map)')
-      : T('调用 / 访问位置：这份图里没有这类记录（老版本引擎扫的图 —— 重新扫一次就会带上）',
-        'Call / access sites: this map carries no such records (it was scanned by an older engine — a re-scan adds them)'));
+  const siteBlock = usesLines(idx, sites, hasUseData(idx));
   const tail = T(`→ 这些位置是**按名字匹配**的：不解析接收者类型，同名的其它成员会混进来；动态调用 / 别名 / 反射，\n  以及 Lisp 那种 \`(foo x)\` 写法**抓不到**。要交叉核对：对上面每个所属类型调 refs(id)（那是超集）。`,
     `→ These sites are matched **by name only**: the receiver type is not resolved, so same-named members elsewhere are mixed in;\n  dynamic calls / aliases / reflection — and Lisp-style \`(foo x)\` calls — are invisible. To cross-check: refs(id) on each owner type above (an upper bound).`);
   return `${head}\n${rows.join('\n')}\n${siteBlock}\n${tail}`;
@@ -677,7 +694,7 @@ function toolSearch(idx, a) {
   if (memberHits.length) {
     out.push(T(`成员（显示前 ${Math.min(memberHits.length, limit)}）：`, `Members (first ${Math.min(memberHits.length, limit)}):`));
     for (const { t, m } of memberHits.slice(0, limit)) {
-      out.push(T(`  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（所属类型 id=${t.id}，被引 ${t.fanIn} 次）`, `  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(owner type id=${t.id}, referenced ${t.fanIn} times)`) + (m.d ? T(`\t说明：${briefDoc(m.d)}`, `\tdoc: ${briefDoc(m.d)}`) : ''));
+      out.push(T(`  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t（所属类型 id=${t.id}；**该类型**被引 ${t.fanIn} 次）`, `  ${t.fqn}.${m.n}${sigText(m)}\t[${m.k}]\t${idx.files.get(t.file)?.path}:${m.l}\t(owner type id=${t.id}; **that type** is referenced ${t.fanIn} times)`) + (m.d ? T(`\t说明：${briefDoc(m.d)}`, `\tdoc: ${briefDoc(m.d)}`) : ''));
     }
     out.push(T('（成员名后面要看它的上下文，用 symbol 加类型名/id）', '(to see a member in context, call symbol with the type name / id)'));
   }
@@ -799,10 +816,17 @@ function toolRefs(idx, a) {
   };
   if (dir === 'in' || dir === 'both') show(idx.ins.get(t.id) || [], T('被谁引用', 'referenced by'), (e) => idx.byId.get(e.from));
   if (dir === 'out' || dir === 'both') show(idx.outs.get(t.id) || [], T('引用了谁', 'references'), (e) => idx.byId.get(e.to));
+  // ② 复测报告：顶层函数（JS/TS/Python）在这套模型里是**类型**，光给边不给行号时 AI 还得自己翻文件找“第几行调的”。
+  // 所以类型也照样给“调用 / 访问位置”（按名字匹配；该类型自己的声明行排掉）。
+  const typeSites = collectUses(idx, [t.name, t.fqn], new Set([`${t.file}#${t.line}`]));
+  if (typeSites.length || !hasUseData(idx)) {
+    out.push('');
+    out.push(usesLines(idx, typeSites, hasUseData(idx)));
+  }
   const rMiss = excludeMissNote(ex, idx.b);
   if (rMiss) out.push(rMiss);
   const legend = sawNameOnly
-    ? T('（边尾的标签：同文件 / import 有支撑 / 仅同名 —— 后两档是按模块名近似判的；“仅同名”多半只是名字巧合，别当真）\n', '(tag after each edge: same file / import-backed / same name only — the latter two are matched by module name; "same name only" is usually a coincidence, do not trust it)\n')
+    ? T('（边尾的标签：同文件 / **有支撑**（import、或同命名空间 / 同包）/ 仅同名 —— “仅同名”多半只是名字巧合，别当真）\n', '(tag after each edge: same file / backed (an import, or the same namespace / package) / same name only — the last one is usually a coincidence, do not trust it)\n')
     : '';
   return `${t.fqn} [${t.kind}]\n${legend}${out.join('\n')}`;
 }
@@ -983,7 +1007,7 @@ function toolMap(idx, a) {
 
   const warn = [];
   if (b.unresolved?.unknown) warn.push(T(`名字没匹配上的引用 ${fmt(b.unresolved.unknown)} 处（这些依赖看不到）`, `References whose name did not match: ${fmt(b.unresolved.unknown)} (those dependencies are invisible)`));
-  if (b.unresolved?.ambiguous) warn.push(T(`匹配到多个目标的引用 ${fmt(b.unresolved.ambiguous)} 处（只取了一个，可能不准）`, `References matching several targets: ${fmt(b.unresolved.ambiguous)} (only one was taken — may be off)`));
+  if (b.unresolved?.ambiguous) warn.push(T(`匹配到多个目标的引用 ${fmt(b.unresolved.ambiguous)} 处（**没有计入图里** —— 宁可缺边也不接错）`, `References matching several targets: ${fmt(b.unresolved.ambiguous)} (they are **left out of the graph** — a missing edge beats a wrong one)`));
   const mapMiss = excludeMissNote(ex, b);
   if (mapMiss) push(mapMiss);
   if (warn.length) push(`⚠ ${warn.join('；')}`);
@@ -1085,7 +1109,7 @@ function toolImpact(idx, a) {
   out.push(T('要注意的：', 'Worth knowing:'));
   out.push(T('  · 这是**静态名字匹配**的结果：动态调用 / 反射 / 字符串拼出来的名字看不见；', '  · these edges come from **static name matching**: dynamic calls / reflection / string-built names are invisible;'));
   if (b.unresolved?.unknown) out.push(T(`  · 本项目有 ${fmt(b.unresolved.unknown)} 处引用没匹配上任何类型（这些边不在图里）；`, `  · ${fmt(b.unresolved.unknown)} references in this project matched no type (those edges are not in the graph);`));
-  if (b.unresolved?.ambiguous) out.push(T(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标，只取了一个；`, `  · ${fmt(b.unresolved.ambiguous)} references matched several same-named targets; only one was taken;`));
+  if (b.unresolved?.ambiguous) out.push(T(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标 —— **这些边没有计入**（宁可缺边也不接错）；`, `  · ${fmt(b.unresolved.ambiguous)} references matched several same-named targets — those edges are **left out** (a missing edge beats a wrong one);`));
   out.push(T('  · 想看更宽：depth 加大（最多 4）；某个方向：refs(名字, in|out)。', '  · go wider: raise depth (max 4); one direction only: refs(name, in|out).'));
   const iMiss = excludeMissNote(ex, b);
   if (iMiss) out.push(iMiss);

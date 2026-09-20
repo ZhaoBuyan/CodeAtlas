@@ -13,6 +13,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Parser, Language } from 'web-tree-sitter';
 import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages } from './languages.mjs';
+// 模块名归一 / import 是否能指到目标 —— 与读期（mcp.mjs 的证据分档）**共用同一套口径**
+import { moduleKey, importMatchesTarget } from './modules.mjs';
 import { t } from './i18n.mjs';
 import { preprocess } from './preprocess.mjs';
 
@@ -1674,16 +1676,20 @@ export async function scan(opts) {
     if (!t.uses) t.uses = [];
     t.uses.push({ n: u.n, l: u.l, c: u.c });
   }
-  // ① 再筛一道：**只留“名字在项目里确实是个成员”的**（父进程才知道全部成员名）。
+  // ① 再筛一道：**只留“名字在项目里确实是个成员或类型”的**（父进程才知道全部名字）。
   // 不筛的话每个标识符都留一份位置，体积会翻倍（实测真实样本 0.16 MB → 0.36 MB）。
-  // 注意：这会让“对外部成员的调用”（如 `Assert.Equal`）不留位置 —— 但那种名字在图里本来就没有成员，
-  // 也问不到它头上（查一个不存在的成员名根本不会走 memberNote）。
+  // ⚠ 复测报告 §2：**顶层函数（JS/TS/Python）在这套模型里是“类型”不是成员** —— 只留成员名会把它们的
+  // 位置全筛掉，于是 `refs("startMcp")` 拿不到“第几行调的”。所以保留集 = 成员名 ∪ 类型名。
+  // 仍然筛掉的：纯局部变量 / 外部名（`Assert.Equal` 里的 Equal ），那些在图里本来就没有对应符号。
   {
-    const memberNames = new Set();
-    for (const t of allTypes) for (const m of t.memberList || []) if (m.n) memberNames.add(m.n);
+    const keepNames = new Set();
+    for (const t of allTypes) {
+      if (t.name) keepNames.add(t.name);
+      for (const m of t.memberList || []) if (m.n) keepNames.add(m.n);
+    }
     const trim = (holder) => {
       if (!holder.uses) return;
-      holder.uses = holder.uses.filter((u) => memberNames.has(u.n));
+      holder.uses = holder.uses.filter((u) => keepNames.has(u.n));
       if (!holder.uses.length) delete holder.uses;
     };
     for (const t of allTypes) trim(t);
@@ -1719,6 +1725,18 @@ export async function scan(opts) {
     const from = allTypes[fromTypeId];
     const sameFile = hit.filter((id) => allTypes[id].file === from.file);
     if (sameFile.length === 1) return sameFile[0];
+    // ③ 复测报告 §1：同名两处 + 第三方调用时，以前**直接放弃**（静默丢边）—— JS 没有命名空间，
+    // “同文件”是唯一能救它的一档，救不到就丢；自扫实测 57 处这种被丢掉的引用。
+    // 补一档：**用引用方文件的 imports 消歧**（与读期 evidenceOf 同一套口径，见 src/modules.mjs）。
+    const fromFile = fileRecs[from.file];
+    if (fromFile?.imports?.length) {
+      const viaImport = hit.filter((id) => {
+        const cand = allTypes[id];
+        const target = { ns: cand.ns, fqn: cand.fqn, path: fileRecs[cand.file]?.path };
+        return fromFile.imports.some((raw) => importMatchesTarget(raw, target));
+      });
+      if (viaImport.length === 1) return viaImport[0];
+    }
     const sameNs = hit.filter((id) => allTypes[id].ns === from.ns);
     if (sameNs.length === 1) return sameNs[0];
     const sameRoot = hit.filter((id) => {
