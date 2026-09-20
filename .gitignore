@@ -31,8 +31,8 @@ configs/*.facets.json
 !configs/example.facets.json
 atlas.facets.json
 
-# �ڲ������ļ���ֻ���ر��棬�����
+# 内部工作文件：只留本地，不推送
 ROADMAP.md
 
-# ����������ֿ⣺һ�� zip �� 77 MB��
+# 分发包（不进仓库：一个 zip 就有 77 MB）
 *.zip
