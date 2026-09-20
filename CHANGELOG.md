@@ -2,7 +2,7 @@
 
 > 只写**用户能看到的变化**。技术细节见提交记录。
 
-## 未发布（下一版）
+## 1.4.2（2026-09-20）
 
 - **成员级查询（以前查不了）**：`refs` / `symbol` / `subgraph` / `impact` 现在接受**成员名**（`ClearStatus`）
   或 **`类型.成员`**（`MuSync.SteamStatusManager.ClearStatus`）。以前这种问法会答“找不到匹配的符号”（既不准也没用），
