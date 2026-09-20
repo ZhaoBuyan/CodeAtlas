@@ -324,8 +324,9 @@ node src/cli.mjs langs [--json]                    # list supported languages (-
   declaration (otherwise the comment belongs to the previous declaration); when there is no comment it says
   "no comment in the source" rather than inventing one.
 - **Dependency highlight**: hovering or selecting a type immediately lights up what it references and what
-  references it, with connecting lines (blue for references, orange for inheritance, thickness = count) and
-  dims everything else.
+  references it, with connecting lines (blue for references, orange for inheritance). **One line per reference**:
+  if B and C each reference A three times, six lines fan out of A's centre (three to B, three to C) — the line
+  count *is* the reference count (the header also says "N lines = reference counts"). Everything else is dimmed.
 - **Dependency focus** (checkbox): show only the selected type plus its relatives, with the relationship web
   drawn larger and clearer (the top-left corner tells you how many items are still shown).
 - **A header line** states what the current chart encodes (grouping / depth / what area means / how it is

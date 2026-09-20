@@ -849,29 +849,62 @@ function applyEmphasis(focusId) {
   if (!src) return;
   const sc = centerOf(src);
   const links = [];
+  const dots = [];
   let outside = 0;
+  let lines = 0;
   for (const [id, e] of targets) {
     const t = leafNodes.get(id);
     if (!t) { outside++; continue; }
     const tc = centerOf(t);
-    links.push({ sx: sc.x, sy: sc.y, tx: tc.x, ty: tc.y, kind: e.kind, w: e.w });
+    // 权重 = 引用次数 → **一条引用画一根线**（权重 3 就画 3 根）。
+    // 「A 被 B、C 各引用 3 次」= 从 A 中心散出 6 根（B 三根、C 三根）——权重的“直观”交给
+    // **线的根数**，不再只靠粗细（粗细以前是 log2，看不出 3 次和 5 次）。
+    const n = Math.max(1, Math.round(Number(e.w) || 1));
+    const dx = tc.x - sc.x;
+    const dy = tc.y - sc.y;
+    const len = Math.hypot(dx, dy);
+    // 这一组线摊开的总宽度：短边窄、长边宽，但封顶 110px（81 根也不会铺满屏幕）；
+    // n = 1 时总宽 0 → 退化成原来那条线，一根不多一根不少
+    const spread = Math.min(110, len / 6, 6 * n);
+    const step = n > 1 ? spread / (n - 1) : 0;
+    for (let i = 0; i < n; i++) {
+      links.push({
+        sx: sc.x, sy: sc.y, tx: tc.x, ty: tc.y,
+        kind: e.kind,
+        off: (i - (n - 1) / 2) * step,   // 沿垂直方向摊开，两端点都不动 → 看上去从中心发散
+        bend: Math.min(60, len / 3),
+      });
+    }
+    lines += n;
+    dots.push({ cx: tc.x, cy: tc.y, kind: e.kind });
   }
   linkG.selectAll('path').data(links).join('path')
     .attr('d', (l) => {
       const mx = (l.sx + l.tx) / 2;
       const my = (l.sy + l.ty) / 2;
-      const bend = Math.min(60, Math.hypot(l.tx - l.sx, l.ty - l.sy) / 3);
-      return `M${l.sx},${l.sy} Q${mx},${my - bend} ${l.tx},${l.ty}`;
+      const dx = l.tx - l.sx;
+      const dy = l.ty - l.sy;
+      const len = Math.hypot(dx, dy) || 1;
+      // 控制点往垂直方向偏 l.off px（n=1 时 off=0，与以前完全一致）
+      const px = -dy / len;
+      const py = dx / len;
+      const cx2 = mx + px * l.off;
+      const cy2 = my + py * l.off - l.bend;
+      return `M${l.sx},${l.sy} Q${cx2},${cy2} ${l.tx},${l.ty}`;
     })
     .attr('stroke', (l) => (l.kind === 'inherit' ? '#d29922' : '#58a6ff'))
-    .attr('stroke-width', (l) => Math.min(4, 1 + Math.log2(1 + (l.w || 1))))
+    // 一条引用一根线 → 每根都细（权重由根数承担），继承线略粗一点以便跟引用区分
+    .attr('stroke-width', (l) => (l.kind === 'inherit' ? 1.8 : 1.05))
     .attr('fill', 'none').attr('opacity', 0.7);
-  linkG.selectAll('circle').data(links).join('circle')
-    .attr('cx', (l) => l.tx).attr('cy', (l) => l.ty).attr('r', 2.5)
+  linkG.selectAll('circle').data(dots).join('circle')
+    .attr('cx', (l) => l.cx).attr('cy', (l) => l.cy).attr('r', 2.5)
     .attr('fill', (l) => (l.kind === 'inherit' ? '#d29922' : '#58a6ff'));
 
-  if (outside) updateChartInfo(T(`另有 ${outside} 条边指向当前分组之外`, `${outside} more edges point outside the current group`));
-  else updateChartInfo();
+  // 抬头里把“连线根数”写出来 —— 根数就是引用次数，不写的话容易被当成画多了
+  const notes = [];
+  if (lines) notes.push(T(`连线 ${lines} 根 = 引用次数`, `${lines} lines = reference counts`));
+  if (outside) notes.push(T(`另有 ${outside} 条边指向当前分组之外`, `${outside} more edges point outside the current group`));
+  updateChartInfo(notes.join(' · '));
 }
 
 function centerOf(node) {
