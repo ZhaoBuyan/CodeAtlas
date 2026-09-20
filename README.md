@@ -174,7 +174,7 @@ runtime (about 30 MB).
 **Official downloads**: every release ships both exes on [GitHub Releases](https://github.com/ZhaoBuyan/CodeAtlas/releases) —
 built by CI from the tagged commit (the paths below are just where the local build puts them).
 
-- **Release flow**: tag and push — `git tag v1.3.1 && git push origin v1.3.1` (push that one tag; **avoid `--tags`**,
+- **Release flow**: tag and push — `git tag v1.4.0 && git push origin v1.4.0` (push that one tag; **avoid `--tags`**,
   which would push local backup / experiment tags too). CI runs the tests, builds both exes
   and attaches them to a GitHub Release (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
 - **Three places carry the version** and have to move together: `launcher/CodeAtlas.Launcher.csproj`’s `<Version>`

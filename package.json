@@ -1,6 +1,6 @@
 {
   "name": "code-atlas",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "Code Atlas —— 把任意代码库扫成一份可读的中间数据（bundle），供人探索、供 AI 查询",
