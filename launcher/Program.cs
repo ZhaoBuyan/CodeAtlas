@@ -552,7 +552,7 @@ namespace CodeAtlas
             return res;
         }
 
-        public static Process Start(string target, Config cfg, string langs, string facets, bool open, Action<string> onLine, Action<int> onExit, bool watch = false)
+        public static Process Start(string target, Config cfg, string langs, string facets, bool open, Action<string> onLine, Action<int> onExit, bool watch = false, bool scanOnly = false)
         {
             string dev = FindDevRoot();
             string root = dev ?? Payload.Ensure(null);
@@ -568,9 +568,12 @@ namespace CodeAtlas
 
             var args = new StringBuilder();
             args.Append('"').Append(script).Append('"');
+            // scanOnly：改走 `scan` 子命令。位置参数那条路是"扫描 + 起本地服务"（服务不会自己退，
+            // 启动器靠它把地图嵌进窗口）—— 自检拿它就只能等超时，所以自检走 scan（扫完就退）。
+            if (scanOnly) args.Append(" scan");
             args.Append(" \"").Append(target).Append('"');
             args.Append(" --out \"").Append(cfg.Out).Append('"');
-            args.Append(" --port ").Append(cfg.Port);
+            if (!scanOnly) args.Append(" --port ").Append(cfg.Port);
             // 语言：空串 = 引擎默认（auto）。显式选过就原样传过去。
             if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
             if (cfg.Incremental) args.Append(" --incremental");   // 只重解析改过的文件
@@ -578,7 +581,7 @@ namespace CodeAtlas
             if (watch) args.Append(" --watch");                   // 内构监控：分趟长出来 + 改动自动重扫（不会自己结束）
             // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
             if (!string.IsNullOrWhiteSpace(facets)) args.Append(" --facets \"").Append(facets.Trim()).Append('"');
-            if (!open) args.Append(" --no-open");
+            if (!open && !scanOnly) args.Append(" --no-open");   // scan 没有"开浏览器"这回事
 
             var psi = new ProcessStartInfo(node, args.ToString())
             {
@@ -1522,25 +1525,54 @@ namespace CodeAtlas
             bool listLangs = false, extractOnly = false;
             int port = 5173;
             bool open = false;
-            for (int i = 1; i < args.Length; i++)
-            {
-                switch (args[i])
-                {
-                    case "--path": target = args[++i]; break;
-                    case "--out": outDir = args[++i]; break;
-                    case "--port": port = int.Parse(args[++i]); break;
-                    case "--log": logPath = args[++i]; break;
-                    case "--lang": langs = args[++i]; break;
-                    case "--facets": facets = args[++i]; break;
-                    case "--draft-facets": draftTarget = args[++i]; break;
-                    case "--draft-out": draftOut = args[++i]; break;
-                    case "--list-langs": listLangs = true; break;
-                    case "--extract": extractOnly = true; break;
-                    case "--open": open = true; break;
-                }
-            }
+            // 自检失败必须体现到退出码：以前捕到异常只写一行 ERROR 就 return 0，
+            // 脚本 / CI 看到的就是"成功"（自检说成功但实际没接上，是最坑的那种）
+            int rc = 0;
+            // 日志缓冲与 Log() 得在解析参数**之前**就位：下面对不认识的选项要记一行，
+            // 声明在后面的话调用点就落在 sb 赋值之前（编译不过）
             var sb = new StringBuilder();
             void Log(string s) { sb.AppendLine(s); }
+            int i = 1;   // 声明在外面：局部函数 Next() 要捕获它
+            // 取下一个参数：缺参数时报人话，别 IndexOutOfRange
+            string Next(string flag)
+            {
+                if (i + 1 >= args.Length) throw new InvalidOperationException(L.T($"{flag} 后面缺参数", $"{flag} needs a value"));
+                return args[++i];
+            }
+            try
+            {
+                for (; i < args.Length; i++)
+                {
+                    switch (args[i])
+                    {
+                        case "--path": target = Next("--path"); break;
+                        case "--out": outDir = Next("--out"); break;
+                        case "--port": port = int.TryParse(Next("--port"), out int pv) ? pv : throw new InvalidOperationException(L.T("--port 要的是数字", "--port wants a number")); break;
+                        case "--log": logPath = Next("--log"); break;
+                        case "--lang": langs = Next("--lang"); break;
+                        case "--facets": facets = Next("--facets"); break;
+                        case "--draft-facets": draftTarget = Next("--draft-facets"); break;
+                        case "--draft-out": draftOut = Next("--draft-out"); break;
+                        case "--list-langs": listLangs = true; break;
+                        case "--extract": extractOnly = true; break;
+                        case "--open": open = true; break;
+                        default:
+                            // 拼错的选项以前会被静静忽略，然后“行为就是不对”—— 说一句
+                            Log(L.T($"忽略不认识的选项：{args[i]}", $"ignoring unknown option: {args[i]}"));
+                            rc = 1;
+                            break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // 解析阶段出错（缺参数 / --port 不是数字）：以前这里是未捕获异常 → 进程直接崩，
+                // 连日志都不写（实测 `--port abc`、`--path` 后面什么都不给都会这样）。
+                Log("ERROR: " + ex.Message);
+                File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
+                Environment.ExitCode = 1;
+                return;
+            }
             var cfg = Engine.LoadConfig();
             L.Init(cfg.Lang);   // 无界面路径也得定语言，否则日志永远中文（en 模式下会莫名其妙）
             cfg.Out = outDir;
@@ -1553,18 +1585,22 @@ namespace CodeAtlas
                 Log("payload = " + (Payload.HasEngine ? L.T("内嵌（首次会释放）", "embedded (unpacked on first run)") : L.T("无", "none")));
                 Log("engine = " + (engRoot ?? L.T("(没找到)", "(not found)")));
                 Log("node = " + (engNode ?? L.T("(没找到)", "(not found)")) + " [ok=" + (engNode != null && Engine.NodeOk(engNode)) + "]");
-                Log("devRoot = " + (Engine.FindDevRoot() ?? L.T("(无，用的是内置引擎)", "(none — using the built-in engine)")));
+                Log("devRoot = " + (Engine.FindDevRoot() ?? (Payload.HasEngine
+                    ? L.T("(无，用的是内置引擎)", "(none — using the built-in engine)")
+                    : L.T("(无，也没有内置引擎 → 这个 exe 跑不起来)", "(none, and no built-in engine either — this exe cannot run)"))));
                 // --list-langs：只验证"启动器能不能从引擎读到语言表"这条接线
                 if (listLangs)
                 {
                     var all = Engine.ListLangs(cfg);
                     Log(L.T("语言表 = ", "languages = ") + all.Length + L.T(" 条：", ": ") + string.Join(", ", all.Select((l) => l.Id + (l.OptIn ? "*" : ""))));
                     File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
+                    Environment.ExitCode = rc;
                     return;
                 }
                 if (extractOnly)
                 {
                     File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
+                    Environment.ExitCode = rc;
                     return;
                 }
                 // --draft-facets：只验证"草拟分组规则"这条链路（可选把草案写出来）
@@ -1580,15 +1616,29 @@ namespace CodeAtlas
                         Log(L.T("已写出：", "written: ") + draftOut);
                     }
                     File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
+                    Environment.ExitCode = rc;
                     return;
                 }
                 if (target == null) throw new InvalidOperationException(L.T("缺 --path", "missing --path"));
-                var p = Engine.Start(target, cfg, langs ?? cfg.Langs, facets, open, Log, code => Log("exit = " + code));
+                var p = Engine.Start(target, cfg, langs ?? cfg.Langs, facets, open, Log, code => Log("exit = " + code), watch: false, scanOnly: true);
                 p.WaitForExit(600000);
-                if (!p.HasExited) { p.Kill(true); Log(L.T("超时，已结束", "timed out — stopped")); }
+                if (!p.HasExited)
+                {
+                    p.Kill(true);
+                    Log(L.T("超时，已结束", "timed out — stopped"));
+                    rc = 1;
+                }
+                else if (p.ExitCode != 0)
+                {
+                    // 引擎的退出码是可靠的（实测：扫成功 = 0，目标不存在 = 1）—— 自检不把它带出来，
+                    // 就会出现"引擎扫挂了、自检却说成功"。上面 onExit 那行只是记日志，这里才是结论。
+                    Log(L.T($"引擎退出码 {p.ExitCode}：自检按失败计", $"engine exit code {p.ExitCode}: self-check counts this as a failure"));
+                    rc = p.ExitCode;
+                }
             }
-            catch (Exception ex) { Log("ERROR: " + ex.Message); }
+            catch (Exception ex) { Log("ERROR: " + ex.Message); rc = 1; }
             File.WriteAllText(logPath, sb.ToString(), Encoding.UTF8);
+            Environment.ExitCode = rc;
         }
     }
 }

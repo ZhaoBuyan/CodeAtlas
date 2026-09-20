@@ -93,7 +93,9 @@ function printScanReport(b, out) {
   // 被默认跳过表命中的目录：列出来，免得“图里少了东西”只能靠猜（monorepo 的 packages/ 就是这么发现的）
   const ignDirs = Object.entries(b.stats.skipped?.ignoredDirs || {}).sort((a, c) => c[1] - a[1]);
   if (ignDirs.length) {
-    const detail = ignDirs.slice(0, 8).map(([n, c]) => `${n} ${c}`).join(' · ') + (ignDirs.length > 8 ? ` …共 ${ignDirs.length} 种` : '');
+    // 注意：截断后缀要**按语言**拼 —— 写在中性字符串里会让英文输出漏出"…共 N 种"（实测过）
+    const detail = ignDirs.slice(0, 8).map(([n, c]) => `${n} ${c}`).join(' · ')
+      + (ignDirs.length > 8 ? t(` …共 ${ignDirs.length} 种`, ` … ${ignDirs.length} in total`) : '');
     console.log(t(
       `  跳过目录  ${detail}（默认表 + 项目规则；里面的源码不会进这张图）`,
       `  Skipped dirs ${detail} (default list + project rules; source inside them is not in this map)`,
@@ -576,8 +578,11 @@ if (!first || first === 'help' || first === '--help' || first === '-h') {
   run = () => cmdAuto([first, ...rest]);
 }
 
-// 注意：serve 是同步函数，auto/scan/ingest 是异步的 —— 统一用 Promise.resolve 包一层再接 catch
-await Promise.resolve(run())
+// 注意：serve 是同步函数，auto/scan/ingest 是异步的 —— 统一用 Promise.resolve 包一层再接 catch。
+// ⚠ 必须写成 `.then(() => run())`：直接 `Promise.resolve(run())` 的话，**同步抛出**（如 serve 找不到
+// bundle）发生在参数求值阶段，压根进不了下面的 catch —— 用户看到的是 Node 堆栈（file:///C:/Users/…）。
+await Promise.resolve()
+  .then(() => run())
   .then(() => {
     // scan / ingest 跑完即退（serve / mcp / auto 要保持存活，不能退）
     if (first === 'scan' || first === 'ingest') flushAndExit(0);
