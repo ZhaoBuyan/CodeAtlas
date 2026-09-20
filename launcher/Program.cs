@@ -795,7 +795,7 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            SetTip(_langs, "扫描范围（默认自动：全部代码语言，不含配置文件）。\r\n限定语言可显著提速；列表最后还有一项「按 .gitignore 跳过」，勾上就按项目自己的 .gitignore 跳（目录和文件都跳）。", "What to scan (auto by default: all code languages; config files are not scanned).\r\nLimiting languages is much faster; the last item, \"Skip what .gitignore ignores\", also honors the project's own .gitignore (dirs and files).");
+            SetTip(_langs, "扫描范围（默认自动：全部代码语言，不含配置文件）。\r\n限定语言可显著提速；列表最后还有一项 .gitignore，勾上就按项目自己的 .gitignore 跳（目录和文件都跳）。", "What to scan (auto by default: all code languages; config files are not scanned).\r\nLimiting languages is much faster; the last item, \".gitignore\", also honors the project's own .gitignore (dirs and files).");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
             SetText(_wiz, "项目设置…", "Setup…");
