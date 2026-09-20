@@ -494,6 +494,53 @@ check(/相关测试文件：无（图里 \d+ 个测试文件，都不引用它�
   (symLone.split('\n').find((l) => /相关测试文件|Related test files/.test(l)) || '').trim().slice(0, 60));
 nb.proc.kill('SIGKILL');
 
+// ---------------------------------------------------------------------------
+// ① 成员级名字级调用图：refs("成员名") 直接列调用 / 访问位置（file:line）
+// ---------------------------------------------------------------------------
+const useTmp = path.join(os.tmpdir(), `codeatlas-memberuses-${process.pid}`);
+const { out: useOut } = scanProject(useTmp, {
+  'widget.js': 'export class Widget {\n  render() { return 1; }\n  get title() { return "x"; }\n}\nexport function useIt() {\n  const w = new Widget();\n  w.render();\n  return w.title;\n}\n',
+  // 文件级（类型之外）的调用 + **同一行前面有中文**（列号陷阱：tree-sitter 的 column 就是码元偏移，别再换算）
+  'main.mjs': 'import { Widget } from "./widget.js";\nconst w2 = new Widget();\nw2.render();\n/* 中文注释在同行 */ w2.render();\n',
+});
+const us = spawnMcp(useOut);
+await us.ready;
+
+const rRender = await us.call('refs', { name: 'render' });
+check(/widget\.js:7/.test(rRender) && /main\.mjs:3/.test(rRender),
+  '① refs(成员名)：列出调用位置（file:line）', (rRender.split('\n').find((l) => /widget\.js:7/.test(l)) || '').trim().slice(0, 60));
+// 只检查“位置行”（形如 `  file:line\t调用`），不要去碰“所属类型”那一行 —— 后者本来就写着声明位置
+const siteRows = rRender.split('\n').filter((l) => /^\s+\S+:\d+\t(调用|访问|call|access)$/.test(l));
+check(siteRows.length === 3 && !siteRows.some((l) => /widget\.js:2\b/.test(l)),
+  '① 声明行不算调用点（`render() {` 后面也跟括号，但它不是调用）', `${siteRows.length} 行位置：${siteRows.map((l) => l.trim()).join(' · ')}`);
+check(/main\.mjs:4/.test(rRender) && /共 3 处|matched by name: 3/.test(rRender),
+  '① 同一行前面有中文注释也抓得到（列号不当字节算）',
+  (rRender.split('\n').find((l) => /共 \d+ 处|matched by name/.test(l)) || '').trim().slice(0, 60));
+const rTitle = await us.call('refs', { name: 'Widget.title' });
+check(/widget\.js:8\t(访问|access)/.test(rTitle),
+  '① `类型.成员` 形式也给位置，并且区分“调用 / 访问”',
+  (rTitle.split('\n').find((l) => /widget\.js:8/.test(l)) || '').trim().slice(0, 60));
+const rNone = await us.call('refs', { name: 'no_such_member_zzz' });
+check(!/调用 \/ 访问位置/.test(rNone), '① 查不存在的名字时不扯调用位置');
+
+// 老 bundle（没有 uses 字段）：绝不能把“没记录”说成“一处都没找到”（跟 impact 的测试文件同一个口径）
+const oldOut = path.join(useTmp, 'out-old');
+{
+  fs.mkdirSync(oldOut, { recursive: true });
+  const b = JSON.parse(fs.readFileSync(path.join(useOut, 'bundle.json'), 'utf8'));
+  for (const t of b.types) delete t.uses;
+  for (const f of b.files) delete f.uses;
+  fs.writeFileSync(path.join(oldOut, 'bundle.json'), JSON.stringify(b));
+}
+const usOld = spawnMcp(oldOut);
+await usOld.ready;
+const rOld = await usOld.call('refs', { name: 'render' });
+check(/没有这类记录|carries no such records/.test(rOld) && !/一处都没找到|none found/.test(rOld),
+  '① 老 bundle（没 uses）明说“没记录”，不说“一处都没找到”',
+  (rOld.split('\n').find((l) => /调用 \/ 访问位置|Call \/ access sites/.test(l)) || '').trim().slice(0, 70));
+usOld.proc.kill('SIGKILL');
+us.proc.kill('SIGKILL');
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;

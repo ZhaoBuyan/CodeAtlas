@@ -282,6 +282,35 @@ function declaratorName(node, depth = 0) {
 
 /** 取节点名：优先 name/declarator 字段，没有字段就找第一个标识符子节点（Kotlin 等语法不给 name 字段） */
 const ID_TYPES = ['type_identifier', 'simple_identifier', 'scoped_identifier', 'identifier', 'dotted_name', 'qualified_name', 'name', 'value_name', 'constructor_name', 'module_name', 'type_constructor', 'value_identifier', 'module_identifier', 'symbol', 'id'];
+/**
+ * ① 成员级名字级调用图（2026-09-20）：这个名字所在的这一行，看起来是**调用**还是**成员访问**？
+ *   判据只看源码那一行：名字后面（跳过空白）紧跟 `(` → 调用；名字前面紧挨 `.` / `>` / `:` → 成员访问
+ *   （`.` / `->` / `::` / `?.` 都能盖住）。
+ * 为什么不走语法树：28 门语言的“调用 / 成员访问”节点名各不相同，逐门实测的成本远超收益；而这里需要的只是
+ *   “这个名字在哪些行被用到”——**行号来自语法树**（node.startPosition），位置判据来自源码文本。
+ * ⚠ `startPosition/endPosition.column` 直接用，**不要再做字节换算**：web-tree-sitter 是拿 JS 字符串（UTF-16）解析的，
+ *   它给的 column 就是码元偏移（曾经按“UTF-8 字节”算过一次，结果中文注释在同一行时整个错位 —— 有门盯着）。
+ * 已知抓不到（写进 CHANGELOG 与工具描述了）：Lisp 那种 `(foo x)` 的写法（名字后面不跟括号）、动态调用 / 别名 / 反射。
+ * 误判很轻：注释与字符串里的“名字”本来就不是标识符节点，根本走不到这里。
+ */
+function sourceUseKind(lines, node) {
+  const line = lines[node.startPosition.row];
+  if (!line) return null;
+  const end = node.endPosition.column;
+  if (line.slice(end).replace(/^\s+/, '').startsWith('(')) return 'call';
+  const before = node.startPosition.column > 0 ? line[node.startPosition.column - 1] : '';
+  if (before === '.' || before === '>' || before === ':') return 'access';
+  return null;
+}
+
+/**
+ * “这个名字在哪些行被调用 / 被当成员访问”里，各语言给**成员名**用的节点类型。
+ * 实测来源：JS/TS/TSX/Vue 用 `property_identifier`（`w.render()` 里的 render 就是它，不是 identifier）；
+ * Go / Rust 用 `field_identifier`；这两类之外的语言（C# / Java / Python / C++ …）成员名就叫 `identifier`，已在上一个分支里。
+ * 这是一张**表**：换新语言时先跑一份真实样本，看是不是有节点类型没盖到（- 比改完才发现靠猜好）。
+ */
+const USE_ID_TYPES = new Set(['property_identifier', 'field_identifier']);
+
 function nameOf(node, lang) {
   // Rust impl 块：名字取它实现的类型（field 'type'），让方法挂到同名节点上
   // 有专用取名钩子的语言（例如 Elixir）以它为准；**它没给出名字时继续往下走通用兜底**——
@@ -668,6 +697,24 @@ function extractFile(source, tree, lang) {
   const fileRefCount = new Map();    // 文件级（没有类型归属）的那些：name -> n
   // 参数名所在的标识符节点（这些不当"引用"算）
   const skipIds = new Set();
+  // ① 调用 / 成员访问的“位置”记录（每行同一个名字只记一次）：`${ownerIndex}|${name}|${line}|${kind}` -> entry
+  const useSeen = new Map();
+  const fileUses = [];            // 没有类型归属的（脚本的顶层代码）—— 挂到后面合成的 module 节点上
+  function noteUse(node) {
+    if (skipIds.has(node.id)) return;                     // 参数名之类不算
+    const k = sourceUseKind(lines, node);
+    if (!k) return;
+    const name = node.text;
+    const line = node.startPosition.row + 1;
+    const c = k === 'call' ? 1 : 0;
+    const t = currentType();
+    if (!t) {
+      if (!fileUses.some((u) => u.n === name && u.l === line && u.c === c)) fileUses.push({ n: name, l: line, c });
+      return;
+    }
+    const key = `${t.index}|${name}|${line}|${c}`;
+    if (!useSeen.has(key)) useSeen.set(key, { t: t.index, n: name, l: line, c });
+  }
   const namespaces = new Set();
   const nsStack = [];
   let fileNamespace = '';
@@ -863,7 +910,14 @@ function extractFile(source, tree, lang) {
       }
     }
 
-    if (type === 'identifier' || type === 'type_identifier') addRef(node);
+    if (type === 'identifier' || type === 'type_identifier') {
+      addRef(node);
+      noteUse(node);     // ① 同一处标识符：顺手记下“这个名字在这一行是调用还是成员访问”
+    } else if (USE_ID_TYPES.has(type)) {
+      // 各语言给“成员名”用的节点名不一样（JS/TS 是 property_identifier、Go/Rust 是 field_identifier…）。
+      // ⚠ 只记**位置**，不进 refs —— 进 refs 会改边权重，那是另一个决定。
+      noteUse(node);
+    }
 
     for (const c of node.namedChildren) walk(c);
   }
@@ -872,7 +926,7 @@ function extractFile(source, tree, lang) {
   // 计数表 → 引用列表（顺序 = 首次出现顺序，跟改之前一致）
   for (const r of refCount.values()) refs.push(r);
   for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
-  return { types, imports, refs, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, imports, refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -1238,7 +1292,7 @@ async function extractFiles(files) {
       continue;
     }
     // 本文件的结果：id 都是**文件内局部**的，父进程合并时统一平移到全局
-    const part = { rel: f.rel, lang: f.lang.id, ns: null, types: [], refs: [], file: null };
+    const part = { rel: f.rel, lang: f.lang.id, ns: null, types: [], refs: [], uses: [], file: null };
     const parser = await getParser(f.lang);
     const source = f.lang.preprocess ? preprocess(rawSource, f.lang.preprocess) : rawSource;
     const tree = parser.parse(source);
@@ -1298,6 +1352,9 @@ async function extractFiles(files) {
       for (const r of facts.refs) {
         if (r.owner === t.index) part.refs.push({ t: id, name: r.name, n: r.n });
       }
+      for (const u of facts.uses) {
+        if (u.t === t.index) part.uses.push({ t: id, n: u.n, l: u.l, c: u.c });
+      }
     }
 
     // 文件里没有类型声明（脚本 / 顶层函数 / Lua）→ 合成一个"模块"节点，别让整份文件在图上消失
@@ -1338,6 +1395,10 @@ async function extractFiles(files) {
       });
       for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name, n: r.n });
     }
+
+    // ① 文件级（类型之外）的调用位置：挂到**文件**上，不管有没有合成 module 节点 ——
+    // 脚本末尾的 `main()`、`if __name__ == '__main__'` 这类调用都在这里，丢了就变成“没人调用它”
+    if (facts.fileUses.length) part.fileUses = facts.fileUses;
 
     // 进度提示：文件多的时候每 150 个或每 2.5 秒报一次（小项目只有开始那一行）
     parsedFiles++;
@@ -1392,18 +1453,23 @@ function isTestPath(rel) {
 
 /** 合并各子进程/缓存的产出：把局部 id 平移到全局 id（文件、类型、parent、refs.owner 都要移） */
 function mergeParts(parts) {
-  const out = { fileRecs: [], allTypes: [], allRefs: [], fileNamespaces: [], failures: [] };
+  const out = { fileRecs: [], allTypes: [], allRefs: [], allUses: [], fileNamespaces: [], failures: [] };
   for (const p of parts || []) {
     for (const pf of p.files || []) {
       if (!pf) continue;
       const fileId = out.fileRecs.length;
       const tOff = out.allTypes.length;
-      if (pf.file) out.fileRecs.push({ ...pf.file, id: fileId, types: (pf.file.types || []).map((t) => t + tOff) });
+      if (pf.file) {
+        const rec = { ...pf.file, id: fileId, types: (pf.file.types || []).map((t) => t + tOff) };
+        if (pf.fileUses?.length) rec.uses = pf.fileUses;    // ① 文件级（类型之外）的调用位置
+        out.fileRecs.push(rec);
+      }
       for (const t of pf.types || []) {
         out.allTypes.push({ ...t, id: t.id + tOff, file: fileId, parent: t.parent == null ? null : t.parent + tOff });
       }
       // n = 这个"解析前的名字"在同一个 owner 里被引用了几次（权重就是从这里来的）
       for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name, n: r.n || 1 });
+      for (const u of pf.uses || []) out.allUses.push({ owner: u.t + tOff, n: u.n, l: u.l, c: u.c });
       out.fileNamespaces.push(pf.ns || {});
     }
     out.failures.push(...(p.failures || []));
@@ -1599,7 +1665,30 @@ export async function scan(opts) {
   // 按 collectFiles 的顺序合并（缓存命中的 + 新解析的）：顺序稳定，只改几个文件时 id 不会乱跳
   const byRel = new Map(reused);
   for (const p of freshParts) for (const pf of p.files || []) byRel.set(pf.rel, pf);
-  const { fileRecs, allTypes, allRefs, fileNamespaces, failures } = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
+  const { fileRecs, allTypes, allRefs, allUses, fileNamespaces, failures } = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
+
+  // ① 把“调用 / 成员访问”的位置挂回各自所属类型（没内容就不带这个键，保持 bundle 精简）
+  for (const u of allUses) {
+    const t = allTypes[u.owner];
+    if (!t) continue;
+    if (!t.uses) t.uses = [];
+    t.uses.push({ n: u.n, l: u.l, c: u.c });
+  }
+  // ① 再筛一道：**只留“名字在项目里确实是个成员”的**（父进程才知道全部成员名）。
+  // 不筛的话每个标识符都留一份位置，体积会翻倍（实测真实样本 0.16 MB → 0.36 MB）。
+  // 注意：这会让“对外部成员的调用”（如 `Assert.Equal`）不留位置 —— 但那种名字在图里本来就没有成员，
+  // 也问不到它头上（查一个不存在的成员名根本不会走 memberNote）。
+  {
+    const memberNames = new Set();
+    for (const t of allTypes) for (const m of t.memberList || []) if (m.n) memberNames.add(m.n);
+    const trim = (holder) => {
+      if (!holder.uses) return;
+      holder.uses = holder.uses.filter((u) => memberNames.has(u.n));
+      if (!holder.uses.length) delete holder.uses;
+    };
+    for (const t of allTypes) trim(t);
+    for (const f of fileRecs) trim(f);
+  }
 
   // ---- 建索引：符号表 ----
   const bySimpleName = new Map();

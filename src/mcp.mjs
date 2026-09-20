@@ -59,9 +59,11 @@ const INSTRUCTIONS = [
   '- Files with parse errors are flagged individually; their data may be incomplete;',
   '- Top-level functions in JS / TS are recorded as [function] **types**, not members: search(scope="member") will not find',
   '  them — use the default scope (any) or scope="type";',
-  '- Dependency edges are **type-level**: there are no per-call-site edges, so "who calls method X" cannot be answered',
-  '  exactly. `refs` / `symbol` do accept a member name or `Type.Member`, and answer with the owning type plus that type\'s',
-  '  referrers (an upper bound); for exact call sites, search the method name inside those referrer files;',
+  '- Dependency edges are **type-level** (no per-call-site edges). But `refs` / `symbol` accept a member name or',
+  '  `Type.Member` and answer with the owning type PLUS the member\'s **call / access sites** (`file:line`), matched',
+  '  **by name only**: the receiver type is not resolved (same-named members elsewhere are mixed in), and dynamic calls /',
+  '  aliases / reflection are invisible. Lines come from the syntax tree; "call vs access" is judged from the source text',
+  '  (name followed by `(`, or preceded by `.` / `->` / `::`) — so Lisp-style `(foo x)` calls are not seen as calls;',
   '  `area(int, int): double`, or just `(int, int)` when the grammar gives the return type no name. A member printed without',
   '  a signature means "not extracted", **not** "takes no arguments" — do not read absence as fact;',
   '- Decompiled output (.dll / .exe / .jar) carries no source comments, so an empty "description" is expected;',
@@ -130,7 +132,7 @@ const TOOLS = [
   },
   {
     name: 'symbol',
-    description: 'Everything about one symbol (type): description, file:line, signature (parameter list + return type, when the grammar exposes it), member list, base types, dependents/dependencies, owning system. Members are listed with their own id/line; a **member** name or `Type.Member` is accepted too and answered with its owning type. Pass `neighbors: true` to also get a compact neighborhood (top 5 referrers, top 5 out-edges, related test files) — off by default so the output stays small.',
+    description: 'Everything about one symbol (type): description, file:line, signature (parameter list + return type, when the grammar exposes it), member list, base types, dependents/dependencies, owning system. Members are listed with their own id/line; a **member** name or `Type.Member` is accepted too and answered with its owning type plus that member\'s call / access sites (`file:line`, matched by name). Pass `neighbors: true` to also get a compact neighborhood (top 5 referrers, top 5 out-edges, related test files) — off by default so the output stays small.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -144,7 +146,7 @@ const TOOLS = [
   },
   {
     name: 'refs',
-    description: 'References: who references it (in) / what it references (out). Use this before changing code to see the blast radius.',
+    description: 'References: who references it (in) / what it references (out). Use this before changing code to see the blast radius. A **member** name (or `Type.Member`) is also accepted: you then get the owning type plus that member\'s call / access sites (`file:line`, matched by name — see the instructions for the exact limits).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -346,19 +348,72 @@ function memberHitsOf(idx, raw) {
   return found;
 }
 
+/**
+ * ① 成员级“调用 / 访问位置”（2026-09-20）：按**名字**在整张图里找。
+ * 这是“谁调用了这个方法”这个名字级回答 —— 口径与边界（工具描述 / README / CHANGELOG 里也都写着）：
+ *   · 只看名字 + 源码里“紧跟 `(`” / “前面紧挨 `.` / `->` / `::`”，**不解析接收者类型** → 同名的别的成员会混进来；
+ *   · 动态调用 / 别名 / 反射，以及 Lisp 那种 `(foo x)` 写法（名字后面不跟括号）抓不到；
+ *   · **声明处要排掉**：声明名后面也常跟 `(`（`void ClearStatus() {`），那不是调用点。
+ * 数据来自扫描端的 `types[].uses`（类型内）与 `files[].uses`（类型之外，如脚本末尾的 `main()`）。
+ */
+function memberUses(idx, name) {
+  const want = String(name || '').toLowerCase();
+  const declLines = new Set();
+  for (const t of idx.b.types) {
+    for (const m of t.memberList || []) {
+      if ((m.n || '').toLowerCase() === want) declLines.add(`${t.file}#${m.l}`);
+    }
+  }
+  const out = [];
+  const push = (fileId, u) => {
+    if (declLines.has(`${fileId}#${u.l}`)) return;
+    out.push({ fileId, l: u.l, c: u.c });
+  };
+  for (const t of idx.b.types) for (const u of t.uses || []) if ((u.n || '').toLowerCase() === want) push(t.file, u);
+  for (const f of idx.b.files) for (const u of f.uses || []) if ((u.n || '').toLowerCase() === want) push(f.id, u);
+  out.sort((a, b) => (a.fileId - b.fileId) || (a.l - b.l));
+  return out;
+}
+
 /** 成员名被交给 refs / symbol / subgraph / impact 时的回答（诚实地讲清“能答什么”与“怎么接下一步”） */
 function memberNote(idx, name, hits) {
-  const head = T(`「${name}」是**成员**，不是类型。本图的依赖边只记**类型级**（成员级的调用点没有逐个记录），所以不能直接列出“谁调用了它”。`,
-    `"${name}" is a **member**, not a type. Dependency edges here are **type-level** (per-call-site references are not recorded), so we cannot list "who calls it" directly.`);
+  const head = T(`「${name}」是**成员**，不是类型（所以没有类型级依赖边）。成员级的**调用 / 访问位置**在下面，按名字匹配。`,
+    `"${name}" is a **member**, not a type (so it has no type-level edges). Its per-name **call / access sites** are below.`);
   const rows = hits.slice(0, 12).map(({ t, m }) => {
     const f = idx.files.get(t.file);
     const ev = evidencedIn(idx, t);
     return T(`  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  （所属类型 id=${t.id}，被引 ${t.fanIn} 次${ev < t.fanIn ? `，其中算数的 ${ev} 次` : ''}）`,
       `  ${m.l}\t${t.fqn}.${m.n}\t[${m.k}]\t${f ? f.path : '?'}:${m.l}  (owner type id=${t.id}, referenced ${t.fanIn} times${ev < t.fanIn ? `, ${ev} with evidence` : ''})`);
   });
-  const tail = T(`→ 想看“谁可能调用它”：对上面每个类型调 refs(id) —— 那是**超集**，不等于该方法的调用点；\n  要精确的调用点，就在那些引用方的文件里搜方法名。`,
-    `→ To narrow down callers: call refs(id) on each owner type above — that is an **upper bound**, not the exact call sites;\n  for exact call sites, search the method name inside those referrer files.`);
-  return `${head}\n${rows.join('\n')}\n${tail}`;
+  // 注意：要拿**成员名**去找位置，不能拿整串查询（`Widget.render` 不是名字）；同名多命中时取并集
+  const memberNames = [...new Set(hits.map((h) => h.m.n).filter(Boolean))];
+  const seenSite = new Set();
+  const sites = [];
+  for (const mn of memberNames) {
+    for (const s of memberUses(idx, mn)) {
+      const k = `${s.fileId}#${s.l}#${s.c}`;
+      if (!seenSite.has(k)) { seenSite.add(k); sites.push(s); }
+    }
+  }
+  sites.sort((a, b) => (a.fileId - b.fileId) || (a.l - b.l));
+  const callCount = sites.filter((s) => s.c).length;
+  const CAP = 12;
+  // 老 bundle 根本没有 uses 字段（不是“没有调用点”）—— 跟 impact 的测试文件一样，绝不能把“没记录”说成“没有”
+  const hasUseData = idx.b.types.some((t) => t.uses) || idx.b.files.some((f) => f.uses);
+  const siteBlock = sites.length
+    ? T(`调用 / 访问位置（按名字匹配，共 ${fmt(sites.length)} 处${callCount ? `，其中调用 ${fmt(callCount)} 处` : ''}）：\n`,
+      `Call / access sites (matched by name: ${fmt(sites.length)}${callCount ? `, ${fmt(callCount)} of them calls` : ''}):\n`)
+      + sites.slice(0, CAP).map((s) => T(`  ${idx.files.get(s.fileId)?.path}:${s.l}\t${s.c ? '调用' : '访问'}`,
+        `  ${idx.files.get(s.fileId)?.path}:${s.l}\t${s.c ? 'call' : 'access'}`)).join('\n')
+      + (sites.length > CAP ? T(`\n  …还有 ${fmt(sites.length - CAP)} 处`, `\n  …${fmt(sites.length - CAP)} more`) : '')
+    : (hasUseData
+      ? T('调用 / 访问位置：一处都没找到（这个名字在全图里没出现在调用位或成员访问位）',
+        'Call / access sites: none found (this name never appears in a call or member-access position in the map)')
+      : T('调用 / 访问位置：这份图里没有这类记录（老版本引擎扫的图 —— 重新扫一次就会带上）',
+        'Call / access sites: this map carries no such records (it was scanned by an older engine — a re-scan adds them)'));
+  const tail = T(`→ 这些位置是**按名字匹配**的：不解析接收者类型，同名的其它成员会混进来；动态调用 / 别名 / 反射，\n  以及 Lisp 那种 \`(foo x)\` 写法**抓不到**。要交叉核对：对上面每个所属类型调 refs(id)（那是超集）。`,
+    `→ These sites are matched **by name only**: the receiver type is not resolved, so same-named members elsewhere are mixed in;\n  dynamic calls / aliases / reflection — and Lisp-style \`(foo x)\` calls — are invisible. To cross-check: refs(id) on each owner type above (an upper bound).`);
+  return `${head}\n${rows.join('\n')}\n${siteBlock}\n${tail}`;
 }
 
 /**
