@@ -108,8 +108,6 @@ namespace CodeAtlas
         public string Langs { get; set; } = "";
         /// <summary>增量扫描：只重新解析改过的文件（默认关 = 每次全量）</summary>
         public bool Incremental { get; set; }
-        /// <summary>按项目自己的 .gitignore 跳过（默认关；每个项目自己的规则还可以写在目标根的 atlas.ignore 里）</summary>
-        public bool RespectGitignore { get; set; }
         /// <summary>界面与引擎输出的语言："zh"（默认）或 "en"</summary>
         public string Lang { get; set; } = "zh";
         /// <summary>我们不认识的字段：原样留着。保存时是整体重写，若不带着它们，别的版本写的字段会被抹掉
@@ -574,7 +572,6 @@ namespace CodeAtlas
             // 语言：空串 = 引擎默认（auto）。显式选过就原样传过去。
             if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
             if (cfg.Incremental) args.Append(" --incremental");   // 只重解析改过的文件
-            if (cfg.RespectGitignore) args.Append(" --gitignore"); // 按项目自己的 .gitignore 跳过（默认关）
             if (watch) args.Append(" --watch");                   // 内构监控：分趟长出来 + 改动自动重扫（不会自己结束）
             // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
             if (!string.IsNullOrWhiteSpace(facets)) args.Append(" --facets \"").Append(facets.Trim()).Append('"');
@@ -630,7 +627,6 @@ namespace CodeAtlas
         private Panel _bar;
         private readonly CheckBox _autoSwitch = new CheckBox();
         private readonly CheckBox _inc = new CheckBox();
-        private readonly CheckBox _gitignore = new CheckBox();
         private Process _proc;
         private bool _watching;          // 「内构监控」开着吗
         private bool _watchWanted;       // 这次跑的是监控进程（它退出后要把按钮恢复成「快照」）
@@ -751,15 +747,6 @@ namespace CodeAtlas
             } Log(_inc.Checked ? L.T("增量扫描：开（只重解析改过的文件）", "Incremental scan: on (only changed files are re-parsed)") : L.T("增量扫描：关（每次全量）", "Incremental scan: off (full scan every time)")); };
             SetTip(_inc, "增量扫描：仅重新解析改过的文件（默认关闭，即全量）。\r\n仅节省解析开销；引用关系仍需整体重算，项目越大收益越明显。", "Incremental scan: re-parse only the files that changed (off by default = full scan every time).\r\nIt only saves parsing; who-references-whom is still recomputed wholesale, so it only pays off on big projects.");
 
-            // 遵守项目自己的 .gitignore（默认关；每个项目自己的跳过规则还可以写在目标根的 atlas.ignore 里）
-            SetText(_gitignore, "守 .gitignore", "Respect .gitignore");
-            _gitignore.Checked = _cfg.RespectGitignore;
-            _gitignore.ForeColor = Fg;
-            _gitignore.AutoSize = true;
-            _gitignore.Click += (s, e) => { _cfg.RespectGitignore = _gitignore.Checked; Engine.SaveConfig(_cfg);
-            Log(_gitignore.Checked ? L.T("按项目的 .gitignore 跳过：开", "Respect .gitignore: on") : L.T("按项目的 .gitignore 跳过：关", "Respect .gitignore: off")); };
-            SetTip(_gitignore, "按项目自己的 .gitignore 跳过（默认关）。目录和文件都跳；跳过了什么会在扫描报告里点名。\r\n另外每个项目都能在扫描目标根放一份 atlas.ignore，写它自己的目录/通配规则（存在才生效）。", "Also skip what the project's .gitignore ignores (off by default; both dirs and files). Whatever gets skipped is named in the scan report.\r\nAny project can also drop an atlas.ignore at the scan target root with its own dir/glob rules (only read if present).");
-
             SetText(_run, "扫描", "Scan");
             Style(_run, true);
             SetBtn(_run, true, true); // 必须让它处于"可用"状态（点击处理里会查 IsOn，漏了这行就会点了没反应）
@@ -827,7 +814,7 @@ namespace CodeAtlas
             SetTip(_ui, "切换界面语言：中文 / English。\r\n同时影响扫描输出与 MCP 接口；也可用环境变量 CODEATLAS_LANG=en 指定（优先级更高）。",
                         "Switch UI language: 中文 / English.\r\nAlso affects scan output and the MCP interface; you can set the env var CODEATLAS_LANG=en instead (it wins).");
 
-            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _inc, _gitignore, _ui, _hint, _watch, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
+            _bar.Controls.AddRange(new Control[] { targetLabel, _path, _pickDir, _pickFile, _autoSwitch, _inc, _ui, _hint, _watch, _run, _stop, _toggle, _browser, _langs, _wiz, _mcp });
             _targetLabel = targetLabel;
             _bar.Resize += (s, e) => ApplyLayout();
 
@@ -921,8 +908,7 @@ namespace CodeAtlas
             int rowBCenter = rowB + btnH / 2;
             _autoSwitch.Location = new Point(pad, rowBCenter - _autoSwitch.Height / 2);
             _inc.Location = new Point(_autoSwitch.Right + (int)(14 * k), rowBCenter - _inc.Height / 2);
-            _gitignore.Location = new Point(_inc.Right + (int)(14 * k), rowBCenter - _gitignore.Height / 2);
-            _ui.Location = new Point(_gitignore.Right + (int)(14 * k), rowBCenter - _ui.Height / 2);
+            _ui.Location = new Point(_inc.Right + (int)(14 * k), rowBCenter - _ui.Height / 2);
 
             int x = w - pad;
             foreach (var b in new[] { _mcp, _browser, _toggle, _stop, _langs, _wiz, _watch, _run })
