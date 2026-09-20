@@ -592,7 +592,7 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] First-run wizard (pick project → draft grouping rules → pick languages → save and scan; no wizard next time)
 - [x] Incremental scanning (`--incremental`, re-parses changed files only; "Incremental" checkbox in the launcher)
 - [x] **Scanning without source**: `.dll / .exe` (including .NET single-file publishes) via the launcher's built-in decompiler · `.jar` via the bundled trimmed JRE + cfr — the full build needs nothing installed
-- [x] **Parser upgrade**: web-tree-sitter 0.20 → 0.27 with 105 grammar packages (one grammar used to cost 150–180 MB; now ~11 MB)
+- [x] **Parser upgrade**: web-tree-sitter 0.20 → 0.27 with 105 grammar packages (one grammar used to cost 150–180 MB; now about 11 MB)
 - [x] **Honesty as a feature**: unknown / ambiguous edge counts, files that are not UTF-8, unsupported languages and "supported but out of the scanned range" files are each reported separately — nothing is dropped silently
 - [x] Headless self-check and diagnostics in the same exe (`--headless --path <dir> --log <file>`, `--list-langs`, `draft-facets`) — useful when somebody reports a problem
 - [x] AI interface hardening: one-click MCP config copy · `map(budget)` skeleton export · `impact` blast radius (multi-hop + honest caveats)
