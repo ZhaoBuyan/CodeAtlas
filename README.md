@@ -517,7 +517,10 @@ so the whole file does not vanish from the map; their members (functions/variabl
   and `overview` does the same — so “something is missing from the map” is never something you have to guess;
 - **Any file > 1 MB** (`--maxkb` to change);
 - **Whatever your project rules say**: `facets.json`'s `exclude` adds directories to ignore (upstream
-  reference code, for instance).
+  reference code, for instance). Better still, drop an **`atlas.ignore`** at the **scan target root**
+  (`dirname` / `dirname/` / globs like `*.gen.ts` / `#` comments, one per line — read **only if the file exists**);
+  the launcher's **「守 .gitignore」** checkbox (or `--gitignore` on the CLI) additionally honors the project's own
+  `.gitignore`. Whatever gets skipped is named in the report (`!` negations are not supported yet — also reported).
 
 ### What to watch out for when scanning
 

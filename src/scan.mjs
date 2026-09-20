@@ -85,7 +85,53 @@ const GENERATED_NAME_RE = /(^<|^_003C)|(__InlineArray|__DisplayClass|PrivateImpl
 // 文件收集
 // ---------------------------------------------------------------------------
 
-function collectFiles(roots, { languages, maxKb, excludes, budget }) {
+// ---------------------------------------------------------------------------
+// 项目自己的跳过规则（自选）
+// ---------------------------------------------------------------------------
+// `atlas.ignore`：放在扫描目标根，**存在才生效**（这就是「自选」）。
+// 可选的 `.gitignore`：默认不读，传了 --gitignore 才读（启动器上有个勾选框）。
+// 语法先做简单版：一行一条 · `#` 注释 · `名字`（目录名或文件名都算）· `名字/`（只当目录）·
+// 含 `* ?` 或 `/` 的按相对路径 glob 匹配。**`!` 例外暂不支持**（遇到会计数、在报告里提示，不静默）。
+function loadIgnoreRules(roots, { gitignore } = {}) {
+  const rules = [];
+  const sources = [];
+  let negations = 0;
+  for (const root of roots) {
+    for (const [name, on] of [['atlas.ignore', true], ['.gitignore', !!gitignore]]) {
+      if (!on) continue;
+      let text;
+      try { text = fs.readFileSync(path.join(root, name), 'utf8'); } catch { continue; }
+      sources.push(name);
+      for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue;
+        if (line.startsWith('!')) { negations++; continue; }
+        const body = line.replace(/^\//, '');
+        const dirOnly = body.endsWith('/');
+        const pat = dirOnly ? body.slice(0, -1) : body;
+        if (!pat) continue;
+        if (pat.includes('/') || /[*?]/.test(pat)) {
+          // 带路径/通配：按相对路径匹配；不含 `/` 的（如 *.gen.ts）再按“任意层级的名字”匹配一次
+          rules.push({ kind: 'glob', re: globToRe(pat), dirOnly, anyLevel: !pat.includes('/'), src: name });
+        } else {
+          rules.push({ kind: 'name', name: pat, dirOnly, src: name });
+        }
+      }
+    }
+  }
+  const hit = (rel, name, isDir) => {
+    for (const r of rules) {
+      if (r.dirOnly && !isDir) continue;
+      if (r.kind === 'name') { if (name === r.name) return r.src; continue; }
+      if (r.re.test(rel)) return r.src;
+      if (r.anyLevel && r.re.test(name)) return r.src;
+    }
+    return null;
+  };
+  return { hit, sources, negations, count: rules.length };
+}
+
+function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }) {
   const exts = new Map();
   for (const lang of languages) for (const e of lang.exts) exts.set(e, lang);
   // 全量语言表：用来区分"这次没勾"和"我们根本不支持"——两者混在一起会误导人
@@ -98,7 +144,8 @@ function collectFiles(roots, { languages, maxKb, excludes, budget }) {
   const files = [];
   // ignoredDirs：被默认跳过表命中的目录名 → 次数。它进 bundle、进扫描报告，
   // 让“图里少了东西”这件事可见（monorepo 的 packages/ 当年就是这么被发现的）。
-  const skipped = { ignored: 0, ignoredDirs: new Map(), tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map() };
+  const skipped = { ignored: 0, ignoredDirs: new Map(), tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map(),
+    projectDirs: new Map(), projectFiles: 0 };
 
   for (const root of roots) {
     const stack = [root];
@@ -112,13 +159,22 @@ function collectFiles(roots, { languages, maxKb, excludes, budget }) {
       }
       for (const e of entries) {
         const abs = path.join(dir, e.name);
+        const rel = path.relative(root, abs).split(path.sep).join('/');
         if (e.isDirectory()) {
           if (ignoreDirs.has(e.name) || e.name.startsWith('.git')) { skipped.ignored++; skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1); continue; }
+          // 项目自己的规则（atlas.ignore / .gitignore）也走同一本账，好让“图里少了东西”始终可见
+          if (ignoreRules && ignoreRules.hit(rel, e.name, true)) {
+            skipped.ignored++;
+            skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1);
+            skipped.projectDirs.set(e.name, (skipped.projectDirs.get(e.name) || 0) + 1);
+            continue;
+          }
           stack.push(abs);
           continue;
         }
         if (!e.isFile()) continue;
         if (isIgnoredFile(e.name)) { skipped.ignored++; continue; }
+        if (ignoreRules && ignoreRules.hit(rel, e.name, false)) { skipped.ignored++; skipped.projectFiles++; continue; }
         const ext = path.extname(e.name).toLowerCase();
         const lang = exts.get(ext);
         if (!lang) {
@@ -151,6 +207,10 @@ function collectFiles(roots, { languages, maxKb, excludes, budget }) {
   // 文件预算：只取前 N 个（路径序稳定）。只有持续扫描会传它 —— 用来分趟把地图“长”出来；
   // 正常扫描不传，行为一字不变。
   if (budget && files.length > budget) files.length = budget;
+  // 自选规则的来龙去脉（哪个文件生效了、多少条、有几条 `!` 没支持）——进报告，免得“自己写的规则没生效”说不清
+  skipped.ignoreSources = ignoreRules ? ignoreRules.sources : [];
+  skipped.ignorePatterns = ignoreRules ? ignoreRules.count : 0;
+  skipped.ignoreNegations = ignoreRules ? ignoreRules.negations : 0;
   return { files, skipped };
 }
 
@@ -1203,7 +1263,9 @@ export async function scan(opts) {
 
   const facetsDoc = loadFacets(opts, roots);
   const excludes = [...(opts.excludes || []), ...(facetsDoc?.config?.exclude || [])];
-  const { files, skipped } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget });
+  // 项目自己的跳过规则：atlas.ignore（存在才生效）+ 可选的 .gitignore（--gitignore 才读）
+  const ignoreRules = loadIgnoreRules(roots, { gitignore: opts.gitignore });
+  const { files, skipped } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
 
   const langById = new Map(languages.map((l) => [l.id, l]));
   const byLang = new Map();
@@ -1484,6 +1546,12 @@ export async function scan(opts) {
     skipped: {
       ignored: skipped.ignored || 0,
     ignoredDirs: Object.fromEntries(skipped.ignoredDirs || []),
+      // 项目自己的规则（atlas.ignore / .gitignore）命中多少：进 bundle，报告和 MCP 都能看见
+      projectDirs: Object.fromEntries(skipped.projectDirs || []),
+      projectFiles: skipped.projectFiles || 0,
+      ignoreSources: skipped.ignoreSources || [],
+      ignorePatterns: skipped.ignorePatterns || 0,
+      ignoreNegations: skipped.ignoreNegations || 0,
       tooBig: skipped.tooBig || 0,
       unknown: skipped.unknown || 0,
       unsupported: Object.fromEntries(skipped.unsupported || []),
@@ -1548,7 +1616,7 @@ export async function watchScan(opts) {
   };
 
   // ① 分趟长出来（小项目就一趟全量）
-  const { files: all } = collectFiles(roots, { languages, maxKb, excludes });
+  const { files: all } = collectFiles(roots, { languages, maxKb, excludes, ignoreRules: loadIgnoreRules(roots, { gitignore: opts.gitignore }) });
   const total = all.length;
   const c = (f) => Math.max(20, Math.round(total * f));
   const caps = [...new Set([c(0.02), c(0.1), c(0.25), c(0.5)].filter((n) => n < total).concat([total]))].sort((a, b) => a - b);

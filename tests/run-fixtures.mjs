@@ -24,13 +24,13 @@ const NODE = process.env.NODE_BIN || 'node';
  * 门数越少越稳，而真实项目一般 1~3 门语言 —— 隔离进程既贴合实际、也更稳。
  * 注意：别拿“19 门能跑完”当结论，那是侥幸（实测同一条命令 4 次全崩）。
  */
-function scanOne(dir, lang, rootAbs) {
+function scanOne(dir, lang, rootAbs, extra = []) {
   const srcDir = rootAbs || path.join(HERE, 'fixtures', dir);
   const outDir = path.join(HERE, '.out', dir);
   try {
     execFileSync(NODE, [
       path.join(ROOT, 'src', 'cli.mjs'), 'scan', srcDir,
-      '--lang', lang, '--out', outDir,
+      '--lang', lang, '--out', outDir, ...extra,
     ], { stdio: 'pipe' });
   } catch (e) {
     // 有的语法包在进程退出时会崩（bundle 已经写好），只要产物在就算成功
@@ -225,6 +225,16 @@ const CASES = [
     errorsMax: 0,
     gitNone: true,
   },
+  {
+    // 自选跳过：atlas.ignore（目录 + 通配 + 注释 + 一条 ! 例外）+ 可选 .gitignore
+    dir: 'ignore-rules',
+    lang: 'javascript',
+    skipRules: {
+      absent: ['ingest/inner.js', 'skip.gen.js'],
+      present: ['keep.js', 'legacy/old.js'],
+      absentWithGitignore: ['legacy/old.js'],
+    },
+  },
 ];
 
 const results = [];
@@ -282,6 +292,20 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
   if (c.importsMin != null) {
     const n = b.files.reduce((a, f) => a + f.imports.length, 0);
     push(n >= c.importsMin, `import 条数 ${n}（期望 ≥ ${c.importsMin}）`);
+  }
+  // 自选跳过：atlas.ignore（存在才生效）+ 可选 .gitignore（--gitignore 才读）
+  if (c.skipRules) {
+    const files = b.files.map((f) => f.path);
+    for (const p of c.skipRules.absent) push(!files.includes(p), `atlas.ignore 生效：${p} 不在图里`);
+    for (const p of c.skipRules.present) push(files.includes(p), `${p} 还在图里`);
+    const sk = b.stats.skipped || {};
+    push((sk.ignoreSources || []).includes('atlas.ignore'), `规则来源进报告：${JSON.stringify(sk.ignoreSources)}`);
+    push((sk.projectDirs || {})['ingest'] >= 1, `项目规则跳过的目录进报告：${JSON.stringify(sk.projectDirs || {})}`);
+    push(sk.ignoreNegations === 1, `! 例外被计数：${sk.ignoreNegations}`);
+    const b2 = scanOne(c.dir, c.lang, null, ['--gitignore']);
+    const files2 = b2.files.map((f) => f.path);
+    for (const p of c.skipRules.absentWithGitignore) push(!files2.includes(p), `--gitignore 生效：${p} 不在图里`);
+    push((b2.stats.skipped.ignoreSources || []).includes('.gitignore'), `--gitignore 来源进报告：${JSON.stringify(b2.stats.skipped.ignoreSources)}`);
   }
   if (c.docs != null) {
     const n = b.types.filter((t) => t.doc).length + b.types.reduce((a, t) => a + (t.memberList || []).filter((m) => m.d).length, 0);
