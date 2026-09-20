@@ -542,6 +542,25 @@ function draw() {
 
 /** 树形图 */
 function drawTreemap(target, chart, w, h) {
+  // 按“真实宽度”截断：中文/全角算 1.0em、其余算 0.62em。
+  // 以前一律按 0.62em 估，中文注释会溢出色块（用户截图里 BuiltInDecompiler 那格的说明就是）。
+  // ⚠ 必须定义在下面那些 .text(...) 之前 —— 放在同一函数里但写在调用之后，会踩 TDZ
+  //（实测："Cannot access 'charW' before initialization"，整张图都画不出来）
+  const isWideChar = (ch) => /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(ch);
+  const charW = (ch, fs) => (isWideChar(ch) ? 1.0 : 0.62) * fs;
+  function fitText(s, avail, fs) {
+    let w = 0;
+    for (const ch of s) w += charW(ch, fs);
+    if (w <= avail) return s;
+    let out = '', used = 0;
+    for (const ch of s) {
+      const cw = charW(ch, fs);
+      if (used + cw + 0.62 * fs > avail) break;
+      used += cw;
+      out += ch;
+    }
+    return out + '…';
+  }
   const root = d3.hierarchy(target).sum((d) => d.value || 0).sort((a, b) => b.value - a.value);
   d3.treemap()
     .size([w, h])
@@ -611,7 +630,7 @@ function drawTreemap(target, chart, w, h) {
     .attr('class', 'node-label').attr('x', 4).attr('y', 12)
     .style('font-size', (d) => fontSize(d))
     .style('display', (d) => (d.x1 - d.x0 > 46 && d.y1 - d.y0 > 15 ? null : 'none'))
-    .text((d) => truncate(d.data.name, Math.max(4, Math.floor((d.x1 - d.x0 - 8) / (fontSize(d) * 0.62)))));
+    .text((d) => fitText(d.data.name, d.x1 - d.x0 - 8, fontSize(d)));
 
   g.append('text')
     .attr('class', 'node-value').attr('x', 4).attr('y', 24)
@@ -627,7 +646,7 @@ function drawTreemap(target, chart, w, h) {
     const t = state.typeById.get(d.data.id);
     if (!t || !t.doc) return '';
     const s = t.doc.replace(/\s+/g, ' ').slice(0, 200);
-    return truncate(s, Math.max(8, Math.floor((d.x1 - d.x0 - 8) / (docFs(d) * 0.62))));
+    return fitText(s, d.x1 - d.x0 - 8, docFs(d));
   };
   g.append('text')
     .attr('class', 'node-doc').attr('x', 4).attr('y', 36)
