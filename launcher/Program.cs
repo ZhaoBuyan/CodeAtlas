@@ -1360,7 +1360,6 @@ namespace CodeAtlas
         private readonly Button _onlyCode = new Button();
         private readonly Button _allBtn = new Button();
         private readonly Button _noneBtn = new Button();
-        private readonly CheckBox _gitignore = new CheckBox();
         private readonly LangInfo[] _langs;
 
         /// <summary>确定后的值：逗号分隔的语言 id；空串 = 自动</summary>
@@ -1415,6 +1414,10 @@ namespace CodeAtlas
                 // 默认（cur 为空）→ 勾非 OptIn；已保存的选择 → 照它说的勾，但“当时是全选”时把新语言补上
                 _list.SetItemChecked(i, cur.Length == 0 ? !l.OptIn : (Array.IndexOf(cur, l.Id) >= 0 || (savedWasAll && !l.OptIn)));
             }
+            // 列表最后一项：.gitignore（用户要求：复选框加一项 .gitignore，默认不勾）。
+            // 它是“开关”不是语言，所以 SetChecks / UpdateHint / ComputeResult 都只扫到 _langs.Length 为止，天然不受影响。
+            _list.Items.Add(L.T("按 .gitignore 跳过（目录和文件都跳）", "Skip what .gitignore ignores (dirs and files)"));
+            _list.SetItemChecked(_langs.Length, GitignoreWanted);
             // 勾选状态在 ItemCheck 之后才变，所以推到消息循环下一轮再算摘要
             _list.ItemCheck += (s, e) => BeginInvoke(new Action(UpdateHint));
 
@@ -1422,7 +1425,7 @@ namespace CodeAtlas
             Launcher.Style(_ok, true);
             _ok.BackColor = Palette.Accent;
             _ok.ForeColor = Palette.Bg;
-            _ok.Click += (s, e) => { Result = ComputeResult(); DialogResult = DialogResult.OK; Close(); };
+            _ok.Click += (s, e) => { Result = ComputeResult(); GitignoreWanted = _list.GetItemChecked(_langs.Length); DialogResult = DialogResult.OK; Close(); };
             _cancel.Text = L.T("取消", "Cancel");
             Launcher.Style(_cancel);
             _cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -1438,12 +1441,7 @@ namespace CodeAtlas
             var bottom = new Panel { Dock = DockStyle.Bottom, BackColor = Palette.Bg };
             var left = new FlowLayoutPanel { Dock = DockStyle.Left, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight };
             var right = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.RightToLeft };
-            // .gitignore 放在这一排的最后（用户：“下面逐个语言最后加一个 .gitignore，这样才能自己选”）
-            _gitignore.Text = L.T("按 .gitignore 跳过", "Skip what .gitignore ignores");
-            _gitignore.AutoSize = true;
-            _gitignore.Checked = GitignoreWanted;
-            _gitignore.CheckedChanged += (s, e) => { GitignoreWanted = _gitignore.Checked; };
-            left.Controls.AddRange(new Control[] { _onlyCode, _allBtn, _noneBtn, _gitignore });
+            left.Controls.AddRange(new Control[] { _onlyCode, _allBtn, _noneBtn });
             right.Controls.AddRange(new Control[] { _ok, _cancel }); // RightToLeft：先加的在最右
             bottom.Controls.Add(left);
             bottom.Controls.Add(right);
@@ -1465,7 +1463,7 @@ namespace CodeAtlas
             _hint.Padding = new Padding(pad, (int)(14 * k), pad, (int)(10 * k));
             _hint.Height = (int)(72 * k);
             _listHost.Padding = new Padding(pad, 0, pad, (int)(4 * k));
-            foreach (var c in new Control[] { _onlyCode, _allBtn, _noneBtn, _gitignore, _ok, _cancel })
+            foreach (var c in new Control[] { _onlyCode, _allBtn, _noneBtn, _ok, _cancel })
                 c.Margin = new Padding(0, 0, (int)(8 * k), 0);
             var flowPad = (int)(12 * k);
             ((FlowLayoutPanel)_ok.Parent).Padding = new Padding(0, flowPad, pad, flowPad);
