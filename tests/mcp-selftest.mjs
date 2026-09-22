@@ -1051,6 +1051,40 @@ check(/\[(有支撑|backed)\]/.test(rSh) && !/\[(仅同名|same name only)\]/.te
   '⑰ Bash：source 进来的调用算“有支撑”', (rSh.split('\n').find((l) => /helper/.test(l)) || '').trim().slice(0, 70));
 shSvc.proc.kill('SIGKILL');
 
+// ---------------------------------------------------------------------------
+// ⑱ 2026-09-23（终检重扫挖出的）：C/C++ 的 `#include "lib/util.h"` 是**按 -I 根目录**解析的——
+// 目标文件在 `third_party/lib/include/lib/util.h`，前缀对不上但**后缀**对得上（≥2 段才走这条，单名不认）。
+check(importMatchesTarget('lib/util.h', mt('third_party/lib/include/lib/util.h', '', ''))
+  && importMatchesTarget('jemalloc/internal/tsd_types.h', mt('deps/jemalloc/include/jemalloc/internal/tsd_types.h', '', ''))
+  && !importMatchesTarget('other/thing.h', mt('third_party/lib/include/lib/util.h', '', '')),
+  '⑱ C 的 include 根：目标路径以 import 路径结尾（≥2 段）算指到，不相干不算');
+const cIncTmp = path.join(os.tmpdir(), `codeatlas-cinc-${process.pid}`);
+const { out: cIncOut } = scanProject(cIncTmp, {
+  'third_party/lib/include/lib/util.h': 'typedef struct UtilCtx { int n; } UtilCtx;\nint helper(int a);\n',
+  'src/main.c': '#include "lib/util.h"\n\nint run(void) { UtilCtx c; c.n = 1; return helper(c.n); }\n',
+}, 'c');
+const cIncSvc = spawnMcp(cIncOut);
+await cIncSvc.ready;
+const rUtil = await cIncSvc.call('refs', { name: 'UtilCtx', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rUtil) && !/\[(仅同名|same name only)\]/.test(rUtil),
+  '⑱ C 的 include 根：跨目录 include 进来的类型算“有支撑”', (rUtil.split('\n').find((l) => /UtilCtx/.test(l)) || '').trim().slice(0, 70));
+cIncSvc.proc.kill('SIGKILL');
+
+// ⑲ 2026-09-23（终检重扫挖出的）：C/C++ 的 **include 闭包**（≤2 跳）—— A include 的 B 又 include 了 C，
+// A 也能撑住 C 里的类型（实测 redis 的 tsdn_t、fmt 的 Char 全在被间接 include 的头文件里）。
+const cCloTmp = path.join(os.tmpdir(), `codeatlas-cclo-${process.pid}`);
+const { out: cCloOut } = scanProject(cCloTmp, {
+  'include/deep/core.h': 'typedef struct DeepCtx { int n; } DeepCtx;\n',
+  'include/mid/mid.h': '#include "deep/core.h"\n',
+  'src/main.c': '#include "mid/mid.h"\n\nint run(void) { DeepCtx c; c.n = 1; return c.n; }\n',
+}, 'c');
+const cCloSvc = spawnMcp(cCloOut);
+await cCloSvc.ready;
+const rDeep = await cCloSvc.call('refs', { name: 'DeepCtx', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rDeep) && !/\[(仅同名|same name only)\]/.test(rDeep),
+  '⑲ C 的 include 闭包（≤2 跳）：间接 include 进来的类型算“有支撑”', (rDeep.split('\n').find((l) => /DeepCtx/.test(l)) || '').trim().slice(0, 70));
+cCloSvc.proc.kill('SIGKILL');
+
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);
 const { out: topOut } = scanProject(topTmp, {

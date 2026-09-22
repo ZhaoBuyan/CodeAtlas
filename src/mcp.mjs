@@ -260,6 +260,14 @@ function evidenceOf(idx, e) {
         : null;
     }
     for (const raw of f.imports || []) if (importMatchesTarget(raw, target, idx._pkgCtx)) return 'import';
+    // C/C++ 的 include 闭包（≤2 跳）：A include 的 B 又 include 了 C → A 也能撑住 C 里的引用
+    //（实测 redis / fmt / ocaml：类型全在被“间接 include”的内部头文件里）
+    if (idx._closure === undefined) {
+      idx._closure = new Map();
+      idx.b.files.forEach((x, i) => { if (x && Array.isArray(x.closure) && x.closure.length) idx._closure.set(i, new Set(x.closure)); });
+    }
+    const clo = idx._closure.get(src.file);
+    if (clo && clo.has(dst.file)) return 'import';
   }
   // C# / VB：子命名空间**不用 using 也能引用父命名空间里的类型**（语言语义如此）。实测一个 C# 项目里有 7 条
   // 真引用因此被留在“仅同名”档，AI 照标签会把它们丢掉。只对 C# 家族做（Java/Kotlin 不适用）。

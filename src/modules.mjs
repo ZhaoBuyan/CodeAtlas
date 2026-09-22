@@ -73,6 +73,10 @@ export function importMatchesTarget(rawImport, target, ctx) {
       if (v.length < 2) continue;                 // 太短的（'a' 之类）不认，避免乱匹配
       if (dir.startsWith(`${v}/`)) return true;
       if (tPath === v || tPath.startsWith(`${v}.`)) return true;
+      // **后缀**匹配（C/C++ 的 include 根）：`#include "jemalloc/internal/tsd_types.h"` 是按 -I 根目录
+      // 解析的，目标却在 `deps/jemalloc/include/jemalloc/internal/tsd_types.h` —— 前缀对不上、
+      // 但目标路径以 import 路径结尾（按目录边界）。要 ≥2 段：单名（`util.h`）不按这条走，免得乱撞。
+      if (v.split('/').filter(Boolean).length >= 2 && tPath.endsWith(`/${v}`)) return true;
     }
   }
   // Rust 的 `use crate::flags::defs::FLAGS` 不写 crate 根，光比模块名 / 前缀都对不上：

@@ -1876,6 +1876,47 @@ export async function scan(opts) {
   const byRel = new Map(reused);
   for (const p of freshParts) for (const pf of p.files || []) byRel.set(pf.rel, pf);
   const { fileRecs, allTypes, allRefs, allUses, fileNamespaces, failures } = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
+
+  // C/C++ 的 **include 闭包**（≤2 跳）：A include 了 B、B include 了 C → A 也能撑住 C 里的引用。
+  // 实测 redis / fmt / ocaml：tsdn_t 这类类型全在被“间接 include”的内部头文件里（jemalloc_internal_includes.h
+  // 把内部头文件一把兜进来），光看直接 include 对不上。只对 C/C++ 文件算（其它语言的 import 语义不同），
+  // 直接边按“文件名主干唯一对上”建（宁可少不该多），闭包 ≤40 个才带上，避免大仓库里膨胀。
+  {
+    const cLike = /\.(c|h|cc|cpp|cxx|hpp|hh|hxx)$/i;
+    const byStem = new Map();
+    fileRecs.forEach((f, i) => {
+      if (!f || !cLike.test(f.path)) return;
+      const k = moduleKey(f.path).toLowerCase();
+      if (!byStem.has(k)) byStem.set(k, []);
+      byStem.get(k).push(i);
+    });
+    const direct = new Map();
+    fileRecs.forEach((f, i) => {
+      if (!f || !cLike.test(f.path) || !f.imports || !f.imports.length) return;
+      const set = new Set();
+      const myDir = f.path.slice(0, f.path.lastIndexOf("/") + 1);
+      for (const imp of f.imports) {
+        if (!/[./]/.test(imp)) continue;
+        let hit = byStem.get(moduleKey(String(imp).split('/').pop() || '').toLowerCase());
+        if (!hit || !hit.length) continue;
+        // 多个同名候选时**同目录优先**（C 的 include 默认先在自身目录找）；仍不唯一就不建边（宁可少）
+        // 同名多候选：先按**扩展名**（`decay.h` 别被同目录的 `decay.c` 抢），再按同目录
+        if (hit.length > 1) {
+          const ext = (String(imp).match(/\.[A-Za-z]+$/) || [''])[0].toLowerCase();
+          const sameExt = ext ? hit.filter((j) => fileRecs[j].path.toLowerCase().endsWith(ext)) : [];
+          if (sameExt.length) hit = sameExt;
+        }
+        if (hit.length > 1) hit = hit.filter((j) => fileRecs[j].path.slice(0, fileRecs[j].path.lastIndexOf("/") + 1) === myDir);
+        if (hit.length === 1 && hit[0] !== i) set.add(hit[0]);
+      }
+      if (set.size) direct.set(i, set);
+    });
+    for (const [i, set] of direct) {
+      const out = new Set(set);
+      for (const j of set) for (const k2 of direct.get(j) || []) if (k2 !== i) out.add(k2);
+      if (out.size && out.size <= 120) fileRecs[i].closure = [...out];
+    }
+  }
   // Dart 的包级重导出图（多跳 barrel）：flutter_riverpod 转出 riverpod 的类型时，
   // import package:flutter_riverpod/… 也应该能撑住 riverpod 里的目标（实测 riverpod 样本上这是大头）。
   // 闭包最多 3 跳、按包名去重；有环也不会死（seen 去重）。
