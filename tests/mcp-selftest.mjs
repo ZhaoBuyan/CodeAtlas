@@ -903,11 +903,11 @@ check(!/(^|\n)\s*#\s*(if|else|elif|endif)\b/.test(csPre) && csPre.split('\n').le
 const luaTmp = path.join(os.tmpdir(), `codeatlas-luareq-${process.pid}`);
 const { out: luaOut } = scanProject(luaTmp, {
   'util.lua': 'local M = {}\nfunction M.trim(s)\n  return s\nend\nreturn M\n',
-  'main.lua': 'local utils = require("util")\nlocal json = require "cjson"\nreturn { utils, json }\n',
+  'main.lua': 'local utils = require("util")\nlocal json = require "cjson"\nlocal inspect = require"inspect"\nreturn { utils, json, inspect }\n',
 }, 'lua');
 const luaMain = readBundle(luaOut).files.find((f) => f.path === 'main.lua');
-check((luaMain?.imports || []).includes('util') && (luaMain?.imports || []).includes('cjson'),
-  '⑮ Lua：`require("util")` / `require "cjson"` 都进 import（kong 实测：以前 0 条）',
+check((luaMain?.imports || []).includes('util') && (luaMain?.imports || []).includes('cjson') && (luaMain?.imports || []).includes('inspect'),
+  '⑮ Lua：`require("util")` / `require "cjson"` / `require"inspect"`（无空格）都进 import（kong 实测：以前 0 条）',
   JSON.stringify(luaMain?.imports || []));
 
 const zigTmp = path.join(os.tmpdir(), `codeatlas-zigimp-${process.pid}`);

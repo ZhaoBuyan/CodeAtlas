@@ -493,7 +493,7 @@ function parseImports(text) {
   // JS/TS 的 CommonJS：`require('x')` / `const x = require('x')` / TS 的 `import x = require('x')`
   // —— 直接取引号里的路径（实测 axios：TS 的 import-equals 会被 `=` 分支切成 "require('axios')" 这种垃圾）
   const cjs = stmt.match(/^(?:(?:const|let|var|import)\b[^=]*?=\s*)?require\s*\(\s*['"]([^'"]+)['"]\s*\)/)
-    || stmt.match(/^require\s+['"]([^'"]+)['"]/);   // Lua 的 `require "cjson"`（无括号）
+    || stmt.match(/^require\s*['"]([^'"]+)['"]/);   // Lua 的 `require "cjson"` / `require"cjson"`（无括号、甚至无空格）
   if (cjs) return [cjs[1]];
   // Zig 的 `@import("std")` / `@import("util.zig")`（zls 实测：102 个文件一条 import 也采不到）
   const zig = stmt.match(/^@import\s*\(\s*['"]([^'"]+)['"]\s*\)/);
