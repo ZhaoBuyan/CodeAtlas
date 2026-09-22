@@ -1649,14 +1649,23 @@ function elixirIsDecision(node) {
 }
 
 /**
- * ③ 仓库自身的包（package.json 的 name → 包目录）：TS/JS monorepo 里最常见的“包名自引用”——
- * 文件写的 import 是**包名**（`antd` / `@scope/pkg`），而不是相对路径，光比文件名永远对不上。
- * 只做一层浅发现（跳过 node_modules / dist 这些 IGNORE_DIRS）；JSON 坏了就跳过，不报错。
- * 实测：ant-design 上“仅同名”的 6,801 条里 3,364 条的引用方 import 就是包名 `antd`。
+ * 仓库自身的包（清单文件 → 名字 + 包目录）。扫描期与读期共用（匹配规则在 modules.mjs）：
+ *   · package.json 的 name —— JS/TS 的“包名自引用”（ant-design 的 demo 写 `import { Button } from 'antd'`）
+ *   · Cargo.toml 的 [package] name —— Rust 的跨 crate 引用（`grep_matcher::Matcher`；crate 名把 `-` 写成 `_`）
+ *   · go.mod 的 module —— Go 的模块路径（`github.com/gin-gonic/gin/render`）
+ * 只做一层浅发现（跳过 node_modules / dist 这些 IGNORE_DIRS）；文件读不动 / 解析不出来就跳过，不报错。
  */
 function discoverPackages(roots) {
   const out = [];
   const seen = new Set();
+  const push = (name, dir) => {
+    const n = String(name || '').trim();
+    if (!n) return;
+    const key = `${n}|${dir}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ name: n, dir });
+  };
   for (const root of roots) {
     const stack = [root];
     while (stack.length) {
@@ -1670,15 +1679,21 @@ function discoverPackages(roots) {
           stack.push(abs);
           continue;
         }
-        if (e.name !== 'package.json') continue;
-        let name = '';
-        try { name = String(JSON.parse(fs.readFileSync(abs, 'utf8')).name || '').trim(); } catch { name = ''; }
-        if (!name) continue;
         const rel = path.relative(root, dir).split(path.sep).join('/');
-        const key = `${name}|${rel}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({ name, dir: rel === '.' ? '' : rel });
+        const pkgDir = rel === '.' ? '' : rel;
+        let txt = '';
+        try { txt = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+        if (e.name === 'package.json') {
+          try { push(JSON.parse(txt).name, pkgDir); } catch { /* 解析不了就跳过 */ }
+        } else if (e.name === 'Cargo.toml') {
+          const sec = txt.match(/\[package\]([\s\S]*?)(?:\r?\n\[|$)/);
+          const m = sec && sec[1].match(/\bname\s*=\s*"([^"]+)"/);
+          // Rust 代码里 crate 名把 `-` 写成 `_`（Cargo.toml 写 grep-matcher，代码里是 grep_matcher）
+          push(m ? m[1].replace(/-/g, '_') : '', pkgDir);
+        } else if (e.name === 'go.mod') {
+          const m = txt.match(/^\s*module\s+(\S+)/m);
+          push(m ? m[1] : '', pkgDir);
+        }
       }
     }
   }

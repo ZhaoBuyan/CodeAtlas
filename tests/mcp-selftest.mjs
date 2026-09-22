@@ -711,12 +711,23 @@ rs.proc.kill('SIGKILL');
 // 不是相对路径；不认“包名 → 包目录”这一档，ant-design 上 6,801 条“仅同名”里有 3,364 条是它。
 const pkgs = [{ name: '@fixture/app', dir: 'pkg' }];
 check(importMatchesTarget('@fixture/app', mt('pkg/src/widget.js', '', ''), { packages: pkgs })
-  && importMatchesTarget('@fixture/app/sub', mt('pkg/src/widget.js', '', ''), { packages: pkgs }),
-  '③ 包名自引用算有支撑（包名 / 包名子路径 → 包目录里的文件）');
-check(!importMatchesTarget('@fixture/app', mt('other/src/widget.js', '', ''), { packages: pkgs })
+  && importMatchesTarget('@fixture/app/src', mt('pkg/src/widget.js', '', ''), { packages: pkgs }),
+  '③ 包名自引用算有支撑（裸包名 / 包名子路径对到包目录）');
+check(!importMatchesTarget('@fixture/app/other', mt('pkg/src/widget.js', '', ''), { packages: pkgs })
+  && !importMatchesTarget('@fixture/app', mt('other/src/widget.js', '', ''), { packages: pkgs })
   && !importMatchesTarget('@fixture/appx', mt('pkg/src/widget.js', '', ''), { packages: pkgs })
   && !importMatchesTarget('@fixture/app', mt('pkg/src/widget.js', '', ''), undefined),
-  '③ 不越界：包目录外 / 相似名 / 没带包清单时都不算');
+  '③ 不越界：子路径不在包目录里 / 包目录外 / 相似名 / 没带包清单时都不算');
+// 同一套规则也接跨 crate（Cargo.toml 的名字，`-` → `_`）与 Go 的 module 路径
+const cratePkgs = [{ name: 'grep_matcher', dir: 'crates/matcher' }];
+check(importMatchesTarget('grep_matcher::Matcher', mt('crates/matcher/src/lib.rs', '', ''), { packages: cratePkgs })
+  && importMatchesTarget('grep_matcher::matcher::Matcher', mt('crates/matcher/src/matcher/mod.rs', '', ''), { packages: cratePkgs }),
+  '③ Rust 跨 crate 引用（crate 名 → crate 目录；`crate::mod::Item` 也认）');
+const goPkgs = [{ name: 'example.org/app', dir: 'app' }];
+check(importMatchesTarget('example.org/app', mt('app/root.go', '', ''), { packages: goPkgs })
+  && importMatchesTarget('example.org/app/util', mt('app/util/util.go', '', ''), { packages: goPkgs })
+  && !importMatchesTarget('example.org/app/util', mt('app/other.go', '', ''), { packages: goPkgs }),
+  '③ Go 的 module 路径（模块根 / 子包 → 对应目录，子包不越界）');
 // 端到端：MCP 的 refs 标签要走同一套口径
 const pkgTmp = path.join(os.tmpdir(), `codeatlas-pkgref-${process.pid}`);
 const { out: pkgOut } = scanProject(pkgTmp, {
@@ -734,6 +745,49 @@ check(/\[(有支撑|backed)\]/.test(rPkgW) && !/\[(仅同名|same name only)\]/.
   '③ 包名自引用的跨文件引用在 MCP 里算“有支撑”',
   (rPkgW.split('\n').find((l) => /Widget/.test(l)) || '').trim().slice(0, 70));
 ps.proc.kill('SIGKILL');
+
+// ⑫ 2026-09-22（顺手补）：跨 crate / 跨模块用**包名**引用（Cargo.toml 的 crate 名、go.mod 的 module 路径）
+// —— 与 ③ 同一套“包名 → 目录”规则，各配一个端到端门。
+const rsWsTmp = path.join(os.tmpdir(), `codeatlas-rscrate-${process.pid}`);
+const { out: rsWsOut } = scanProject(rsWsTmp, {
+  'Cargo.toml': '[workspace]\nmembers = ["crates/lib-x", "crates/appbin"]\n',
+  'crates/lib-x/Cargo.toml': '[package]\nname = "lib-x"\nversion = "0.1.0"\n',
+  'crates/lib-x/src/lib.rs': 'pub struct Widget {\n    pub n: i32,\n}\n',
+  'crates/appbin/Cargo.toml': '[package]\nname = "app-bin"\nversion = "0.1.0"\n',
+  'crates/appbin/src/main.rs': 'use lib_x::Widget;\n\nfn main() {\n    let w = Widget { n: 1 };\n    println!("{}", w.n);\n}\n',
+}, 'rust');
+const rsWsB = readBundle(rsWsOut);
+check((rsWsB.source.packages || []).some((p) => p.name === 'lib_x' && p.dir === 'crates/lib-x'),
+  '⑫ Cargo.toml 的 crate 名进包清单（`-` → `_`）',
+  JSON.stringify(rsWsB.source.packages || []));
+const rws = spawnMcp(rsWsOut);
+await rws.ready;
+const rWid = await rws.call('refs', { name: 'Widget', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rWid) && !/\[(仅同名|same name only)\]/.test(rWid),
+  '⑫ 跨 crate 引用（`use lib_x::Widget`）算“有支撑”',
+  (rWid.split('\n').find((l) => /Widget/.test(l)) || '').trim().slice(0, 70));
+rws.proc.kill('SIGKILL');
+
+// ⑬ Go 的 module 路径（go.mod）：模块根 / 子包都要能对到目录
+const goModTmp = path.join(os.tmpdir(), `codeatlas-gomodule-${process.pid}`);
+const { out: goModOut } = scanProject(goModTmp, {
+  'go.mod': 'module example.org/app\n\ngo 1.21\n',
+  'app.go': 'package app\n\ntype Root struct {\n\tN int\n}\n',
+  'util/util.go': 'package util\n\ntype Num struct {\n\tV int\n}\n',
+  'sub/sub.go': 'package sub\n\nimport (\n\t"example.org/app"\n\t"example.org/app/util"\n)\n\ntype Holder struct {\n\tR app.Root\n\tN util.Num\n}\n',
+}, 'go');
+const goModB = readBundle(goModOut);
+check((goModB.source.packages || []).some((p) => p.name === 'example.org/app' && p.dir === ''),
+  '⑬ go.mod 的 module 路径进包清单', JSON.stringify(goModB.source.packages || []));
+const gms = spawnMcp(goModOut);
+await gms.ready;
+const rGoRoot = await gms.call('refs', { name: 'Root', direction: 'in' });
+const rGoNum = await gms.call('refs', { name: 'Num', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rGoRoot) && !/\[(仅同名|same name only)\]/.test(rGoRoot)
+  && /\[(有支撑|backed)\]/.test(rGoNum) && !/\[(仅同名|same name only)\]/.test(rGoNum),
+  '⑬ 跨包引用走 module 路径（模块根 + 子包）都算“有支撑”',
+  (rGoRoot.split('\n').find((l) => /Root/.test(l)) || '').trim().slice(0, 60));
+gms.proc.kill('SIGKILL');
 
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);

@@ -76,15 +76,31 @@ export function importMatchesTarget(rawImport, target, ctx) {
     if (isSuffix(impSegs, pathL) || isSuffix(impSegs, pathL.slice(0, -1))
       || isSuffix(impSegs.slice(0, -1), pathL) || isSuffix(impSegs.slice(0, -1), pathL.slice(0, -1))) return true;
   }
-  // ③ 仓库内“包名自引用”（ant-design 实测）：import 写的是**仓库自身某个包的包名**（monorepo 的子包也算）
-  // → 目标文件在这个包的目录里，就算有支撑。注意：裸包名只证明“目标与引用方同属这个包”、
-  // 不指向具体文件 —— 这是证据里最弱的一档，口径说明见《实战数据-多语言实测》那篇。
+  // ③ 仓库内“包名自引用”（ant-design / ripgrep / gin 实测）：import 写的是**仓库自身某个包的名字** ——
+  //   · `antd` / `@scope/pkg`（package.json）· `grep_matcher::Matcher`（Cargo.toml 的 crate 名）
+  //   · `github.com/gin-gonic/gin/render`（go.mod 的 module 路径）
+  // 裸名字：只证明“目标与引用方同属这个包”、不指向具体文件（最弱的一档）；
+  // 带子路径：子路径要真的落在那个位置才算（`/` 子路径直接对目录；`::` 是 Rust 的模块 / 符号，
+  // 只有一段时当符号名，回到“同 crate”那一档；多段时去掉最后一段再对）。
+  // 实测：ant-design 上 3,364 条“仅同名”的引用方 import 就是包名 `antd`；ripgrep 上 `grep_matcher::Matcher` 这类跨 crate 引用同理。
   if (ctx?.packages?.length) {
     for (const p of ctx.packages) {
       if (!p?.name) continue;
-      if (imp !== p.name && !imp.startsWith(`${p.name}/`)) continue;
-      const pdir = p.dir ? `${p.dir}/` : '';
-      if (tPath.startsWith(pdir)) return true;
+      const base = p.dir ? `${p.dir}/` : '';
+      if (imp === p.name) { if (tPath.startsWith(base)) return true; continue; }
+      const sep = imp.startsWith(`${p.name}/`) ? '/' : imp.startsWith(`${p.name}::`) ? '::' : null;
+      if (!sep) continue;
+      let rest = imp.slice(p.name.length + sep.length);
+      if (sep === '::') rest = rest.split('::').join('/');
+      if (sep === '::' && !rest.includes('/')) { if (tPath.startsWith(base)) return true; continue; }   // `crate::Item`：符号名
+      const cuts = [rest];
+      if (sep === '::') cuts.push(rest.slice(0, rest.lastIndexOf('/')));
+      for (const c of cuts) {
+        if (!c) continue;
+        for (const prefix of [`${base}${c}`, `${base}src/${c}`]) {   // 后者是 Rust 的常见布局（crate 根在 src/ 下）
+          if (tPath === prefix || tPath.startsWith(`${prefix}/`) || tPath.startsWith(`${prefix}.`)) return true;
+        }
+      }
     }
   }
   return false;

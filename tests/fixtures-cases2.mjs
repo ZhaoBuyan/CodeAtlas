@@ -147,6 +147,7 @@ export const EXTRA_CASES = [
     importsMin: 5,
     importsInclude: ['std::fmt', 'std::collections::HashMap', 'std::io::Write', 'crate::geom', 'crate::geom::area_of'],
     importsAtomic: true,
+    packagesInclude: [['fixture_rust', '']],
     docs: 2, // 样例里只有两处 ///
     memberSigs: [['Circle', 'new', '(radius: f64): Self'], ['Shape', 'area', '(&self): f64']],   // return_type 字段
     membersMin: 4,
@@ -265,4 +266,6 @@ export const EXTRA_CASES = [
     membersMin: 24,
     errorsMax: 0,
   },
+];
+},
 ];
