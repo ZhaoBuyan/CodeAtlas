@@ -34,6 +34,10 @@ export function moduleKey(p) {
  *   · 目标的命名空间就是 import 的名字（`using MuSync.Models` ↔ ns `MuSync.Models`）
  *   · 其中一个是另一个的前缀（`using MuSync` ↔ ns `MuSync.Models`；或反过来）
  *   · import 的名字就是目标的限定名（`import a.b.C` ↔ fqn `a.b.C`）
+ *   · **包 / 模块路径前缀**：import 的是包（`django.db.models`），而目标文件在那个包里
+ *     （`django/db/models/fields/related.py`）。这是 Python 里最常见的形态 —— `from django.db import models`
+ *     只会被记成 `django.db`（被 import 的符号名采不到），所以只能按路径前缀认。
+ *     不认它的话，实测 Django 上 **79%** 的边会落到“仅同名”。
  */
 export function importMatchesTarget(rawImport, target) {
   const imp = String(rawImport || '').replace(/[;,]+$/, '').replace(/^['"]|['"]$/g, '').trim();
@@ -47,5 +51,24 @@ export function importMatchesTarget(rawImport, target) {
   }
   // 相对路径那种 import（'./f1.js' / '../util'）走模块名这条路：比目标文件的模块名
   if (target.path && moduleKey(imp) === moduleKey(target.path)) return true;
+  // 包 / 模块路径前缀（见文件头最后一条）：目标的**目录**以它开头就算“指到了”
+  const tPath = String(target.path || '').replace(/\\/g, '/');
+  if (tPath && !/\s/.test(imp)) {
+    const dir = tPath.slice(0, tPath.lastIndexOf('/') + 1);
+    for (const v of importPathVariants(imp)) {
+      if (v.length < 2) continue;                 // 太短的（'a' 之类）不认，避免乱匹配
+      if (dir.startsWith(`${v}/`)) return true;
+      if (tPath === v || tPath.startsWith(`${v}.`)) return true;
+    }
+  }
   return false;
+}
+
+/** import 字符串的可能路径形态：原样 / 点换斜杠 / 去掉源码扩展名（'./x/y.js' → 'x/y'） */
+function importPathVariants(imp) {
+  const norm = imp.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\.+/, '');
+  const out = new Set([norm, norm.replace(/\./g, '/')]);
+  const m = norm.match(/\.([A-Za-z0-9]+)$/);
+  if (m && SRC_EXT.has(m[1].toLowerCase())) out.add(norm.slice(0, -(m[1].length + 1)));
+  return [...out].filter(Boolean);
 }

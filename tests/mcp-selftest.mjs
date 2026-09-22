@@ -11,6 +11,7 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { freshnessNote, parseExclude, isExcluded } from '../src/mcp.mjs';
+import { importMatchesTarget } from '../src/modules.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -652,6 +653,16 @@ const rOld2 = await os2.call('refs', { name: 'OnlyDecl' });
 check(/老版本引擎|older engine/.test(rOld2),
   '③c 引擎 < 1.5.0 的图才说“没有这类记录 … 重新扫一次就会带上”');
 os2.proc.kill('SIGKILL');
+
+// ⑨ 2026-09-22（Django 实测暴露）：import 的是**包 / 模块路径**，目标文件在那个包里 → 算有支撑。
+// 不认这一档的话，Django 上 79% 的边会落到“仅同名”（实测有支撑 1.8% → 54.1%）。
+const mt = (p, ns, fqn) => ({ path: p, ns, fqn });
+const djFile = mt('django/db/models/fields/related.py', 'django.db.models.fields');
+check(importMatchesTarget('django.db.models', djFile) && importMatchesTarget('django.db', djFile),
+  '⑨ 包 / 模块路径前缀算有支撑（Python 的 `from X import Y` 只记得到 X）');
+check(!importMatchesTarget('django.other', djFile) && !importMatchesTarget('a', mt('a/b/c.py'))
+  && !importMatchesTarget('x/y.js', mt('x/z/q.py')) && !importMatchesTarget('import a b', mt('a/b/c.py')),
+  '⑨ 不相干的包 / 太短的串 / 带空格的垃圾串不误判');
 
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);

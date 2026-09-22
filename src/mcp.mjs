@@ -55,7 +55,7 @@ const INSTRUCTIONS = [
   '  unmatched and ambiguous references are reported explicitly in overview and impact;',
   '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `backed` (the',
   '  referring file imports a module of that name, or imports the target\'s namespace / package, or both sides sit in the',
-  '  same namespace / package, or a parent namespace in C# / VB — strong evidence, not proof) > `same name only` (this',
+  '  same namespace / package, or the target file sits inside an imported package, or a parent namespace in C# / VB — strong evidence, not proof) > `same name only` (this',
   '  bucket holds both coincidences and real references we failed to recognize — a parent namespace needs no `using`, and a',
   '  qualified name like `A.B.C` is not covered either — so check the source when in doubt). Solitary `same name only` edges are',
   '  why a raw reference count can be misleading, so the `overview`',
@@ -857,7 +857,7 @@ function toolRefs(idx, a) {
   const rMiss = excludeMissNote(ex, idx.b);
   if (rMiss) out.push(rMiss);
   const legend = sawAnyEdge
-    ? T('（边尾的标签：同文件 / **有支撑**（import、或同命名空间 / 同包、C# / VB 父命名空间）/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (an import, or the same namespace / package; a parent namespace in C# / VB) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
+    ? T('（边尾的标签：同文件 / **有支撑**（引用方 import 的模块 / 命名空间 / 包能指到目标（Python 的 `from X import Y` 只记得到 X，所以包级也算）、C# / VB 父命名空间）/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (the referrer imports the target module / namespace / package — a package-level import counts, and a C# / VB parent namespace too) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
     : '';
   return `${t.fqn} [${t.kind}]\n${legend}${out.join('\n')}`;
 }
