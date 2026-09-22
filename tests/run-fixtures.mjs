@@ -183,6 +183,8 @@ const CASES = [
     types: 2,
     names: ['startApp'],
     filesMin: 2,
+    // 仓库自身的包（package.json 的 name → 包目录）：TS/JS 的“包名自引用”靠它
+    packagesInclude: [['@fixture/app', 'packages/app']],
   },
   {
     // 锁文件：即使勾了 json，机器生成的锁文件也不该进图（这里还有一条 files=1 的硬断言）
@@ -376,6 +378,27 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
   if (c.importsMin != null) {
     const n = b.files.reduce((a, f) => a + f.imports.length, 0);
     push(n >= c.importsMin, `import 条数 ${n}（期望 ≥ ${c.importsMin}）`);
+  }
+  // 每个 import 节点里的**每条**目标都要在（Go 的 `import ( … )` 块曾经整块被记成一整条字符串）
+  if (c.importsInclude) {
+    const all = b.files.flatMap((f) => f.imports || []);
+    const missing = c.importsInclude.filter((x) => !all.includes(x));
+    push(missing.length === 0,
+      missing.length ? `import 缺这些目标：${missing.join(', ')}（实际 ${JSON.stringify(all)}）` : `import 目标齐全：${c.importsInclude.join(' / ')}`);
+  }
+  // 拆出来的必须就是目标本身：字符串里不该再带括号 / 引号 / 换行（那是“整块当一条”的痕迹）
+  if (c.importsAtomic) {
+    const bad = b.files.flatMap((f) => f.imports || []).filter((i) => /[()"'\r\n]/.test(i));
+    push(bad.length === 0,
+      bad.length ? `有整块被当成一条：${JSON.stringify(bad.slice(0, 2))}` : '没有“整块当一条”的 import（无括号 / 引号 / 换行）');
+  }
+  // 仓库自身的包（package.json 的 name → 包目录）
+  if (c.packagesInclude) {
+    const got = (b.source.packages || []).map((p) => `${p.name}→${p.dir || '(根)'}`);
+    for (const [name, dir] of c.packagesInclude) {
+      push((b.source.packages || []).some((p) => p.name === name && p.dir === dir),
+        `包 ${name} → ${dir}（实际 ${got.join(' · ') || '无'}）`);
+    }
   }
   // 自选跳过：atlas.ignore（存在才生效）+ 可选 .gitignore（--gitignore 才读）
   if (c.skipRules) {

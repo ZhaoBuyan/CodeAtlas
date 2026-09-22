@@ -664,6 +664,77 @@ check(!importMatchesTarget('django.other', djFile) && !importMatchesTarget('a', 
   && !importMatchesTarget('x/y.js', mt('x/z/q.py')) && !importMatchesTarget('import a b', mt('a/b/c.py')),
   '⑨ 不相干的包 / 太短的串 / 带空格的垃圾串不误判');
 
+// ⑩ 2026-09-22（gin 实测暴露）：Go 的 `import ( … )` 多行块以前整块记成一整条字符串
+//（`["(\r\n\t\"crypto/subtle\"…\r\n)"]`）→ 跨包引用全部落“仅同名”，有支撑 0%。
+// 现在要逐条拆开，且拆出来的 import 能把“跨文件引用”撑成“有支撑”。
+const goTmp = path.join(os.tmpdir(), `codeatlas-goimports-${process.pid}`);
+const { out: goOut } = scanProject(goTmp, {
+  'util/util.go': 'package util\n\ntype Num struct {\n\tV int\n}\n\nfunc Double(n int) int { return n * 2 }\n',
+  'main.go': 'package main\n\nimport (\n\t"fmt"\n\n\t"example.org/app/util"\n)\n\nfunc Run() string {\n\treturn fmt.Sprint(util.Num{V: 21}, util.Double(21))\n}\n',
+}, 'go');
+const goB = readBundle(goOut);
+const goMain = goB.files.find((f) => f.path === 'main.go');
+check((goMain?.imports || []).includes('example.org/app/util') && !(goMain?.imports || []).some((i) => /[()"\r\n]/.test(i)),
+  '⑩ Go 多行 import ( … ) 逐条拆开（不再是整块一条字符串）',
+  JSON.stringify(goMain?.imports || []).slice(0, 70));
+const gs = spawnMcp(goOut);
+await gs.ready;
+const rNum = await gs.call('refs', { name: 'Num', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rNum) && !/\[(仅同名|same name only)\]/.test(rNum),
+  '⑩ 跨包引用（Go）算“有支撑”（import 拆开后模块名能对上目标文件）',
+  (rNum.split('\n').find((l) => /Num/.test(l)) || '').trim().slice(0, 70));
+gs.proc.kill('SIGKILL');
+
+// ⑪ 2026-09-22（ripgrep 实测暴露）：Rust 的 `use a::{b, c}` 树以前被按逗号切碎
+//（`"crate::flags::{Category"`）→ 跨 crate / 跨模块引用全塔“仅同名”（有支撑 0%）。
+// 现在：花括号树逐条展开；`crate::x::Y` 这种不写 crate 根的路径按段后缀对到目标文件。
+const rsTmp = path.join(os.tmpdir(), `codeatlas-rustuse-${process.pid}`);
+const { out: rsOut } = scanProject(rsTmp, {
+  'src/util.rs': 'pub struct Num {\n    pub v: i32,\n}\n\npub fn double(n: i32) -> i32 {\n    n * 2\n}\n',
+  'src/main.rs': 'mod util;\npub(crate) use crate::util::{self as util_mod, Num};\n\nfn main() {\n    let n = Num { v: 1 };\n    println!("{}", util_mod::double(n.v));\n}\n',
+}, 'rust');
+const rsB = readBundle(rsOut);
+const rsMain = rsB.files.find((f) => f.path === 'src/main.rs');
+check((rsMain?.imports || []).includes('crate::util::Num') && (rsMain?.imports || []).includes('crate::util')
+  && !(rsMain?.imports || []).some((i) => /[(){}\r\n]/.test(i)),
+  '⑪ Rust use 树（含 pub(crate) 前缀 / 别名 / self）展开成完整路径',
+  JSON.stringify(rsMain?.imports || []).slice(0, 70));
+const rs = spawnMcp(rsOut);
+await rs.ready;
+const rRs = await rs.call('refs', { name: 'Num', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rRs) && !/\[(仅同名|same name only)\]/.test(rRs),
+  '⑪ `use crate::util::Num` 的跨文件引用算“有支撑”（不写 crate 根也对得上）',
+  (rRs.split('\n').find((l) => /Num/.test(l)) || '').trim().slice(0, 70));
+rs.proc.kill('SIGKILL');
+
+// ③ 2026-09-22（ant-design 实测暴露）：仓库内**包名自引用** —— 文件 import 写的是包名（`antd`），
+// 不是相对路径；不认“包名 → 包目录”这一档，ant-design 上 6,801 条“仅同名”里有 3,364 条是它。
+const pkgs = [{ name: '@fixture/app', dir: 'pkg' }];
+check(importMatchesTarget('@fixture/app', mt('pkg/src/widget.js', '', ''), { packages: pkgs })
+  && importMatchesTarget('@fixture/app/sub', mt('pkg/src/widget.js', '', ''), { packages: pkgs }),
+  '③ 包名自引用算有支撑（包名 / 包名子路径 → 包目录里的文件）');
+check(!importMatchesTarget('@fixture/app', mt('other/src/widget.js', '', ''), { packages: pkgs })
+  && !importMatchesTarget('@fixture/appx', mt('pkg/src/widget.js', '', ''), { packages: pkgs })
+  && !importMatchesTarget('@fixture/app', mt('pkg/src/widget.js', '', ''), undefined),
+  '③ 不越界：包目录外 / 相似名 / 没带包清单时都不算');
+// 端到端：MCP 的 refs 标签要走同一套口径
+const pkgTmp = path.join(os.tmpdir(), `codeatlas-pkgref-${process.pid}`);
+const { out: pkgOut } = scanProject(pkgTmp, {
+  'pkg/package.json': '{\n  "name": "@fixture/app",\n  "version": "1.0.0"\n}\n',
+  'pkg/src/widget.js': 'export class Widget { render() { return 1; } }\n',
+  'demo/use.js': 'import { Widget } from "@fixture/app";\nexport function run() { return new Widget().render(); }\n',
+});
+const pkgB = readBundle(pkgOut);
+check((pkgB.source.packages || []).some((p) => p.name === '@fixture/app' && p.dir === 'pkg'),
+  '③ 包清单进 bundle（name → 包目录）', JSON.stringify(pkgB.source.packages || []));
+const ps = spawnMcp(pkgOut);
+await ps.ready;
+const rPkgW = await ps.call('refs', { name: 'Widget', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rPkgW) && !/\[(仅同名|same name only)\]/.test(rPkgW),
+  '③ 包名自引用的跨文件引用在 MCP 里算“有支撑”',
+  (rPkgW.split('\n').find((l) => /Widget/.test(l)) || '').trim().slice(0, 70));
+ps.proc.kill('SIGKILL');
+
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);
 const { out: topOut } = scanProject(topTmp, {

@@ -1,4 +1,7 @@
+// 夹具：单条 use（fmt）+ 花括号树（嵌套 / 别名 / self）—— ripgrep 实测里后者被按逗号切成碎片。
 use std::fmt;
+use std::{collections::HashMap, io::Write as _};
+use crate::geom::{self, area_of};
 
 /// 形状基类：Rust 用 trait 表达能力。
 pub trait Shape {

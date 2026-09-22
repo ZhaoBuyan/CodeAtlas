@@ -125,7 +125,11 @@ export const EXTRA_CASES = [
     names: ['Animal', 'Dog', 'Walker', 'sample'],
     kinds: { struct: 2, interface: 1, module: 1 },
     ns: 'fixture',
-    importsMin: 1,
+    // 多行 import ( … ) 的回归门（gin 实测暴露）：单行 + 括号块两种写法都要拆成**多条**目标，
+    // 整块（带括号 / 引号 / 换行的字符串）一条都不许留下。
+    importsMin: 3,
+    importsInclude: ['os', 'fmt', 'strings'],
+    importsAtomic: true,
     docs: 2,
     // 方法有两个 parameter_list（接收者在前），必须走 parameters 字段拿"真的那个"
     memberSigs: [['Animal', 'Name', ': string'], ['sample', 'helper', '(n int): int']],
@@ -138,7 +142,11 @@ export const EXTRA_CASES = [
     types: 6,
     names: ['Shape', 'Circle', 'Kind', 'sample'],
     kinds: { impl: 2, trait: 1, struct: 1, enum: 1, module: 1 },
-    importsMin: 1,
+    // use 树的回归门（ripgrep 实测暴露）：花括号树要展开成**每条完整路径**，
+    // 别名（as _）与 self 都要处理好，且不许留下带括号的碎片。
+    importsMin: 5,
+    importsInclude: ['std::fmt', 'std::collections::HashMap', 'std::io::Write', 'crate::geom', 'crate::geom::area_of'],
+    importsAtomic: true,
     docs: 2, // 样例里只有两处 ///
     memberSigs: [['Circle', 'new', '(radius: f64): Self'], ['Shape', 'area', '(&self): f64']],   // return_type 字段
     membersMin: 4,

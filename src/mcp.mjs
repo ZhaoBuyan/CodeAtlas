@@ -241,7 +241,7 @@ function fmt(n) {
  * = 有支撑；剩下只共享一个名字的归“仅同名”，噪声主要在这一档。
  * ⚠ 复测报告 §3：以前只比“被引用文件的文件名主干”，于是**命名空间语言（C#/Java/Kotlin）全军塔成“仅同名”**
  * （一个 C# 项目 53 条边里“有支撑”0 条，连 `using MuSync.Models;` 都认不出来），overview 热点榜跟着失真。
- * 现在改走 modules.mjs 的 `importMatchesTarget`（模块名 + 命名空间 + 包路径）。
+ * 现在改走 modules.mjs 的 `importMatchesTarget`（模块名 + 命名空间 + 包路径 + Rust 段后缀 + 仓库内包名自引用）。
  */
 function evidenceOf(idx, e) {
   const src = idx.byId.get(e.from);
@@ -251,7 +251,9 @@ function evidenceOf(idx, e) {
   const f = idx.files.get(src.file);
   const target = { ns: dst.ns, fqn: dst.fqn, path: idx.files.get(dst.file)?.path };
   if (f && target.path) {
-    for (const raw of f.imports || []) if (importMatchesTarget(raw, target)) return 'import';
+    // 仓库自身的包名（package.json 的 name → 包目录）：TS/JS 的“包名自引用”靠它（与扫描期同一套口径）
+    if (idx._pkgCtx === undefined) idx._pkgCtx = idx.b?.source?.packages?.length ? { packages: idx.b.source.packages } : null;
+    for (const raw of f.imports || []) if (importMatchesTarget(raw, target, idx._pkgCtx)) return 'import';
   }
   // C# / VB：子命名空间**不用 using 也能引用父命名空间里的类型**（语言语义如此）。实测一个 C# 项目里有 7 条
   // 真引用因此被留在“仅同名”档，AI 照标签会把它们丢掉。只对 C# 家族做（Java/Kotlin 不适用）。

@@ -39,7 +39,7 @@ export function moduleKey(p) {
  *     只会被记成 `django.db`（被 import 的符号名采不到），所以只能按路径前缀认。
  *     不认它的话，实测 Django 上 **79%** 的边会落到“仅同名”。
  */
-export function importMatchesTarget(rawImport, target) {
+export function importMatchesTarget(rawImport, target, ctx) {
   const imp = String(rawImport || '').replace(/[;,]+$/, '').replace(/^['"]|['"]$/g, '').trim();
   if (!imp) return false;
   const ns = target.ns || '';
@@ -61,13 +61,39 @@ export function importMatchesTarget(rawImport, target) {
       if (tPath === v || tPath.startsWith(`${v}.`)) return true;
     }
   }
+  // Rust 的 `use crate::flags::defs::FLAGS` 不写 crate 根，光比模块名 / 前缀都对不上：
+  // `::` 当分隔符按**段后缀**比 —— 导入的段是目标路径（去扩展名）的后缀、或目标目录的后缀；
+  // 再让一步：去掉导入最后一段（`::FLAGS` 这种“模块::符号”尾巴）再比。只对 .rs 目标开这一档。
+  // 依据：ripgrep 实测（2026-09-22）—— 不认这一档时跨文件引用的有支撑是 0%。
+  if (tPath.toLowerCase().endsWith('.rs') && imp.includes('::')) {
+    const low = (x) => x.toLowerCase();
+    const pathSegs = tPath.split('/').filter(Boolean);
+    pathSegs[pathSegs.length - 1] = pathSegs[pathSegs.length - 1].replace(/\.[^.]+$/, '');
+    const pathL = pathSegs.map(low);
+    let impSegs = imp.split('::').join('/').split('/').filter(Boolean).map(low);
+    if (impSegs[0] === 'crate') impSegs = impSegs.slice(1);      // `crate::x` → 相对那条路径比（crate 根不写在 import 里）
+    const isSuffix = (a, b) => a.length > 0 && a.length <= b.length && a.every((x, i) => x === b[b.length - a.length + i]);
+    if (isSuffix(impSegs, pathL) || isSuffix(impSegs, pathL.slice(0, -1))
+      || isSuffix(impSegs.slice(0, -1), pathL) || isSuffix(impSegs.slice(0, -1), pathL.slice(0, -1))) return true;
+  }
+  // ③ 仓库内“包名自引用”（ant-design 实测）：import 写的是**仓库自身某个包的包名**（monorepo 的子包也算）
+  // → 目标文件在这个包的目录里，就算有支撑。注意：裸包名只证明“目标与引用方同属这个包”、
+  // 不指向具体文件 —— 这是证据里最弱的一档，口径说明见《实战数据-多语言实测》那篇。
+  if (ctx?.packages?.length) {
+    for (const p of ctx.packages) {
+      if (!p?.name) continue;
+      if (imp !== p.name && !imp.startsWith(`${p.name}/`)) continue;
+      const pdir = p.dir ? `${p.dir}/` : '';
+      if (tPath.startsWith(pdir)) return true;
+    }
+  }
   return false;
 }
 
-/** import 字符串的可能路径形态：原样 / 点换斜杠 / 去掉源码扩展名（'./x/y.js' → 'x/y'） */
+/** import 字符串的可能路径形态：原样 / 点换斜杠 / 双冒号换斜杠 / 去掉源码扩展名（'./x/y.js' → 'x/y'） */
 function importPathVariants(imp) {
   const norm = imp.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\.+/, '');
-  const out = new Set([norm, norm.replace(/\./g, '/')]);
+  const out = new Set([norm, norm.replace(/\./g, '/'), norm.replace(/::/g, '/')]);
   const m = norm.match(/\.([A-Za-z0-9]+)$/);
   if (m && SRC_EXT.has(m[1].toLowerCase())) out.add(norm.slice(0, -(m[1].length + 1)));
   return [...out].filter(Boolean);

@@ -450,15 +450,85 @@ function collectBaseNames(node, out) {
   if (name && /^[A-Za-z_$][\w$.]*$/.test(name)) out.push(name.split('.').pop());
 }
 
-/** 从 import 语句里抠出目标名（C# using / Java import / JS-TS import / Python from-import / C-C++ #include / PHP use 都吃） */
-function parseImport(text) {
+/** `use` 树按**顶层**逗号切（嵌套花括号里的逗号不算分隔符） */
+function splitTopLevel(s) {
+  const out = [];
+  let depth = 0, cur = '';
+  for (const ch of s) {
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * 展开 Rust / PHP 的 `use` 树 → 每条完整路径：
+ *   `a::{b, c::{d, e}, f as g, self}` → a::b / a::c::d / a::c::e / a::f / a
+ * 别名（`as x`）去掉（匹配用的是路径）、`self` 与通配 `*` 归到模块前缀本身。
+ * 为什么：ripgrep 实测里 `use crate::flags::{Category, …}` 被按逗号切成了
+ * `"crate::flags::{Category"` 这种碎片（404 条 import 里 191 条是坏的）→ 跨 crate 引用全塔“仅同名”。
+ */
+function expandUseTree(body) {
+  const out = [];
+  const walk = (part, prefix) => {
+    let s = String(part).trim();
+    if (!s) return;
+    const brace = s.indexOf('{');
+    if (brace < 0) {
+      s = s.replace(/\s+as\s+\S+$/, '').trim();   // `a::b as c` → a::b
+      const bare = prefix.replace(/[:\/\\]+$/, '');
+      if (s === 'self' || s === '*') { if (bare) out.push(bare); return; }
+      if (!s) return;
+      out.push((prefix + s).trim());
+      return;
+    }
+    const close = s.lastIndexOf('}');
+    if (close < brace) { out.push((prefix + s).trim()); return; }   // 括号不配对的残句：原样留一条，绝不静默丢
+    const head = s.slice(0, brace);
+    for (const piece of splitTopLevel(s.slice(brace + 1, close))) walk(piece, prefix + head);
+  };
+  walk(body, '');
+  return out;
+}
+
+/**
+ * 从 import 语句里抠出目标名，**返回数组** —— 一个 import 节点可能挂着好几条：
+ * Go 的 `import ( "a"\n"b" )` 整块就是一个 import_declaration 节点（gin 实测里整块被记成一整条字符串，
+ * 99 个文件只采到 94 条）。C# using / Java import / JS-TS import / Python from-import / C-C++ #include / PHP use 都吃。
+ */
+function parseImports(text) {
   const raw = String(text).trim();
+  // Rust 的可见性前缀：`pub use …` / `pub(crate) use …` / `pub(super) use …` —— 去掉再认
+  //（ripgrep 实测：`pub(crate) use crate::flags::{…}` 就是被漏掉的那一条）
+  const stmt = raw.replace(/^pub(?:\s*\([^)]*\))?\s+/, '');
   // C/C++：#include <stdio.h> / #include "x.h"
-  const inc = raw.match(/^#\s*include\s*[<"]([^>"]+)[>"]/);
-  if (inc) return inc[1];
-  const py = raw.match(/^from\s+([^\s]+)\s+import/i);
-  if (py) return py[1];
-  let t = raw.replace(/;+$/, '').replace(/^global\s+/, '');
+  const inc = stmt.match(/^#\s*include\s*[<"]([^>"]+)[>"]/);
+  if (inc) return [inc[1]];
+  const py = stmt.match(/^from\s+([^\s]+)\s+import/i);
+  if (py) return [py[1]];
+  // Go 的括号块导入：逐行拆（`import ( "crypto/subtle"\n"fmt" )`）。
+  // 别名（`_ "embed"` / `f "fmt"`）与行尾 `// 注释` 都认：先剥注释、再取本行引号串。
+  const blk = stmt.match(/^import\s*\(([\s\S]*)\)\s*(?:\/\/[^\r\n]*)?$/);
+  if (blk) {
+    const out = [];
+    for (const line of blk[1].split(/\r?\n/)) {
+      for (const q of line.replace(/\/\/.*$/, '').match(/"[^"]*"|'[^']*'/g) || []) {
+        const v = q.slice(1, -1).trim();
+        if (v) out.push(v);
+      }
+    }
+    return out;
+  }
+  // Rust / PHP 的 `use a::{b, c::{d, e}, f as g, self}` 树：一个节点里挂着好几条路径，要展开
+  if (/^use\s/.test(stmt) && /[{}]/.test(stmt)) {
+    const body = stmt.replace(/^use\s+/, '').replace(/;+$/, '').trim();
+    const expanded = expandUseTree(body);
+    if (expanded.length) return expanded;
+  }
+  let t = stmt.replace(/;+$/, '').replace(/^global\s+/, '');
   t = t.replace(/^(using|import|package|require|from|use|namespace)\s+/, '');
   t = t.replace(/^(static|type)\s+/, '');
   const eq = t.indexOf('=');
@@ -466,7 +536,7 @@ function parseImport(text) {
   t = t.trim();
   const m = t.match(/from\s+['"]([^'"]+)['"]/) || t.match(/^['"]([^'"]+)['"]$/);
   if (m) t = m[1];
-  return t.split(',')[0].trim().replace(/\s+as\s+\S+$/i, '');
+  return [t.split(',')[0].trim().replace(/\s+as\s+\S+$/i, '')];
 }
 
 /**
@@ -781,8 +851,8 @@ function extractFile(source, tree, lang) {
 
     const impKind = lang.importKindOf ? lang.importKindOf(node) : lang.imports[type];
     if (impKind) {
-      const target = parseImport(lang.importTextOf ? lang.importTextOf(node) : node.text);
-      if (target) imports.push(target);
+      const targets = parseImports(lang.importTextOf ? lang.importTextOf(node) : node.text);
+      for (const target of targets) if (target) imports.push(target);
       sweepComments(node);
       return;
     }
@@ -1373,7 +1443,11 @@ async function extractFiles(files) {
         id,
         name: f.rel.replace(/\.[^.]+$/, '').split('/').pop(),
         kind: 'module',
-        ns: '',
+        // 文件级包 / 命名空间（Go 的 `package gin`、PHP 的 `namespace Foo`、Java/Kotlin 的 package）：
+        // 合成的 module 节点也是这个包里的一员。ns 留空会让「同包」这一档认不出来 ——
+        // gin 实测：跨文件引用里一大半是**同包互引**（Go 同目录的文件互相引不需要 import），
+        // 却全塔成“仅同名”（有支撑 0% 的构成里它们占大头）。
+        ns: f.lang.namespaceScope === 'file' && facts.namespaces.length === 1 ? facts.namespaces[0] : '',
         fqn: f.rel,
         file: fileId,
         line: mStart,
@@ -1574,6 +1648,43 @@ function elixirIsDecision(node) {
   return ['if', 'unless', 'case', 'cond', 'with', 'for', 'try', 'receive'].includes(c);
 }
 
+/**
+ * ③ 仓库自身的包（package.json 的 name → 包目录）：TS/JS monorepo 里最常见的“包名自引用”——
+ * 文件写的 import 是**包名**（`antd` / `@scope/pkg`），而不是相对路径，光比文件名永远对不上。
+ * 只做一层浅发现（跳过 node_modules / dist 这些 IGNORE_DIRS）；JSON 坏了就跳过，不报错。
+ * 实测：ant-design 上“仅同名”的 6,801 条里 3,364 条的引用方 import 就是包名 `antd`。
+ */
+function discoverPackages(roots) {
+  const out = [];
+  const seen = new Set();
+  for (const root of roots) {
+    const stack = [root];
+    while (stack.length) {
+      const dir = stack.pop();
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        const abs = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (IGNORE_DIRS.has(e.name) || e.name.startsWith('.git')) continue;
+          stack.push(abs);
+          continue;
+        }
+        if (e.name !== 'package.json') continue;
+        let name = '';
+        try { name = String(JSON.parse(fs.readFileSync(abs, 'utf8')).name || '').trim(); } catch { name = ''; }
+        if (!name) continue;
+        const rel = path.relative(root, dir).split(path.sep).join('/');
+        const key = `${name}|${rel}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ name, dir: rel === '.' ? '' : rel });
+      }
+    }
+  }
+  return out;
+}
+
 export async function scan(opts) {
   const t0 = Date.now();
   const roots = (opts.roots?.length ? opts.roots : ['.']).map((r) => path.resolve(r));
@@ -1592,6 +1703,8 @@ export async function scan(opts) {
   // 项目自己的跳过规则：atlas.ignore（存在才生效）+ 可选的 .gitignore（--gitignore 才读）
   const ignoreRules = loadIgnoreRules(roots, { gitignore: opts.gitignore });
   const { files, skipped } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
+  // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
+  const packages = discoverPackages(roots);
 
   const langById = new Map(languages.map((l) => [l.id, l]));
   const byLang = new Map();
@@ -1733,7 +1846,7 @@ export async function scan(opts) {
       const viaImport = hit.filter((id) => {
         const cand = allTypes[id];
         const target = { ns: cand.ns, fqn: cand.fqn, path: fileRecs[cand.file]?.path };
-        return fromFile.imports.some((raw) => importMatchesTarget(raw, target));
+        return fromFile.imports.some((raw) => importMatchesTarget(raw, target, { packages }));
       });
       if (viaImport.length === 1) return viaImport[0];
     }
@@ -1896,6 +2009,7 @@ export async function scan(opts) {
       bytes: totals.bytes,
       newestMtime: newestMtime ? new Date(newestMtime).toISOString() : null,
       git,
+      packages,
       scanMs: 0,
       scanOptions: {
         lang: opts.lang || 'auto', maxKb, excludes, facets: facets.configPath,
