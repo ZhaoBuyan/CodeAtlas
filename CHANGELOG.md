@@ -2,8 +2,76 @@
 
 > 只写**用户能看到的变化**。技术细节见提交记录。
 
-## 未发布（下一版）
+## 1.6.0（2026-09-23）
 
+> 三轮实测（共 31 个开源项目）+ 一个**新功能**：Dart 支持（第 29 门语言）→ 按语义化版本走 **minor**：1.5.0 → 1.6.0。
+> 口径：**跨文件边**为分母；两个口径分开报（import 支撑 vs MCP 里那条边实际显示的标签）。
+>
+> 第一轮：Django 78%（未动）· ant-design **35% → 67%** · gin **0% → 25%**（引擎口径 **79%**）·
+> guava 62%（引擎口径 100%）· ripgrep **0% → 63%**。
+> 第二轮：Newtonsoft.Json（C#）66%/79% · guzzle（PHP）**83%/97%** · kotlinx.coroutines 87%/96% ·
+> caddy（Go）85%/89% · axios（JS）80% · Alamofire（Swift）**1% → 50%** · tokio（Rust）52% ·
+> sinatra（Ruby）20%/22% · redis（C）39% · fmt（C++）29%。
+> 第三轮（专挑没上过真项目的语言）：kong（Lua）**0% → 33%** · zls（Zig）**0% → 38%** ·
+> vuetify（Vue/TS）**38% → 58%** · akka（Scala）66%/75% · hcl 81%/97% · ocaml 50% · rescript 23% ·
+> spacemacs（Elisp）9% · phoenix（Elixir）5% · graphql-tools 67% · graphql-js 73% · nvm（Bash，有跨文件边了）。
+> Dart 新样本：bloc **71%** · riverpod **10% → 72%**（两跳 barrel 认出来了）。
+>
+> ⚠ 如实说的局限：**C/C++、Swift、OCaml、ReScript、Kotlin 的解析异常是语法包自身的局限**（新语法 / 宏汤），
+> 不是提取器的锅（`.h` 已按内容判过 C / C++）；**Elixir / Elisp 的低比例是语言语义**（模块全局可见、
+> 引用不必 import；Elisp 依赖图天然弱）；**Bash 只有 `source` 这一种依赖边**；**Dart 认的是同包一跳 +
+> 重导出闭包（多跳 barrel）**，重命名转出（`export … show X as Y`）没做；TLA+ / SystemRDL 只有合成夹具。
+
+- **新增：Dart 支持（第 29 门语言）** —— `.dart` 全套提取（class / mixin / extension / enum / typedef、
+  字段与方法签名、抽象类、getter/setter）；`package:xxx/…` 入口按包对上（读 pubspec.yaml 的包名），
+  **同包一跳 + 包级重导出闭包（多跳 barrel）**都认。实测：bloc（693 文件/605 个 .dart）有支撑 **71%**、
+  riverpod（1,256 文件）**10% → 72%**。
+- **修复：`.h` 现在按内容判 C / C++** —— 头文件里写 C++ 的很多（redis 的 deps/、fmt 的 include/），
+  以前按 C 解析出一大片 ERROR：redis **3,434 → 2,456**、fmt **14,459 → 1,200**（92% 消失）。
+- **增强：Bash 有依赖边了** —— `source x.sh` / `. x.sh` 进 import（动态路径 `$DIR/x.sh` 不猜），
+  命令名（`foo x` 里的 foo）算引用：nvm 这类脚本仓库以前 0 条跨文件边，现在能连上。
+- **修复：Go 的 `import ( … )` 多行块被当成一整条字符串，跨包引用全认不出来** —— 一个 `import (...)` 块
+  在语法树里是整个一个节点，扫描器只记下**一条**（还是带括号的坏串）：实测 gin（99 文件）只采到 94 条 imports，
+  跨文件引用的“有支撑”是 **0%**。现在按行拆成每条完整路径（别名 `_ "embed"` / `f "fmt"`、行尾注释都认）：
+  imports 94 → **518** 条。
+  同批还修了**合成 module 节点丢包名**的老问题（Go 的 `package`、PHP 的 `namespace`、Java/Kotlin 的 package 都没带上）——
+  Go 里同目录文件互相引用**不需要 import**（gin 的跨文件边里 59% 是这种：`tree_test.go → tree.go`），
+  以前全被标成「仅同名」，现在按「同包」算支撑。实测 gin：**引擎分档口径（import / 同命名空间）0% → 71%**。
+  ⚠ 口径分开说：**17% 是 import 支撑；71% 是 MCP 里那条边实际显示的标签**。
+- **修复：Rust 的 `use a::{b, c}` 树被切成碎片** —— `use crate::flags::{Category, …}` 被按逗号切成了
+  `"crate::flags::{Category"`，实测 ripgrep 404 条 imports 里 **191 条是坏的**，跨 crate / 跨模块引用“有支撑”也是 **0%**。
+  现在花括号树逐条展开（嵌套 / `as` 别名 / `self` / `pub(crate) use` 都认）；并且对 Rust 文件新开一档
+  “段后缀”匹配：`crate::flags::defs::FLAGS` 这种不写 crate 根的路径也能对到目标文件（大小写不敏感，
+  `category.rs` ↔ `Category` 也对得上）。实测 ripgrep：imports 404 → **1,046** 条（坏条 0），有支撑 **0% → 50%**。
+- **新增（证据分档）：仓库内“包名自引用”算有支撑** —— 有些文件 import 的是**自己仓库的包名**
+  （ant-design 的 demo 写 `import { Button } from 'antd'`），不是相对路径，以前对不上：6,801 条“仅同名”里
+  3,364 条是它。现在扫描时收下仓库自身的 `package.json` 的 name（monorepo 每个子包都收），
+  “包名 / 包名子路径 → 该包目录里的目标”算有支撑。实测 ant-design：有支撑 **35% → 67%**。
+  ⚠ 口径：**裸包名只证明“目标与引用方同属这个包”、不指向具体文件** —— 这是证据里最弱的一档，
+  标签上不细分，写在这里记着。
+- **第二轮（另 10 个开源项目实测）：六个提取缺陷** ——
+  · **Kotlin**：`import` 节点会把紧随的注释（KDoc）并进路径（coroutines 4,354 条 import 里 278 条带尾巴）；
+    通配导入 `import x.*`（Kotlin/Java/Scala/Rust）现在按包算支撑 → 有支撑 70% → **87%**，坏 import 278 → **0**。
+  · **JS/TS**：CommonJS 的 `require('x')` 与 TS 的 `import x = require('y')` 都进 import 了
+    （axios：有支撑 73% → **80%**，坏 import 3 → 0）。
+  · **Swift**：`@testable import X` 剥掉属性、Package.swift 的模块名进包清单
+    （Alamofire：有支撑 **1% → 50%**）。
+  · **Ruby**：RSpec 的 `include("…")` 不再被当 import（sinatra 18 条坏串 → 0）；类引用（constant）进图。
+  · **PHP**：类型引用（这个语法里叫 `name`）以前一条也采不到（guzzle 0 条 ref 边）；命名空间分隔符 `\` 归一后
+    use 能对上 → 有支撑 **83% / 97%（引擎口径）**、ref 边 527 条。
+  · **C#**：多个 `#if` 块叠在一起会把命名空间吞进 ERROR 节点（Newtonsoft 上 8 个类型全丢 ns）——
+    预处理把条件编译指令行留空（行数不变）→ 解析异常 226 → **2**，有支撑 58% → **66%**。
+- **第三轮（再 16 个样本，专挑没上过真项目的语言）：六个“导入采集缺失 / 碎片”缺陷** ——
+  · **Lua**：`require("a.b")` / `require "a.b"` 以前一条 import 都采不到（kong 1,365 个文件、有支撑 **0%**）
+    → imports 99 → **3,746** 条，有支撑 **33%**。
+  · **Zig**：`@import("x")` 同理（zls：imports 0 → **393**，有支撑 0% → **38%**）。
+  · **Emacs Lisp**：`(require 'x)` / `(load "x")` 同理；并补上 symbol 引用（spacemacs：跨文件引用 **0 → 45**）。
+  · **Scala**：`import a.{b, c}` 以前被切成 `{…` 碎片（akka：30,341 条 import 里 **1,859 条坏 → 0**）。
+  · **Elixir**：`alias Foo.{A, B}` 同样修好（phoenix：35 条坏 → 0）；模块名 CamelCase ↔ 文件名 snake_case 现在能对上
+    （**只对 .ex/.exs 目标开**：别的语言里大小写是有意义的）。
+  · **TS/JS 路径别名**：读 `tsconfig.json` / `jsconfig.json` 的 `compilerOptions.paths`（JSONC 注释、`./` 形式的 baseUrl 都处理），
+    `@/x` 这类 import 能对到仓库内目录（vuetify：有支撑 **38% → 58%**）。
+  · ⚠ 口径：四个新钩子（Lua / Zig / Elisp / TS 别名）都只认“**函数名/宏名 + 字符串字面量**”；动态参数不碰、不猜。
 - **修复：包 / 模块级 import 认不出来，导致一整个语言（Python 这类）的证据分档几乎全落空** ——
   1.5.0 里“有支撑”只认“import 的名字 = 目标的模块名 / 命名空间”，而 Python 写 `from django.db import models`
   时**只记得到 `django.db`**（被 import 的符号名采不到），于是引用 `models.ForeignKey` 只能靠名字硬撞。
