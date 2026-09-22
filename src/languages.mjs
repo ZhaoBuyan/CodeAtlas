@@ -491,6 +491,36 @@ const dartImportText = (node) => {
   return uri ? uri.text.replace(/^['"]|['"]$/g, '') : '';
 };
 
+/** Dart 的 `export 'package:Y/…'` 要单独认：父进程据此建包级重导出图（多跳 barrel） */
+const dartImportKind = (node) => {
+  if (node.type !== 'import_or_export') return null;
+  return /^\s*export\b/.test(node.text) ? 'export' : 'import';
+};
+
+// ---------- Bash ----------
+/**
+ * Bash 的“import”就是 `source x.sh` / `. x.sh`（nvm 这类脚本仓库的依赖全靠它）。
+ * 只认命令名是 source / . 的调用，实参只认**字面量**：变量展开（`source "$DIR/x.sh"`）
+ * 与进程替换（`source <(…)`）一律不碰 —— 路径是动态的，猜不得。
+ */
+const bashImportKind = (node) => {
+  if (node.type !== 'command') return null;
+  const name = node.namedChildren.find((c) => c.type === 'command_name');
+  const t = name ? name.text : '';
+  return t === 'source' || t === '.' ? 'source' : null;
+};
+const bashImportText = (node) => {
+  const first = node.namedChildren.find((c) => c.type !== 'command_name');
+  if (!first) return '';
+  if (first.type === 'word') return first.text;
+  if (first.type === 'string') {
+    if (first.namedChildren.some((c) => c.type !== 'string_content')) return '';   // 有插值 → 不认
+    const inner = first.namedChildren.find((c) => c.type === 'string_content');
+    return inner ? inner.text : '';
+  }
+  return '';
+};
+
 /** Dart 的签名都包在 *_signature 里（declaration 与 method_signature 都可能包着一层） */
 const dartSigNode = (node) => {
   if (node.type === 'declaration' || node.type === 'method_signature') {
@@ -718,6 +748,7 @@ export const LANGUAGES = {
     paramsOf: dartParamsOf,
     returnTypeOf: dartReturnTypeOf,
     imports: { import_or_export: 1 },
+    importKindOf: dartImportKind,
     importTextOf: dartImportText,
     baseFields: ['superclass'],
     baseNodes: [],
@@ -762,6 +793,10 @@ export const LANGUAGES = {
       declaration_command: 'var',
     },
     imports: {},
+    importKindOf: bashImportKind,
+    importTextOf: bashImportText,
+    // 命令名（`foo x` 里的 foo）算引用 —— bash 的函数调用就是命令，不认它跨文件一条边也没有
+    refTypes: ['command_name'],
     baseFields: [],
     baseNodes: [],
     decisions: ['if_statement', 'for_statement', 'while_statement', 'case_statement', 'binary_expression'],

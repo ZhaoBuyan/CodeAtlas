@@ -108,6 +108,12 @@ export function importMatchesTarget(rawImport, target, ctx) {
         const sub = imp.slice(`package:${p.name}/`.length);
         if (tPath.startsWith(`${base}lib/${sub}.`) || tPath.startsWith(`${base}lib/${sub}/`) || tPath === `${base}lib/${sub}`) return true;
         if (tPath.startsWith(base)) return true;
+        // 包级重导出（多跳 barrel）：`package:mid/…` 也指向 mid 转出的包里的目标
+        // （实测 riverpod：flutter_riverpod 测试引 riverpod 的类型，就是两跳）
+        for (const name of p.exports || []) {
+          const q = ctx.packages.find((x) => x.name === name);
+          if (q && tPath.startsWith(q.dir ? `${q.dir}/` : '')) return true;
+        }
         continue;
       }
       if (imp === p.name) { if (tPath.startsWith(base)) return true; continue; }

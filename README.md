@@ -456,12 +456,12 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | Lua | `.lua` | ✅ fixtures (no type declarations → synthetic module node) |
 | Go | `.go` | ✅ fixtures (struct / interface distinguished) |
 | Rust | `.rs` | ✅ fixtures (trait/struct/enum/impl) |
-| C | `.c` `.h` | ✅ fixtures (typedefs not double counted) |
+| C | `.c` `.h` | ✅ fixtures + measured (redis) (typedefs not double counted; `.h` is sniffed: C++-looking headers go to the C++ grammar) |
 | C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hxx` | ✅ fixtures (inheritance included) |
 | PHP | `.php` | ✅ fixtures (class/interface/trait/enum + extends/implements) |
 | Swift | `.swift` | ✅ fixtures (class/struct/enum/protocol distinguished) |
 | Scala | `.scala` `.sc` | ✅ fixtures (class/object/trait) |
-| Shell | `.sh` `.bash` `.zsh` | ✅ fixtures (no types → module node) |
+| Shell | `.sh` `.bash` `.zsh` | ✅ fixtures + measured (nvm) (no types → module node; `source`/`.` become imports, command names become refs) |
 | Zig | `.zig` | ✅ fixtures (const X = struct/enum) |
 | Solidity | `.sol` | ✅ fixtures (contract/interface + inheritance) |
 | OCaml | `.ml` `.mli` | ✅ fixtures (module/type; top-level lets get a synthetic module node) |

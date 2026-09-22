@@ -379,12 +379,12 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | Lua | `.lua` | ✅ fixtures（无类型声明 → 合成 module 节点） |
 | Go | `.go` | ✅ fixtures（struct / interface 区分） |
 | Rust | `.rs` | ✅ fixtures（trait/struct/enum/impl） |
-| C | `.c` `.h` | ✅ fixtures（typedef 不重复计数） |
+| C | `.c` `.h` | ✅ fixtures + 实测（redis）（typedef 不重复计数；`.h` 会嗅内容：像 C++ 的头文件按 C++ 解析） |
 | C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hxx` | ✅ fixtures（含继承） |
 | PHP | `.php` | ✅ fixtures（class/interface/trait/enum + extends/implements） |
 | Swift | `.swift` | ✅ fixtures（class/struct/enum/protocol 分开认） |
 | Scala | `.scala` `.sc` | ✅ fixtures（class/object/trait） |
-| Shell | `.sh` `.bash` `.zsh` | ✅ fixtures（无类型 → module 节点） |
+| Shell | `.sh` `.bash` `.zsh` | ✅ fixtures + 实测（nvm）（无类型 → module 节点；`source` / `.` 变成 import，命令名变成引用） |
 | Zig | `.zig` | ✅ fixtures（const X = struct/enum） |
 | Solidity | `.sol` | ✅ fixtures（contract/interface + 继承） |
 | OCaml | `.ml` `.mli` | ✅ fixtures（module/type；顶层 let 会合成 module 节点） |

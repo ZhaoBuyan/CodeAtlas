@@ -1004,6 +1004,52 @@ check(/\[(有支撑|backed)\]/.test(rThing) && !/\[(仅同名|same name only)\]/
   '⑯ Dart：package:demo_app/… 的 barrel 转出引用算“有支撑”',
   (rThing.split('\n').find((l) => /Thing/.test(l)) || '').trim().slice(0, 70));
 dartPkgSvc.proc.kill('SIGKILL');
+// 再补一道：跨包**多跳** barrel（mid 转出 base）—— riverpod 样本上这是大头
+const dartBarrelTmp = path.join(os.tmpdir(), `codeatlas-dartbarrel-${process.pid}`);
+const { out: dartBarrelOut } = scanProject(dartBarrelTmp, {
+  'base/pubspec.yaml': 'name: base\n',
+  'base/lib/base.dart': "export 'src/thing.dart';\n",
+  'base/lib/src/thing.dart': 'class Thing {\n  int id = 1;\n}\n',
+  'mid/pubspec.yaml': 'name: mid\n',
+  'mid/lib/mid.dart': "export 'package:base/base.dart';\n",
+  'app/pubspec.yaml': 'name: app\n',
+  'app/test/thing_test.dart': "import 'package:mid/mid.dart';\n\nclass Uses {\n  final Thing t = Thing();\n}\n",
+}, 'dart');
+const dartBarrelB = readBundle(dartBarrelOut);
+check((dartBarrelB.source.packages || []).some((p) => p.name === 'mid' && (p.exports || []).includes('base')),
+  '⑯ Dart：包级重导出图（mid 转出 base）',
+  JSON.stringify((dartBarrelB.source.packages || []).map((p) => `${p.name}→${(p.exports || []).join(',')}`)));
+const dartBarrelSvc = spawnMcp(dartBarrelOut);
+await dartBarrelSvc.ready;
+const rThing2 = await dartBarrelSvc.call('refs', { name: 'Thing', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rThing2) && !/\[(仅同名|same name only)\]/.test(rThing2),
+  '⑯ Dart：跨包多跳 barrel 的引用算“有支撑”',
+  (rThing2.split('\n').find((l) => /Thing/.test(l)) || '').trim().slice(0, 70));
+dartBarrelSvc.proc.kill('SIGKILL');
+
+// ---------------------------------------------------------------------------
+// ⑰ 2026-09-23（第三轮遗留小项）：Bash 的 source 依赖边 + 命令名引用
+//（以前 bash 只有“文件级函数”，跨文件一条边都没有）
+const shTmp = path.join(os.tmpdir(), `codeatlas-bashsrc-${process.pid}`);
+const { out: shOut } = scanProject(shTmp, {
+  'lib/helper.sh': 'helper() {\n  echo hi\n}\n',
+  // 主脚本写到 4 行：引擎对“没有文件级成员的脚本”有个 >=4 行才合成 module 节点的规矩，
+  // 不够 4 行的话 main.sh 就没有节点、文件级引用也就没处挂（这规矩本身是旧行为，不是 bash 的 bug）
+  'main.sh': '#!/bin/sh\n\nsource ./lib/helper.sh\nhelper\n',
+  'dyn.sh': '#!/bin/sh\nsource "$DIR/helper.sh"\n',
+}, 'bash');
+const shB = readBundle(shOut);
+const shMain = shB.files.find((f) => f.path === 'main.sh');
+const shDyn = shB.files.find((f) => f.path === 'dyn.sh');
+check((shMain?.imports || []).includes('./lib/helper.sh') && (shDyn?.imports || []).length === 0,
+  '⑰ Bash：source 字面量进 import、动态路径（$DIR/…）不猜',
+  JSON.stringify([shMain?.imports, shDyn?.imports]));
+const shSvc = spawnMcp(shOut);
+await shSvc.ready;
+const rSh = await shSvc.call('refs', { name: 'helper', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rSh) && !/\[(仅同名|same name only)\]/.test(rSh),
+  '⑰ Bash：source 进来的调用算“有支撑”', (rSh.split('\n').find((l) => /helper/.test(l)) || '').trim().slice(0, 70));
+shSvc.proc.kill('SIGKILL');
 
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);

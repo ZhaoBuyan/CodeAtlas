@@ -230,6 +230,23 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
           if (UNSUPPORTED_SRC_EXTS.has(ext)) skipped.unsupported.set(ext, (skipped.unsupported.get(ext) || 0) + 1);
           continue;
         }
+        // `.h` 到底算 C 还是 C++ 得看内容：头文件里写 C++ 的很多（redis 的 deps/、fmt 的 include/
+        // 实测解析异常一大半来自「C++ 内容按 C 解析」）。读前 4KB 嗅一下，命中才算 C++。
+        let fileLang = lang;
+        if (lang.id === 'c' && ext === '.h') {
+          let head = '';
+          try {
+            const fd = fs.openSync(abs, 'r');
+            const buf = Buffer.alloc(4096);
+            const n = fs.readSync(fd, buf, 0, 4096, 0);
+            fs.closeSync(fd);
+            head = buf.slice(0, n).toString('utf8');
+          } catch { head = ''; }
+          if (/\btemplate\s*</.test(head) || /\bnamespace\s+\w+/.test(head) || /\bclass\s+\w+\s*[:{]/.test(head)
+            || /#\s*include\s*<(vector|string|map|memory|iostream|algorithm|sstream|optional|utility|type_traits|array|functional|unordered_map|cstdint)>/.test(head)) {
+            fileLang = LANGUAGES.cpp || lang;
+          }
+        }
         let stat;
         try { stat = fs.statSync(abs); } catch { continue; }
         if (stat.size > maxKb * 1024) { skipped.tooBig++; continue; }
@@ -237,7 +254,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
           abs,
           rel: path.relative(root, abs).split(path.sep).join('/'),
           root,
-          lang,
+          lang: fileLang,
           bytes: stat.size,
           mtime: stat.mtimeMs,
         });
@@ -746,6 +763,8 @@ function extractFile(source, tree, lang) {
   const imports = [];
   const refs = [];
   const comments = [];
+  // Dart 的 export 转出的**包名**（父进程据此建包级重导出图，多跳 barrel）
+  const reexports = [];
   // 引用**次数**（2026-09-20）：每一个 (owner, 名字) 出现过几次就记几次。
   // 之前这里是两个 Set，只记"出现过没有" → 边的权重恒为 1（"A 引用了 B 3 次" 这个信息被去重丢了）。
   // 用 Map：既当计数器，又天然保持"首次出现顺序"（跟原来 push 的顺序一模一样）。
@@ -840,7 +859,12 @@ function extractFile(source, tree, lang) {
     const impKind = lang.importKindOf ? lang.importKindOf(node) : lang.imports[type];
     if (impKind) {
       const targets = parseImports(lang.importTextOf ? lang.importTextOf(node) : node.text);
-      for (const target of targets) if (target) imports.push(target);
+      for (const target of targets) {
+        if (!target) continue;
+        imports.push(target);
+        // Dart：export 'package:Y/…'（impKind === 'export'）→ 记下 Y，父进程会算成包级重导出（多跳 barrel）
+        if (impKind === 'export' && target.startsWith('package:')) reexports.push(target.slice(8).split('/')[0]);
+      }
       sweepComments(node);
       return;
     }
@@ -986,7 +1010,7 @@ function extractFile(source, tree, lang) {
   // 计数表 → 引用列表（顺序 = 首次出现顺序，跟改之前一致）
   for (const r of refCount.values()) refs.push(r);
   for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
-  return { types, imports, refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, imports, reexports, refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -1483,6 +1507,7 @@ async function extractFiles(files) {
       imports: facts.imports,
       types: typeIds,
     };
+    if (facts.reexports.length) part.file.reexports = facts.reexports;
     if (isTestPath(f.rel)) part.file.isTest = true;
     part.ns = facts.namespaces;
     parts.push(part);
@@ -1851,6 +1876,36 @@ export async function scan(opts) {
   const byRel = new Map(reused);
   for (const p of freshParts) for (const pf of p.files || []) byRel.set(pf.rel, pf);
   const { fileRecs, allTypes, allRefs, allUses, fileNamespaces, failures } = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
+  // Dart 的包级重导出图（多跳 barrel）：flutter_riverpod 转出 riverpod 的类型时，
+  // import package:flutter_riverpod/… 也应该能撑住 riverpod 里的目标（实测 riverpod 样本上这是大头）。
+  // 闭包最多 3 跳、按包名去重；有环也不会死（seen 去重）。
+  {
+    const named = packages.filter((x) => x.name);
+    if (named.length) {
+      const byDir = named.slice().sort((a, b) => (b.dir || '').length - (a.dir || '').length);
+      const byName = new Map(named.map((x) => [x.name, x]));
+      const direct = new Map();
+      for (const fr of fileRecs) {
+        if (!fr || !fr.reexports || !fr.reexports.length) continue;
+        const owner = byDir.find((x) => !x.dir || fr.path === x.dir || fr.path.startsWith(x.dir + '/'));
+        if (!owner) continue;
+        let set = direct.get(owner.name);
+        if (!set) { set = new Set(); direct.set(owner.name, set); }
+        for (const r of fr.reexports) if (byName.has(r)) set.add(r);
+      }
+      for (const x of named) {
+        const seen = new Set();
+        const stack = [...(direct.get(x.name) || [])];
+        while (stack.length && seen.size < 20) {
+          const y = stack.pop();
+          if (y === x.name || seen.has(y)) continue;
+          seen.add(y);
+          for (const z of direct.get(y) || []) stack.push(z);
+        }
+        if (seen.size) x.exports = [...seen];
+      }
+    }
+  }
 
   // ① 把“调用 / 成员访问”的位置挂回各自所属类型（没内容就不带这个键，保持 bundle 精简）
   for (const u of allUses) {
