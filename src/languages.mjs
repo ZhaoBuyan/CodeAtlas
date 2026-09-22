@@ -416,6 +416,103 @@ const rubyImportText = (node) => {
   return inner ? inner.text : '';
 };
 
+// ---------- Dart ----------
+/** Dart 的成员：declaration（字段 / 构造函数）、method_signature（方法 / getter / setter）、enum_constant */
+const dartMembersOf = (node) => {
+  const idOf = (n) => {
+    if (!n) return null;
+    const hit = n.namedChildren.find((c) => c.type === 'identifier');
+    return hit ? hit.text : null;
+  };
+  if (node.type === 'declaration') {
+    // 构造函数（`Circle(this.radius) : super('circle')`）和**抽象方法**（`double area();`）
+    // 都是 declaration 里包着一个 *_signature 节点（实测：tests/.probe-dart3.mjs）
+    const sig = node.namedChildren.find((c) => /_signature$/.test(c.type));
+    if (sig) {
+      const name = idOf(sig);
+      if (!name) return null;
+      return [{ kind: /constructor_signature$/.test(sig.type) ? 'ctor' : 'method', name }];
+    }
+    const list = node.namedChildren.find((c) => /identifier_list$/.test(c.type));
+    if (list) {
+      const names = list.namedChildren
+        .map((c) => (c.type === 'initialized_identifier' ? idOf(c) : c.type === 'identifier' ? c.text : null))
+        .filter(Boolean);
+      return names.length ? names.map((n) => ({ kind: 'field', name: n })) : null;
+    }
+    return null;
+  }
+  if (node.type === 'method_signature') {
+    const sig = node.namedChildren.find((c) => /_signature$/.test(c.type)) || node;
+    const name = idOf(sig);
+    return name ? [{ kind: 'method', name }] : null;
+  }
+  if (node.type === 'function_signature') {
+    // 只有**顶层**的 function_signature 才算成员（实测：它的父节点是 program）——
+    // 方法里 / 抽象方法（declaration 里）的那个已经由 method_signature / declaration 分支记过了
+    if (!node.parent || node.parent.type !== 'program') return null;
+    const name = idOf(node);
+    return name ? [{ kind: 'function', name }] : null;
+  }
+  if (node.type === 'enum_constant') {
+    const name = idOf(node);
+    return name ? [{ kind: 'enumValue', name }] : null;
+  }
+  return null;
+};
+
+/** Dart 的类名不是 `name` 字段：class/mixin/extension/enum 取裸 identifier，type_alias 取 type_identifier */
+const dartNameOf = (node) => {
+  const pick = (t) => {
+    const hit = node.namedChildren.find((c) => c.type === t);
+    return hit ? hit.text : null;
+  };
+  switch (node.type) {
+    case 'class_definition':
+    case 'mixin_declaration':
+    case 'extension_declaration':
+    case 'enum_declaration':
+      return pick('identifier');
+    case 'type_alias':
+      return pick('type_identifier');
+    default:
+      return null;
+  }
+};
+
+/** `import 'a/b.dart' show X;` / `export 'c.dart';` → 取 uri（去掉引号） */
+const dartImportText = (node) => {
+  let uri = null;
+  const w = (n) => {
+    if (!uri && n.type === 'uri') uri = n;
+    for (const c of n.namedChildren) w(c);
+  };
+  w(node);
+  return uri ? uri.text.replace(/^['"]|['"]$/g, '') : '';
+};
+
+/** Dart 的签名都包在 *_signature 里（declaration 与 method_signature 都可能包着一层） */
+const dartSigNode = (node) => {
+  if (node.type === 'declaration' || node.type === 'method_signature') {
+    return node.namedChildren.find((c) => /_signature$/.test(c.type)) || node;
+  }
+  return node;
+};
+
+/** Dart：参数表是 formal_parameter_list（通用参数表名单里没这个节点名） */
+const dartParamsOf = (node) => dartSigNode(node).namedChildren.find((c) => c.type === 'formal_parameter_list') || null;
+
+/** Dart：返回类型写在名字**前面**（通用现则③找的是参数表后面，够不着） */
+const dartReturnTypeOf = (node) => {
+  const sig = dartSigNode(node);
+  const TYPEY = new Set(['type_identifier', 'void_type', 'function_type', 'nullable_type', 'record_type']);
+  const kids = sig.namedChildren;
+  const stop = kids.findIndex((c) => c.type === 'identifier' || /identifier_list$/.test(c.type));
+  const upto = stop < 0 ? kids.length : stop;
+  for (let i = 0; i < upto; i++) if (TYPEY.has(kids[i].type)) return kids[i];
+  return null;
+};
+
 export const LANGUAGES = {
   csharp: {
     id: 'csharp',
@@ -588,6 +685,43 @@ export const LANGUAGES = {
     baseFields: [],
     baseNodes: ['delegation_specifier'],
     decisions: ['if_expression', 'when_expression', 'for_statement', 'while_statement', 'try_expression', 'catch_block'],
+    decisionOps: [],
+  },
+
+  // ---------- Dart ----------
+  // 节点名都是实测出来的（2026-09-23，tests/probe-nodes.mjs --wasm dart/…）：
+  //   class_definition / mixin_declaration / extension_declaration / enum_declaration / type_alias
+  //   class_body 里的成员：declaration（字段 / 构造函数）、method_signature（方法 / getter / setter）
+  //   import_or_export → library_import → import_specification → configurable_uri → uri
+  // 两个坑：① 类名不是 `name` 字段（是裸 identifier / type_identifier 子节点）；② 一句 declaration 可能声明多个字段。
+  dart: {
+    id: 'dart',
+    label: 'Dart',
+    status: 'ok',
+    exts: ['.dart'],
+    wasm: 'dart/tree-sitter-dart.wasm',
+    namespaces: {},
+    types: {
+      class_definition: 'class',
+      mixin_declaration: 'mixin',
+      extension_declaration: 'extension',
+      enum_declaration: 'enum',
+      type_alias: 'typedef',
+    },
+    members: {
+      method_signature: 'method',
+      declaration: 'field',
+      enum_constant: 'enumValue',
+    },
+    membersOf: dartMembersOf,
+    nameOf: dartNameOf,
+    paramsOf: dartParamsOf,
+    returnTypeOf: dartReturnTypeOf,
+    imports: { import_or_export: 1 },
+    importTextOf: dartImportText,
+    baseFields: ['superclass'],
+    baseNodes: [],
+    decisions: ['if_statement', 'switch_statement', 'for_statement', 'while_statement', 'do_statement', 'try_statement', 'catch_clause'],
     decisionOps: [],
   },
 

@@ -963,6 +963,48 @@ check(/\[(有支撑|backed)\]/.test(rAls) && !/\[(仅同名|same name only)\]/.t
   (rAls.split('\n').find((l) => /trim/.test(l)) || '').trim().slice(0, 60));
 als.proc.kill('SIGKILL');
 
+// ---------------------------------------------------------------------------
+// ⑯ 2026-09-23：**新增 Dart 支持**（朋友问“没有 dart 吗” → 查了一下 npm 包里其实有现成 wasm）
+// 三个实测到的坑：类名不是 name 字段 / 抽象方法与构造函数都包在 declaration 里 / 返回类型在名字前面。
+const dartTmp = path.join(os.tmpdir(), `codeatlas-dart-${process.pid}`);
+const { out: dartOut } = scanProject(dartTmp, {
+  'lib/util.dart': 'class Helper {\n  int twice(int n) => n * 2;\n}\n',
+  'lib/main.dart': "import 'util.dart';\n\nclass App {\n  final Helper h = Helper();\n}\n",
+}, 'dart');
+const dartB = readBundle(dartOut);
+const dartMain = dartB.files.find((f) => /main\.dart$/.test(f.path));
+check((dartMain?.imports || []).includes('util.dart') && !(dartMain?.imports || []).some((i) => /[\r\n\x22']/.test(i)),
+  '⑯ Dart：import util.dart 采得到（且没有引号 / 换行残留）', JSON.stringify(dartMain?.imports || []));
+const dartHelper = dartB.types.find((t) => t.name === 'Helper');
+check(Boolean(dartHelper) && (dartHelper.memberList || []).some((m) => m.n === 'twice' && m.k === 'method'),
+  '⑯ Dart：类名与成员都取得到（类名不是 name 字段这个坑）',
+  JSON.stringify((dartHelper?.memberList || []).map((m) => `${m.k}:${m.n}`)));
+const dartSvc = spawnMcp(dartOut);
+await dartSvc.ready;
+const rDh = await dartSvc.call('refs', { name: 'Helper', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rDh) && !/\[(仅同名|same name only)\]/.test(rDh),
+  '⑯ Dart：util.dart 的跨文件引用算“有支撑”',
+  (rDh.split('\n').find((l) => /Helper/.test(l)) || '').trim().slice(0, 70));
+dartSvc.proc.kill('SIGKILL');
+// 再补一道：Dart 的 `package:xxx/…` 入口形式（pubspec.yaml 的包名 + barrel 转出）
+const dartPkgTmp = path.join(os.tmpdir(), `codeatlas-dartpkg-${process.pid}`);
+const { out: dartPkgOut } = scanProject(dartPkgTmp, {
+  'pubspec.yaml': 'name: demo_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n',
+  'lib/demo.dart': "export 'src/thing.dart';\n",
+  'lib/src/thing.dart': 'class Thing {\n  int id = 1;\n}\n',
+  'test/thing_test.dart': "import 'package:demo_app/demo.dart';\n\nclass Uses {\n  final Thing t = Thing();\n}\n",
+}, 'dart');
+const dartPkgB = readBundle(dartPkgOut);
+check((dartPkgB.source.packages || []).some((p) => p.name === 'demo_app'),
+  '⑯ Dart：pubspec.yaml 的包名进包清单', JSON.stringify(dartPkgB.source.packages || []));
+const dartPkgSvc = spawnMcp(dartPkgOut);
+await dartPkgSvc.ready;
+const rThing = await dartPkgSvc.call('refs', { name: 'Thing', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rThing) && !/\[(仅同名|same name only)\]/.test(rThing),
+  '⑯ Dart：package:demo_app/… 的 barrel 转出引用算“有支撑”',
+  (rThing.split('\n').find((l) => /Thing/.test(l)) || '').trim().slice(0, 70));
+dartPkgSvc.proc.kill('SIGKILL');
+
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);
 const { out: topOut } = scanProject(topTmp, {

@@ -266,4 +266,28 @@ export const EXTRA_CASES = [
     membersMin: 24,
     errorsMax: 0,
   },
+  {
+    // Dart（2026-09-23 新支持）：三个实测到的坑各挡一处 ——
+    // ① 类名不是 `name` 字段（裸 identifier / type_identifier 子节点）→ nameOf 钩子；
+    // ② 字段/构造函数/**抽象方法**都包在 declaration 里（`double area();` 也是）→ membersOf 钩子；
+    // ③ 返回类型写在名字**前面**（通用现则③找的是参数表后面）→ returnTypeOf 钩子。
+    dir: 'dart',
+    lang: 'dart',
+    types: 5,
+    names: ['Shape', 'Walkable', 'Circle', 'Kind', 'sample'],
+    kinds: { class: 2, mixin: 1, enum: 1, module: 1 },
+    extends: ['Circle -> Shape', 'Circle -> Walkable'],
+    importsMin: 1,
+    importsInclude: ['dart:math'],
+    importsAtomic: true,
+    docs: 2,
+    memberSigs: [
+      ['Shape', 'area', '(): double'],      // 抽象方法：declaration → function_signature
+      ['Circle', 'area', '(): double'],
+      ['sample', 'helper', '(int a): int'],
+      ['Circle', 'radius', ': double'],      // 字段的类型在 identifier_list 前面
+    ],
+    membersMin: 10,
+    errorsMax: 0,
+  },
 ];

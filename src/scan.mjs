@@ -288,7 +288,7 @@ const ID_TYPES = ['type_identifier', 'simple_identifier', 'scoped_identifier', '
  * ① 成员级名字级调用图（2026-09-20）：这个名字所在的这一行，看起来是**调用**还是**成员访问**？
  *   判据只看源码那一行：名字后面（跳过空白）紧跟 `(` → 调用；名字前面紧挨 `.` / `>` / `:` → 成员访问
  *   （`.` / `->` / `::` / `?.` 都能盖住）。
- * 为什么不走语法树：28 门语言的“调用 / 成员访问”节点名各不相同，逐门实测的成本远超收益；而这里需要的只是
+ * 为什么不走语法树：29 门语言的“调用 / 成员访问”节点名各不相同，逐门实测的成本远超收益；而这里需要的只是
  *   “这个名字在哪些行被用到”——**行号来自语法树**（node.startPosition），位置判据来自源码文本。
  * ⚠ `startPosition/endPosition.column` 直接用，**不要再做字节换算**：web-tree-sitter 是拿 JS 字符串（UTF-16）解析的，
  *   它给的 column 就是码元偏移（曾经按“UTF-8 字节”算过一次，结果中文注释在同一行时整个错位 —— 有门盯着）。
@@ -1680,6 +1680,10 @@ function discoverPackages(roots) {
           push(m ? m[1].replace(/-/g, '_') : '', pkgDir);
         } else if (e.name === 'go.mod') {
           const m = txt.match(/^\s*module\s+(\S+)/m);
+          push(m ? m[1] : '', pkgDir);
+        } else if (e.name === 'pubspec.yaml') {
+          // Dart：包名写在 pubspec.yaml 的第一层（name: riverpod）—— import 里写作 package:riverpod/…
+          const m = txt.match(/^name:\s*([^\s#]+)/m);
           push(m ? m[1] : '', pkgDir);
         } else if (e.name === 'Package.swift') {
           // Swift：模块名通常与包名同名（`import Alamofire`）—— SwiftPM 的清单也是 Swift 代码，粗暴取第一个 name

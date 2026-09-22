@@ -140,7 +140,7 @@ npm run publish:lite   # 只出精简版
   不是当前版本的旧解包目录会在**每次启动**时自动清掉（只留**当前在用的 + 最近用过的那个**），免得换个版本就多留一百多 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本 / **包内容指纹**不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 28 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
+- 打包只带**我们支持的 29 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - **反编译在完全版里无需安装**：扫 `.dll` / `.exe` 用链接进启动器的反编译器（ILSpy 引擎）；扫 `.jar` 用自带的裁剪版 Java 运行时 + cfr.jar —— 都不需要先装 ilspycmd / sfextract / Java。精简版不带 Java 运行时（它本来就要求 .NET 9 + Node），扫 `.jar` 仍需自己装 Java。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -260,7 +260,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（28 门，各自独立进程）
+npm test                                          # 语言 fixtures 回归（29 门，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
 node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
@@ -363,7 +363,7 @@ node src/cli.mjs langs [--json]                    # 看支持哪些语言（--j
 反编译只支持三类：**.NET 程序集**、**.NET 单文件发行版**、**Java .jar**（详见下面「没有源码也能扫」的已知限制）。
 Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指它就能扫。
 
-### 认识的语言（28 门代码语言）
+### 认识的语言（29 门代码语言）
 
 | 语言 | 后缀 | 状态 |
 | --- | --- | --- |
@@ -375,6 +375,7 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | Java | `.java` | ✅ fixtures 回归 |
 | Python | `.py` | ✅ fixtures（含 docstring） |
 | Kotlin | `.kt` `.kts` | ✅ fixtures |
+| Dart | `.dart` | ✅ 实测（bloc / riverpod：类名不是 `name` 字段、抽象方法包在 `declaration` 里；`package:` 入口按包对上） |
 | Lua | `.lua` | ✅ fixtures（无类型声明 → 合成 module 节点） |
 | Go | `.go` | ✅ fixtures（struct / interface 区分） |
 | Rust | `.rs` | ✅ fixtures（trait/struct/enum/impl） |
@@ -487,7 +488,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：28 门代码语言 + 5 种文件级格式
+- [x] 语言覆盖：29 门代码语言 + 5 种文件级格式
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤

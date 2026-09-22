@@ -161,7 +161,7 @@ runtime (about 30 MB).
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
-- The payload ships wasm only for the **28 code languages + 5 file-level formats** we support
+- The payload ships wasm only for the **29 code languages + 5 file-level formats** we support
   and nothing else (the unused grammars in the npm package stay out).
 - Third-party components and licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
   (a copy also ships in the extracted engine directory).
@@ -440,7 +440,7 @@ Decompilation supports three things: **.NET assemblies**, **.NET single-file pub
 (see the known limits under "Scanning without source" above).
 Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, point at it and it scans.
 
-### Supported languages (28 code languages)
+### Supported languages (29 code languages)
 
 | Language | Extensions | Status |
 | --- | --- | --- |
@@ -452,6 +452,7 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | Java | `.java` | ✅ fixtures regression |
 | Python | `.py` | ✅ fixtures (docstrings included) |
 | Kotlin | `.kt` `.kts` | ✅ fixtures |
+| Dart | `.dart` | ✅ fixtures + measured on bloc / riverpod (class names are not a `name` field; abstract methods sit inside `declaration`; `package:` entry points match by package) |
 | Lua | `.lua` | ✅ fixtures (no type declarations → synthetic module node) |
 | Go | `.go` | ✅ fixtures (struct / interface distinguished) |
 | Rust | `.rs` | ✅ fixtures (trait/struct/enum/impl) |
@@ -600,7 +601,7 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
 - [x] Grouping layer: system rules (facets config) + directory / namespace / flat
 - [x] MCP server (search symbols / find references / export subgraphs) for AI
-- [x] Language coverage: 28 code languages + 5 file-level formats
+- [x] Language coverage: 29 code languages + 5 file-level formats
 - [x] Dependency graph view (force-directed) + package-level dependency matrix
 - [x] Pick languages to scan in the launcher (UI + `--lang`)
 - [x] Search improvements: type names + member names (web and MCP) · per-language filtering in the map

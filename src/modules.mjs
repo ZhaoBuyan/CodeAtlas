@@ -101,6 +101,15 @@ export function importMatchesTarget(rawImport, target, ctx) {
     for (const p of ctx.packages) {
       if (!p?.name) continue;
       const base = p.dir ? `${p.dir}/` : '';
+      // Dart 的 URI 形式：`package:riverpod/src/x.dart` —— 先按“包下 lib/子路径”精确对，
+      // 对不上就落到“同属这个包”那一档（barrel 转出：类型在 src/ 下、import 写的是包入口，
+      // 实测 riverpod 的测试就是这么引的）
+      if (imp.startsWith(`package:${p.name}/`)) {
+        const sub = imp.slice(`package:${p.name}/`.length);
+        if (tPath.startsWith(`${base}lib/${sub}.`) || tPath.startsWith(`${base}lib/${sub}/`) || tPath === `${base}lib/${sub}`) return true;
+        if (tPath.startsWith(base)) return true;
+        continue;
+      }
       if (imp === p.name) { if (tPath.startsWith(base)) return true; continue; }
       const sep = imp.startsWith(`${p.name}/`) ? '/' : imp.startsWith(`${p.name}::`) ? '::' : null;
       if (!sep) continue;
