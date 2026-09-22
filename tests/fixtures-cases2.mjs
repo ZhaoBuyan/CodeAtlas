@@ -267,5 +267,3 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
 ];
-},
-];

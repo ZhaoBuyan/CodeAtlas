@@ -131,7 +131,27 @@ export function csharpPrimaryConstructors(src) {
  * 不改写就有 3 处解析异常。
  */
 export function csharp(src) {
-  return csharpRequiredIdentifier(src);
+  return csharpConditionalDirectives(csharpRequiredIdentifier(src));
+}
+
+/**
+ * C# 的条件编译指令（`#if / #else / #elif / #endif`）**只留空行**（行号不动）。
+ * 为什么：语法包对“多个 #if 块叠在一起”的恢复很差 —— 实测 Newtonsoft.Json 的 TestFixtureBase.cs
+ *（4 个 #if 块 + 后面跟 namespace）整个 namespace 被吞进一个 ERROR 节点，8 个类型全丢了命名空间，
+ * 连带 294 条跨文件引用被标成“仅同名”。两个分支的代码本来就会进语法树（preproc_if 的两个分支都在），
+ * 去掉指令行不改变提取结果，只是让语法包别在这上面翻车。
+ */
+export function csharpConditionalDirectives(src) {
+  const mask = codeMask(src);
+  const lines = src.split('\n');
+  let pos = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const at = line.search(/\S/);
+    if (at >= 0 && /^#\s*(if|else|elif|endif)\b/.test(line.slice(at)) && mask[pos + at] === 1) lines[i] = '';
+    pos += line.length + 1;
+  }
+  return lines.join('\n');
 }
 
 /**

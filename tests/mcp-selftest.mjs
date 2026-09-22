@@ -12,6 +12,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { freshnessNote, parseExclude, isExcluded } from '../src/mcp.mjs';
 import { importMatchesTarget } from '../src/modules.mjs';
+import { csharpConditionalDirectives } from '../src/preprocess.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -788,6 +789,110 @@ check(/\[(有支撑|backed)\]/.test(rGoRoot) && !/\[(仅同名|same name only)\]
   '⑬ 跨包引用走 module 路径（模块根 + 子包）都算“有支撑”',
   (rGoRoot.split('\n').find((l) => /Root/.test(l)) || '').trim().slice(0, 60));
 gms.proc.kill('SIGKILL');
+
+// ---------------------------------------------------------------------------
+// ⑭ 2026-09-22 第二轮（另 10 个开源项目实测）：提取器里的六个小缺陷，各配一道门。
+// ---------------------------------------------------------------------------
+// ① Kotlin：import 节点会把紧随的 KDoc 并进来（coroutines 4,421 条里 278 条带尾巴）→ 先切注释
+// ② 通配导入：`import kotlinx.coroutines.*` 一个目标也撞不上（Kotlin/Java/Scala/Rust 都吃）
+// ③ JS/TS：CommonJS 的 `require('x')`、TS 的 `import x = require('y')` 都进不了 import
+// ④ Swift：`@testable import X` 带着属性进来；模块名（Package.swift）没进包清单
+// ⑤ Ruby：RSpec 的 `include("path=/foo")` 会被当 mixin 采成坏串；类引用（constant）没进 refs
+// ⑥ PHP：类型引用节点是 `name`（不是 identifier）→ 一条 ref 都采不到；命名空间分隔符 `\` 没归一
+// ⑦ C#：多个 `#if` 块叠在一起时命名空间被吞进 ERROR（Newtonsoft 上 8 个类型全丢 ns）→ 指令行留空
+const ktTmp = path.join(os.tmpdir(), `codeatlas-ktimports-${process.pid}`);
+const { out: ktOut } = scanProject(ktTmp, {
+  'src/lib.kt': 'package demo\n\nimport kotlinx.coroutines.*\n\n/**\n * 说明。\n */\nclass Widget {\n    fun run(): Job = launch { }\n}\n',
+}, 'kotlin');
+const ktF = readBundle(ktOut).files.find((f) => f.path === 'src/lib.kt');
+check((ktF?.imports || []).includes('kotlinx.coroutines.*') && !(ktF?.imports || []).some((i) => /[\r\n]|\/\*/.test(i)),
+  '⑭ Kotlin：import 尾巴上的 KDoc 不再并进路径',
+  JSON.stringify(ktF?.imports || []).slice(0, 60));
+check(importMatchesTarget('kotlinx.coroutines.*', mt('src/k.kt', 'kotlinx.coroutines.internal', ''))
+  && !importMatchesTarget('kotlinx.coroutines.*', mt('src/k.kt', 'kotlinx.other', '')),
+  '⑭ 通配导入（`pkg.*`）按包算有支撑、不越界');
+
+const cjsTmp = path.join(os.tmpdir(), `codeatlas-cjs-${process.pid}`);
+const { out: cjsOut } = scanProject(cjsTmp, {
+  'lib/a.js': 'module.exports = function a() { return 1; };\n',
+  'lib/b.js': 'const a = require("./a.js");\nmodule.exports = a;\n',
+  'lib/c.js': 'module.exports = { name: "c" };\n',
+  'lib/d.ts': 'import c = require("./c.js");\nexport const name = c.name;\n',
+}, 'javascript,typescript');
+const cjsB = readBundle(cjsOut);
+const bFile = cjsB.files.find((f) => f.path === 'lib/b.js');
+const dFile = cjsB.files.find((f) => f.path === 'lib/d.ts');
+check((bFile?.imports || []).includes('./a.js') && (dFile?.imports || []).includes('./c.js'),
+  '⑭ CommonJS 的 require / TS 的 import-equals 都进 import（不再是 "require(…)" 垃圾串）',
+  JSON.stringify([bFile?.imports, dFile?.imports]).slice(0, 90));
+
+const swTmp = path.join(os.tmpdir(), `codeatlas-swiftmod-${process.pid}`);
+const { out: swOut } = scanProject(swTmp, {
+  'Package.swift': '// swift-tools-version:5.7\nlet package = Package(\n    name: "Alamofire",\n    targets: [.target(name: "Alamofire", path: "Source")]\n)\n',
+  'Source/Core/Session.swift': 'public class Session {\n    public init() { }\n}\n',
+  'Tests/SessionTests.swift': 'import XCTest\n@testable import Alamofire\n\nfinal class SessionTests: XCTestCase {\n    func testIt() {\n        var s: Session? = nil\n        _ = s\n    }\n}\n',
+}, 'swift');
+const swB = readBundle(swOut);
+const swT = swB.files.find((f) => /SessionTests\.swift$/.test(f.path));
+check((swT?.imports || []).includes('Alamofire') && !(swT?.imports || []).some((i) => i.includes('@')),
+  '⑭ Swift：`@testable import X` 剥掉属性，留下模块名',
+  JSON.stringify(swT?.imports || []).slice(0, 60));
+check((swB.source.packages || []).some((p) => p.name === 'Alamofire'),
+  '⑭ Swift：Package.swift 的模块名进包清单', JSON.stringify(swB.source.packages || []));
+const sws = spawnMcp(swOut);
+await sws.ready;
+const rSw = await sws.call('refs', { name: 'Session', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rSw) && !/\[(仅同名|same name only)\]/.test(rSw),
+  '⑭ Swift：`import Alamofire` 的跨文件引用算“有支撑”',
+  (rSw.split('\n').find((l) => /Session/.test(l)) || '').trim().slice(0, 60));
+sws.proc.kill('SIGKILL');
+
+const rbTmp = path.join(os.tmpdir(), `codeatlas-rbmix-${process.pid}`);
+const { out: rbOut } = scanProject(rbTmp, {
+  'lib/base.rb': 'class Base\nend\n',
+  'lib/widget.rb': 'require_relative \'base\'\n\nclass Widget < Base\n  include Comparable\n\n  def build\n    Base.new\n  end\nend\n',
+  'spec/widget_spec.rb': 'expect(header).to include(\'path=/foo\')\nexpect(x).to include(";")\n',
+}, 'ruby');
+const rbB = readBundle(rbOut);
+const rbSpec = rbB.files.find((f) => /widget_spec\.rb$/.test(f.path));
+check((rbSpec?.imports || []).length === 0,
+  '⑭ Ruby：RSpec 的 `include("…")` 不再被当 import 采进来', JSON.stringify(rbSpec?.imports || []));
+const rbW = rbB.files.find((f) => /widget\.rb$/.test(f.path));
+check((rbW?.imports || []).includes('base') && (rbW?.imports || []).includes('Comparable'),
+  '⑭ Ruby：`require_relative base` 与 `include Comparable` 都采得到', JSON.stringify(rbW?.imports || []));
+check(rbB.edges.some((e) => e.kind === 'ref' && rbB.types[e.from]?.name === 'Widget' && rbB.types[e.to]?.name === 'Base'),
+  '⑭ Ruby：类引用（constant，如 `Base`）进引用图');
+
+const phTmp = path.join(os.tmpdir(), `codeatlas-phpns-${process.pid}`);
+const { out: phOut } = scanProject(phTmp, {
+  'src/Client.php': '<?php\nnamespace App;\n\nclass Client\n{\n    public function send(Helper $h): Reply\n    {\n        return new Reply();\n    }\n}\n',
+  'src/Helper.php': '<?php\nnamespace App;\n\nclass Helper\n{\n}\n',
+  'src/Reply.php': '<?php\nnamespace App;\n\nclass Reply\n{\n}\n',
+}, 'php');
+const phB = readBundle(phOut);
+const phEdges = phB.edges.filter((e) => e.kind === 'ref').map((e) => `${phB.types[e.from]?.name}->${phB.types[e.to]?.name}`);
+check(phEdges.includes('Client->Helper') && phEdges.includes('Client->Reply'),
+  '⑭ PHP：类型引用（name 节点）进引用图（以前 0 条）', phEdges.join(' ').slice(0, 70));
+check(importMatchesTarget('GuzzleHttp\\Client', mt('src/Client.php', 'GuzzleHttp', 'GuzzleHttp\\Client'))
+  && !importMatchesTarget('Acme\\Thing', mt('src/Client.php', 'GuzzleHttp', 'GuzzleHttp\\Client')),
+  '⑭ PHP：命名空间分隔符 `\\` 归一后 use 能对上（别的命名空间仍不算）');
+
+const csTmp = path.join(os.tmpdir(), `codeatlas-csprec-${process.pid}`);
+const { out: csOut } = scanProject(csTmp, {
+  'a/Foo.cs': ['using System;', '#if A', 'using X1;', '#else', 'using X2;', '#endif', '#if B', 'using Y1;', '#else', 'using Y2;', '#endif', '#if C', 'using Z1;', '#endif', '', 'namespace Demo.Tests', '{', '    public class Foo', '    {', '    }', '}', ''].join('\n'),
+}, 'csharp');
+const fooT = readBundle(csOut).types.find((t) => t.name === 'Foo');
+check(!!fooT && fooT.ns === 'Demo.Tests',
+  '⑭ C#：叠 #if 块的文件里类型仍带对命名空间（烟测）',
+  fooT ? `ns=${JSON.stringify(fooT.ns)}` : '没抽到 Foo');
+// 真正的回归门在预处理函数上：指令行要留空、行数不能变
+//（⚠ 缩不到自包含的最小复现 —— 触发靠真文件整体形状。真样本效果见提交信息：
+//  Newtonsoft.Json 解析异常 226 → 2、空 ns 类型 13 → 3、有支撑 58% → 66%）
+const csSrc = 'using System;\n#if A\nusing X1;\n#else\nusing X2;\n#endif\n\nnamespace Demo.Tests\n{\n    public class Foo\n    {\n    }\n}\n';
+const csPre = csharpConditionalDirectives(csSrc);
+check(!/(^|\n)\s*#\s*(if|else|elif|endif)\b/.test(csPre) && csPre.split('\n').length === csSrc.split('\n').length
+  && csPre.includes('using X1;') && csPre.includes('using X2;'),
+  '⑭ C#：条件编译指令行留空（行数不变，分支代码不丢）');
 
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);

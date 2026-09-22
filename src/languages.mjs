@@ -128,8 +128,26 @@ function isFunctionAssignment(node) {
   return Boolean(value && ['arrow_function', 'function_expression', 'function'].includes(value.type));
 }
 
+/**
+ * JS / TS 的 import：除了 `import_statement`，还认 **CommonJS 的 require 调用**
+ *（`const x = require('y')` / TS 的 `import x = require('y')`）—— 老 JS 仓库里到处都是。
+ * 只认“函数名就是 `require`、且首个实参是字符串字面量”的调用，别的同名调用不碰
+ *（实测 axios：不认这一档时 lib/ 里一堆 require 一条也进不来）。
+ */
+const jsImportKind = (node) => {
+  if (node.type === 'import_statement') return 'import';
+  if (node.type === 'call_expression') {
+    const fn = node.childForFieldName('function');
+    const args = node.childForFieldName('arguments');
+    const first = args && args.namedChildren[0];
+    if (fn && fn.type === 'identifier' && fn.text === 'require' && first && first.type === 'string') return 'require';
+  }
+  return null;
+};
+
 // TS 与 TSX 的语法节点名完全一致（tsx 只是多了 JSX），共用一份
 const TS_SHAPE = {
+  importKindOf: jsImportKind,
   namespaces: { internal_module: 1 },
   types: {
     class_declaration: 'class',
@@ -285,11 +303,23 @@ const rubyImportKind = (node) => {
   return null;
 };
 
-/** 取第一个参数当目标：'json' → json；Comparable → Comparable */
+/**
+ * 取第一个参数当目标：`require 'json'` → json；`include Walkable` → Walkable。
+ * ⚠ `include` 在 RSpec 里是**同名 matcher**（`expect(x).to include('path=/foo')`）——
+ * 实参不是常量就一律不认（实测 sinatra 的 spec 上会采到 18 条 '/foo' '...' 这样的坏串）；
+ * `require` 只认字符串字面量（`require "#{x}"` 这种插值不认：路径是动态的）。
+ */
 const rubyImportText = (node) => {
   const args = node.childForFieldName('arguments');
   const first = args && args.namedChildren[0];
-  return first ? first.text : '';
+  if (!first) return '';
+  const m = node.childForFieldName('method');
+  if (m && ['include', 'extend', 'prepend'].includes(m.text)) {
+    return first.type === 'constant' || first.type === 'scope_resolution' ? first.text : '';
+  }
+  if (first.type !== 'string') return '';
+  const inner = first.namedChildren.find((c) => c.type === 'string_content');
+  return inner ? inner.text : '';
 };
 
 export const LANGUAGES = {
@@ -374,6 +404,7 @@ export const LANGUAGES = {
       field_definition: 'field',
     },
     imports: { import_statement: 1 },
+    importKindOf: jsImportKind,
     baseFields: [],
     baseNodes: ['class_heritage'],
     decisions: [
@@ -787,6 +818,15 @@ export const LANGUAGES = {
       enum_case: 'enumValue',
     },
     imports: { namespace_use_declaration: 1 },
+    // 类型引用在这个语法里是 `name` / `qualified_name`（不像别的语言叫 identifier / type_identifier）——
+    // 不加这两类就一个引用也采不到（实测 guzzle：132 个文件、0 条 ref 边）。
+    refTypes: ['name', 'qualified_name'],
+    // 但声明处的名字也是 `name` —— 那些不算引用
+    skipNameNodes: {
+      class_declaration: 'name', interface_declaration: 'name', trait_declaration: 'name', enum_declaration: 'name',
+      method_declaration: 'name', function_definition: 'name', enum_case: 'name', const_element: 'name',
+      namespace_definition: 'name',
+    },
     baseFields: [],
     baseNodes: ['base_clause', 'class_interface_clause'],
     decisions: ['if_statement', 'for_statement', 'foreach_statement', 'while_statement', 'switch_statement', 'case_statement', 'match_expression', 'catch_clause', 'conditional_expression', 'binary_expression'],
@@ -897,6 +937,8 @@ export const LANGUAGES = {
     nameOf: rubyName,
     importKindOf: rubyImportKind,
     importTextOf: rubyImportText,
+    // Ruby 的类型引用是**常量**（`Base` / `Walkable` / `Helper`）；identifier 是方法名（默认那两类仍生效）
+    refTypes: ['constant'],
     decisions: ['if', 'unless', 'if_modifier', 'unless_modifier', 'case', 'while', 'until', 'for', 'rescue', 'rescue_modifier', 'binary'],
     decisionOps: ['&&', '||'],
     isDecision: (node) => {

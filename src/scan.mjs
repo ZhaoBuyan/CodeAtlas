@@ -501,9 +501,25 @@ function expandUseTree(body) {
  */
 function parseImports(text) {
   const raw = String(text).trim();
-  // Rust 的可见性前缀：`pub use …` / `pub(crate) use …` / `pub(super) use …` —— 去掉再认
-  //（ripgrep 实测：`pub(crate) use crate::flags::{…}` 就是被漏掉的那一条）
-  const stmt = raw.replace(/^pub(?:\s*\([^)]*\))?\s+/, '');
+  // 先剥掉挡在前面的东西：Rust 的可见性前缀（`pub use` / `pub(crate) use`）、
+  // Swift 的属性（`@testable import X`）、以及**跟在后头的注释**
+  //（Kotlin 的 import 会把紧随的 KDoc 并进节点文本 —— 实测 coroutines 4,421 条 import 里 278 条带这个尾巴）。
+  const stmtRaw = raw
+    .replace(/^pub(?:\s*\([^)]*\))?\s+/, '')
+    .replace(/^@\w+(?:\([^)]*\))?\s+/, '');
+  // 剥掉语句**尾巴上的注释**：Kotlin 的 import 会把紧随的 KDoc / 行注释并进节点文本
+  //（实测 coroutines：4,354 条 import 里一度 278 条带尾巴；一次剥不干净——连着好几行 `//` 要循环剥）。
+  // 只在“注释一直延伸到结尾”时才切（多行 import 里的行内注释不算）。
+  let stmt = stmtRaw;
+  for (;;) {
+    const m = stmt.match(/\r?\n\s*(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)\s*$/);
+    if (!m) break;
+    stmt = stmt.slice(0, m.index).trimEnd();
+  }
+  // JS/TS 的 CommonJS：`require('x')` / `const x = require('x')` / TS 的 `import x = require('x')`
+  // —— 直接取引号里的路径（实测 axios：TS 的 import-equals 会被 `=` 分支切成 "require('axios')" 这种垃圾）
+  const cjs = stmt.match(/^(?:(?:const|let|var|import)\b[^=]*?=\s*)?require\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+  if (cjs) return [cjs[1]];
   // C/C++：#include <stdio.h> / #include "x.h"
   const inc = stmt.match(/^#\s*include\s*[<"]([^>"]+)[>"]/);
   if (inc) return [inc[1]];
@@ -835,6 +851,10 @@ function extractFile(source, tree, lang) {
     for (const c of node.namedChildren) if (c.type.includes('comment')) walk(c);
   };
 
+  // 各语言里“算引用”的节点名：默认 identifier / type_identifier；
+  // 个别语言要在配置里加（PHP 的类型引用是 name、Ruby 的类引用是 constant）
+  const refTypes = new Set(['identifier', 'type_identifier', ...(lang.refTypes || [])]);
+
   function walk(node) {
     const type = node.type;
 
@@ -982,7 +1002,7 @@ function extractFile(source, tree, lang) {
       }
     }
 
-    if (type === 'identifier' || type === 'type_identifier') {
+    if (refTypes.has(type)) {
       addRef(node);
       noteUse(node);     // ① 同一处标识符：顺手记下“这个名字在这一行是调用还是成员访问”
     } else if (USE_ID_TYPES.has(type)) {
@@ -1692,6 +1712,10 @@ function discoverPackages(roots) {
           push(m ? m[1].replace(/-/g, '_') : '', pkgDir);
         } else if (e.name === 'go.mod') {
           const m = txt.match(/^\s*module\s+(\S+)/m);
+          push(m ? m[1] : '', pkgDir);
+        } else if (e.name === 'Package.swift') {
+          // Swift：模块名通常与包名同名（`import Alamofire`）—— SwiftPM 的清单也是 Swift 代码，粗暴取第一个 name
+          const m = txt.match(/\bname\s*:\s*"([^"]+)"/);
           push(m ? m[1] : '', pkgDir);
         }
       }

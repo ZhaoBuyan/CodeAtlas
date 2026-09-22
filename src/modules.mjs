@@ -40,14 +40,22 @@ export function moduleKey(p) {
  *     不认它的话，实测 Django 上 **79%** 的边会落到“仅同名”。
  */
 export function importMatchesTarget(rawImport, target, ctx) {
-  const imp = String(rawImport || '').replace(/[;,]+$/, '').replace(/^['"]|['"]$/g, '').trim();
+  let imp = String(rawImport || '').replace(/[;,]+$/, '').replace(/^['"]|['"]$/g, '').trim();
   if (!imp) return false;
+  // 通配导入（`import kotlinx.coroutines.*` / `use std::collections::*` / Scala 的 `a.b._`）：
+  // 去掉通配尾巴按包比 —— 实测 coroutines 上大量跨包引用卡在这里（通配串一个目标也撞不上）
+  const impBase = imp.replace(/(?:\.\*|::\*|\._)$/, '');
+  if (impBase !== imp) imp = impBase;
   const ns = target.ns || '';
   const fqn = target.fqn || '';
-  if (fqn && imp === fqn) return true;
+  // PHP 的命名空间分隔符是 `\`（`GuzzleHttp\Client`）、其它语言是 `.` —— 比命名空间 / 限定名时两边都归一成 `.`
+  //（不归一的话 PHP 的 use 一条也对不上：实测 guzzle 上 import 口径只有 2%）
+  const dot = (s) => String(s).replace(/\\/g, '.');
+  if (fqn && (imp === fqn || dot(imp) === dot(fqn))) return true;
   if (ns) {
-    if (imp === ns) return true;
-    if (imp.startsWith(`${ns}.`) || ns.startsWith(`${imp}.`)) return true;
+    const di = dot(imp), dn = dot(ns);
+    if (di === dn) return true;
+    if (di.startsWith(`${dn}.`) || dn.startsWith(`${di}.`)) return true;
   }
   // 相对路径那种 import（'./f1.js' / '../util'）走模块名这条路：比目标文件的模块名
   if (target.path && moduleKey(imp) === moduleKey(target.path)) return true;
