@@ -251,8 +251,14 @@ function evidenceOf(idx, e) {
   const f = idx.files.get(src.file);
   const target = { ns: dst.ns, fqn: dst.fqn, path: idx.files.get(dst.file)?.path };
   if (f && target.path) {
-    // 仓库自身的包名（package.json 的 name → 包目录）：TS/JS 的“包名自引用”靠它（与扫描期同一套口径）
-    if (idx._pkgCtx === undefined) idx._pkgCtx = idx.b?.source?.packages?.length ? { packages: idx.b.source.packages } : null;
+    // 仓库自身的包名（package.json 的 name → 包目录）+ TS/JS 的路径别名（tsconfig paths）：
+    // 与扫描期同一套口径
+    if (idx._pkgCtx === undefined) {
+      const src0 = idx.b?.source || {};
+      idx._pkgCtx = (src0.packages?.length || src0.aliases?.length)
+        ? { packages: src0.packages || [], aliases: src0.aliases || [] }
+        : null;
+    }
     for (const raw of f.imports || []) if (importMatchesTarget(raw, target, idx._pkgCtx)) return 'import';
   }
   // C# / VB：子命名空间**不用 using 也能引用父命名空间里的类型**（语言语义如此）。实测一个 C# 项目里有 7 条

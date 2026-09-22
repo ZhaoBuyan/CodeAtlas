@@ -894,6 +894,75 @@ check(!/(^|\n)\s*#\s*(if|else|elif|endif)\b/.test(csPre) && csPre.split('\n').le
   && csPre.includes('using X1;') && csPre.includes('using X2;'),
   '⑭ C#：条件编译指令行留空（行数不变，分支代码不丢）');
 
+// ---------------------------------------------------------------------------
+// ⑮ 2026-09-22 第三轮（再 12 个开源项目，专挑没上过真项目的语言）：
+// ① Lua 的 require / ② Zig 的 @import / ③ Elisp 的 (require 'x) —— 以前一条 import 都采不到（kong/zls/spacemacs）
+// ④ Scala / Elixir 的点号花括号导入（`import a.{b, c}` / `alias Foo.{A, B}`）以前被切成 `{…` 碎片（akka 1,859 条）
+// ⑤ Elixir 模块名 CamelCase ↔ 文件名 snake_case（只对 .ex/.exs 目标开大小写不敏感）
+// ⑥ TS/JS 路径别名（tsconfig/jsconfig 的 paths，如 `@/*`）以前对不上（vuetify 只有 38%）
+const luaTmp = path.join(os.tmpdir(), `codeatlas-luareq-${process.pid}`);
+const { out: luaOut } = scanProject(luaTmp, {
+  'util.lua': 'local M = {}\nfunction M.trim(s)\n  return s\nend\nreturn M\n',
+  'main.lua': 'local utils = require("util")\nlocal json = require "cjson"\nreturn { utils, json }\n',
+}, 'lua');
+const luaMain = readBundle(luaOut).files.find((f) => f.path === 'main.lua');
+check((luaMain?.imports || []).includes('util') && (luaMain?.imports || []).includes('cjson'),
+  '⑮ Lua：`require("util")` / `require "cjson"` 都进 import（kong 实测：以前 0 条）',
+  JSON.stringify(luaMain?.imports || []));
+
+const zigTmp = path.join(os.tmpdir(), `codeatlas-zigimp-${process.pid}`);
+const { out: zigOut } = scanProject(zigTmp, {
+  'src/util.zig': 'pub fn trim(s: []const u8) []const u8 { return s; }\n',
+  'src/main.zig': 'const std = @import("std");\nconst util = @import("util.zig");\npub fn run() void { _ = util.trim("x"); }\n',
+}, 'zig');
+const zigMain = readBundle(zigOut).files.find((f) => f.path === 'src/main.zig');
+check((zigMain?.imports || []).includes('util.zig') && (zigMain?.imports || []).includes('std'),
+  '⑮ Zig：`@import("…")` 进 import（zls 实测：以前 0 条）', JSON.stringify(zigMain?.imports || []));
+
+const elTmp = path.join(os.tmpdir(), `codeatlas-elreq-${process.pid}`);
+const { out: elOut } = scanProject(elTmp, {
+  'mod.el': '(provide \'mod)\n(defun mod-helper (x) (+ x 1))\n',
+  'main.el': '(require \'mod)\n(defun run () (mod-helper 1))\n',
+}, 'elisp');
+const elMain = readBundle(elOut).files.find((f) => f.path === 'main.el');
+check((elMain?.imports || []).includes('mod'),
+  '⑮ Elisp：`(require \'mod)` 进 import（spacemacs 实测：以前 23 条 / 703 文件）',
+  JSON.stringify(elMain?.imports || []));
+
+const scalaTmp = path.join(os.tmpdir(), `codeatlas-scalabrace-${process.pid}`);
+const { out: scalaOut } = scanProject(scalaTmp, {
+  'a/B.scala': 'package a\n\nobject B { val v = 1 }\n',
+  'a/C.scala': 'package a\n\nobject C { val v = 2 }\n',
+  'main.scala': 'import a.{B, C}\nimport scala.concurrent.duration._\n\nobject Main { val x = B.v + C.v }\n',
+}, 'scala');
+const scalaMain = readBundle(scalaOut).files.find((f) => f.path === 'main.scala');
+check((scalaMain?.imports || []).includes('a.B') && (scalaMain?.imports || []).includes('a.C')
+  && !(scalaMain?.imports || []).some((i) => i.includes('{')),
+  '⑮ Scala：`import a.{B, C}` 展开成 a.B / a.C（akka 实测：30,341 条里 1,859 条是碎片）',
+  JSON.stringify(scalaMain?.imports || []));
+check(importMatchesTarget('Controller', mt('lib/phoenix/controller.ex', '', '')),
+  '⑮ Elixir：模块名 CamelCase ↔ 文件名 snake_case（只对 .ex/.exs 目标）');
+const aliasPkgs = [{ prefix: '@/', dir: 'packages/app/src' }];
+check(importMatchesTarget('@/components/VBtn', mt('packages/app/src/components/VBtn/index.ts', '', ''), { aliases: aliasPkgs })
+  && !importMatchesTarget('@/components/VBtn', mt('other/src/components/VBtn/index.ts', '', ''), { aliases: aliasPkgs }),
+  '⑮ TS 路径别名：`@/x` 按 tsconfig 的 paths 对到目录（vuetify 实测：以前 38%）');
+const aliasTmp = path.join(os.tmpdir(), `codeatlas-tsalias-${process.pid}`);
+const { out: aliasOut } = scanProject(aliasTmp, {
+  'tsconfig.json': '{\n  "compilerOptions": {\n    "baseUrl": "./",\n    "paths": { "@/*": ["src/*"] }\n  }\n}\n',
+  'src/util.js': 'export function trim(s) { return s; }\n',
+  'src/app.js': 'import { trim } from "@/util";\nexport function run() { return trim("x"); }\n',
+});
+const aliasB = readBundle(aliasOut);
+check((aliasB.source.aliases || []).some((a) => a.prefix === '@/' && a.dir === 'src'),
+  '⑮ tsconfig 的 paths 进包清单（baseUrl “./” 也压得对）', JSON.stringify(aliasB.source.aliases || []));
+const als = spawnMcp(aliasOut);
+await als.ready;
+const rAls = await als.call('refs', { name: 'trim', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rAls) && !/\[(仅同名|same name only)\]/.test(rAls),
+  '⑮ `@/util` 的跨文件引用算“有支撑”',
+  (rAls.split('\n').find((l) => /trim/.test(l)) || '').trim().slice(0, 60));
+als.proc.kill('SIGKILL');
+
 // ② 顶层函数（JS 里是“类型”）也要给 file:line —— 只给边不给行号时 AI 还得自己翻文件
 const topTmp = path.join(os.tmpdir(), `codeatlas-topfn-${process.pid}`);
 const { out: topOut } = scanProject(topTmp, {

@@ -93,15 +93,64 @@ function elixirMemberKind(node) {
   return null;
 }
 const elixirImportKind = (node) => (['alias', 'import', 'use', 'require'].includes(elixirCallee(node)) ? 'import' : null);
+/** `use` / `import` 树按**顶层**逗号切（嵌套花括号里的逗号不算分隔符） */
+export function splitTopLevel(s) {
+  const out = [];
+  let depth = 0, cur = '';
+  for (const ch of s) {
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * 展开 `a::{b, c::{d, e}, f as g, self}` / `a.{b, c}` 这类**花括号树** → 每条完整路径。
+ * 别名（`as x`）去掉（匹配用的是路径）、`self` 与通配 `*` 归到模块前缀本身。
+ * 谁在用：Rust 的 `use`、PHP 的分组 use、Scala 的 `import a.{b, c}`、Elixir 的 `alias Foo.{A, B}`。
+ * 为什么：ripgrep 实测里 `use crate::flags::{Category, …}` 被按逗号切成了碎片（404 条 import 里 191 条坏的）；
+ * akka 实测里 Scala 的 `import a.{b, c}` 也是一样（30,341 条里 1,859 条坏）。
+ */
+export function expandUseTree(body) {
+  const out = [];
+  const walk = (part, prefix) => {
+    let s = String(part).trim();
+    if (!s) return;
+    const brace = s.indexOf('{');
+    if (brace < 0) {
+      s = s.replace(/\s+as\s+\S+$/, '').replace(/\s*=>\s*\S+$/, '').trim();   // `a::b as c` / Scala 的 `a => c`
+      const bare = prefix.replace(/[:\/.]+$/, '');
+      if (s === 'self' || s === '*') { if (bare) out.push(bare); return; }
+      if (!s) return;
+      out.push((prefix + s).trim());
+      return;
+    }
+    const close = s.lastIndexOf('}');
+    if (close < brace) { out.push((prefix + s).trim()); return; }   // 括号不配对的残句：原样留一条，绝不静默丢
+    const head = s.slice(0, brace);
+    for (const piece of splitTopLevel(s.slice(brace + 1, close))) walk(piece, prefix + head);
+  };
+  walk(body, '');
+  return out;
+}
+
 /** 导入名要剥掉关键字：alias Shape.Utils → Shape.Utils（否则解析器拿着 "alias Shape.Utils" 匹配不上） */
 const elixirImportText = (node) => {
   const args = node.namedChildren.find((c) => c.type === 'arguments');
   const first = args && args.namedChildren[0];
   if (!first) return '';
-  // 只取最后一段（Shape.Utils → Utils）：跟类型名字保持一致，解析器才匹配得上
   const t = first.text;
-  const dot = t.lastIndexOf('.');
-  return dot >= 0 ? t.slice(dot + 1) : t;
+  const lastSeg = (s) => { const d = s.lastIndexOf('.'); return d >= 0 ? s.slice(d + 1) : s; };
+  // 花括号（`alias Foo.{Bar, Baz}`）逐条展开 —— 不展开的话第一条是碎片 `{Bar`（phoenix 实测）
+  if (t.includes('{')) {
+    const parts = expandUseTree(t).map((p) => lastSeg(p.trim())).filter(Boolean);
+    return parts.length ? parts : '';
+  }
+  // 只取最后一段（Shape.Utils → Utils）：跟类型名字保持一致，解析器才匹配得上
+  return lastSeg(t);
 };
 const elixirIsDecision = (node) => {
   const c = elixirCallee(node);
@@ -120,6 +169,51 @@ const elixirParams = (node) => {
 };
 /** Emacs Lisp 的参数表是函数声明里**第一个** list 子节点（第二个 list 才是函数体） */
 const elispParams = (node) => node.namedChildren.find((c) => c.type === 'list') || null;
+
+/**
+ * Lua：依赖都在 `require("a.b")` / `require "a.b"` 调用里 —— 不认的话一个 import 也采不到
+ *（kong 实测：1,308 个 Lua 文件、5,905 条跨文件引用，有支撑 0%）。只认函数名就是 `require`、实参是字符串字面量的调用。
+ */
+const luaImportKind = (node) => {
+  if (node.type !== 'function_call') return null;
+  const callee = node.namedChildren[0];
+  const args = node.namedChildren.find((c) => c.type === 'arguments');
+  const first = args && args.namedChildren[0];
+  return callee && callee.type === 'identifier' && callee.text === 'require' && first && first.type === 'string' ? 'require' : null;
+};
+
+/**
+ * Zig：依赖都在 `@import("…")` 里（`@import("std")` 是外部 / `@import("util.zig")` 是仓库内）。
+ * zls 实测：102 个文件、1,282 条跨文件引用，有支撑 0%（一条 import 都没采）。
+ */
+const zigImportKind = (node) => {
+  if (node.type !== 'builtin_function') return null;
+  const bi = node.namedChildren.find((c) => c.type === 'builtin_identifier');
+  const args = node.namedChildren.find((c) => c.type === 'arguments');
+  const first = args && args.namedChildren[0];
+  return bi && bi.text === '@import' && first && first.type === 'string' ? 'import' : null;
+};
+
+/** Elisp：`(require 'foo)` / `(require 'foo "path")` / `(load "foo")` —— 头是 symbol、参数是引用的 symbol 或字符串 */
+const elispImportKind = (node) => {
+  if (node.type !== 'list') return null;
+  const head = node.namedChildren[0];
+  if (!head || head.type !== 'symbol') return null;
+  return ['require', 'load', 'load-file'].includes(head.text) ? 'require' : null;
+};
+const elispImportText = (node) => {
+  const arg = node.namedChildren[1];
+  if (!arg) return '';
+  if (arg.type === 'quote') {                          // (require 'foo) → foo
+    const s = arg.namedChildren.find((c) => c.type === 'symbol');
+    return s ? s.text : '';
+  }
+  if (arg.type === 'string') {                         // (load "foo.el") → foo.el
+    const s = arg.namedChildren.find((c) => c.type === 'string_content');
+    return s ? s.text : '';
+  }
+  return '';
+};
 
 function isFunctionAssignment(node) {
   const decl = node.namedChildren.find((c) => c.type === 'variable_declarator');
@@ -513,6 +607,7 @@ export const LANGUAGES = {
       local_variable_declaration: 'field',
     },
     imports: {},
+    importKindOf: luaImportKind,
     baseFields: [],
     baseNodes: [],
     decisions: ['if_statement', 'elseif_statement', 'for_statement', 'while_statement', 'repeat_statement'],
@@ -559,6 +654,7 @@ export const LANGUAGES = {
       test_declaration: 'function',
     },
     imports: {},
+    importKindOf: zigImportKind,
     baseFields: [],
     baseNodes: [],
     decisions: ['if_statement', 'while_statement', 'for_statement', 'switch_expression', 'binary_expression'],
@@ -700,6 +796,11 @@ export const LANGUAGES = {
     },
     paramsOf: elispParams,
     imports: {},
+    importKindOf: elispImportKind,
+    importTextOf: elispImportText,
+    // Elisp 的引用就是 symbol（`(helper x)` 里的 helper）；函数名本身不算（声明处）
+    refTypes: ['symbol'],
+    skipNameNodes: { function_definition: 'name' },
     baseFields: [],
     baseNodes: [],
     decisions: [],

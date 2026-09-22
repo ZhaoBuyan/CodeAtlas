@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 扫描器：源码目录 -> bundle（中间数据）
  *
  * 流程：遍历文件 -> tree-sitter 解析 -> 提取（命名空间/类型/成员/导入/引用/复杂度/LOC）
@@ -12,7 +12,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Parser, Language } from 'web-tree-sitter';
-import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages } from './languages.mjs';
+import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages, expandUseTree } from './languages.mjs';
 // 模块名归一 / import 是否能指到目标 —— 与读期（mcp.mjs 的证据分档）**共用同一套口径**
 import { moduleKey, importMatchesTarget } from './modules.mjs';
 import { t } from './i18n.mjs';
@@ -450,49 +450,6 @@ function collectBaseNames(node, out) {
   if (name && /^[A-Za-z_$][\w$.]*$/.test(name)) out.push(name.split('.').pop());
 }
 
-/** `use` 树按**顶层**逗号切（嵌套花括号里的逗号不算分隔符） */
-function splitTopLevel(s) {
-  const out = [];
-  let depth = 0, cur = '';
-  for (const ch of s) {
-    if (ch === '{') depth++;
-    else if (ch === '}') depth--;
-    if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
-    else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-
-/**
- * 展开 Rust / PHP 的 `use` 树 → 每条完整路径：
- *   `a::{b, c::{d, e}, f as g, self}` → a::b / a::c::d / a::c::e / a::f / a
- * 别名（`as x`）去掉（匹配用的是路径）、`self` 与通配 `*` 归到模块前缀本身。
- * 为什么：ripgrep 实测里 `use crate::flags::{Category, …}` 被按逗号切成了
- * `"crate::flags::{Category"` 这种碎片（404 条 import 里 191 条是坏的）→ 跨 crate 引用全塔“仅同名”。
- */
-function expandUseTree(body) {
-  const out = [];
-  const walk = (part, prefix) => {
-    let s = String(part).trim();
-    if (!s) return;
-    const brace = s.indexOf('{');
-    if (brace < 0) {
-      s = s.replace(/\s+as\s+\S+$/, '').trim();   // `a::b as c` → a::b
-      const bare = prefix.replace(/[:\/\\]+$/, '');
-      if (s === 'self' || s === '*') { if (bare) out.push(bare); return; }
-      if (!s) return;
-      out.push((prefix + s).trim());
-      return;
-    }
-    const close = s.lastIndexOf('}');
-    if (close < brace) { out.push((prefix + s).trim()); return; }   // 括号不配对的残句：原样留一条，绝不静默丢
-    const head = s.slice(0, brace);
-    for (const piece of splitTopLevel(s.slice(brace + 1, close))) walk(piece, prefix + head);
-  };
-  walk(body, '');
-  return out;
-}
 
 /**
  * 从 import 语句里抠出目标名，**返回数组** —— 一个 import 节点可能挂着好几条：
@@ -518,8 +475,12 @@ function parseImports(text) {
   }
   // JS/TS 的 CommonJS：`require('x')` / `const x = require('x')` / TS 的 `import x = require('x')`
   // —— 直接取引号里的路径（实测 axios：TS 的 import-equals 会被 `=` 分支切成 "require('axios')" 这种垃圾）
-  const cjs = stmt.match(/^(?:(?:const|let|var|import)\b[^=]*?=\s*)?require\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+  const cjs = stmt.match(/^(?:(?:const|let|var|import)\b[^=]*?=\s*)?require\s*\(\s*['"]([^'"]+)['"]\s*\)/)
+    || stmt.match(/^require\s+['"]([^'"]+)['"]/);   // Lua 的 `require "cjson"`（无括号）
   if (cjs) return [cjs[1]];
+  // Zig 的 `@import("std")` / `@import("util.zig")`（zls 实测：102 个文件一条 import 也采不到）
+  const zig = stmt.match(/^@import\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+  if (zig) return [zig[1]];
   // C/C++：#include <stdio.h> / #include "x.h"
   const inc = stmt.match(/^#\s*include\s*[<"]([^>"]+)[>"]/);
   if (inc) return [inc[1]];
@@ -543,6 +504,13 @@ function parseImports(text) {
     const body = stmt.replace(/^use\s+/, '').replace(/;+$/, '').trim();
     const expanded = expandUseTree(body);
     if (expanded.length) return expanded;
+  }
+  // 点号花括号树：Scala 的 `import a.{b, c}` / Elixir 的 `alias Foo.{A, B}` → 展开成每条完整路径
+  //（akka 实测：30,341 条 import 里 1,859 条是这种碎片「{…」）
+  if (/\.\{/.test(stmt.replace(/\s+/g, ''))) {
+    const body = stmt.replace(/^(?:import|alias|use|require|from|open|using|package)\s+/, '').replace(/[;,]+$/, '').trim();
+    const parts = expandUseTree(body).filter(Boolean);
+    if (parts.length) return parts;
   }
   let t = stmt.replace(/;+$/, '').replace(/^global\s+/, '');
   t = t.replace(/^(using|import|package|require|from|use|namespace)\s+/, '');
@@ -1724,6 +1692,63 @@ function discoverPackages(roots) {
   return out;
 }
 
+/**
+ * ③b TS / JS 的**路径别名**（tsconfig.json / jsconfig.json 的 compilerOptions.paths + baseUrl）：
+ * `@/components/VX` 这类 import 得按 tsconfig 的映射换成仓库内路径才比得上 —— 实测 vuetify：
+ * 5,908 条跨文件引用只有 38% 有支撑，剩下的大多是 `@/…` / `@vuetify/…` 别名对不上。
+ * 只收**解析得动**的 tsconfig（JSON 里带注释也认，去注释再 parse；真解析不了就跳过，不猜）。
+ */
+function discoverPathAliases(roots) {
+  const out = [];
+  const seen = new Set();
+  for (const root of roots) {
+    const stack = [root];
+    while (stack.length) {
+      const dir = stack.pop();
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        const abs = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (IGNORE_DIRS.has(e.name) || e.name.startsWith('.git')) continue;
+          stack.push(abs);
+          continue;
+        }
+        if (e.name !== 'tsconfig.json' && e.name !== 'jsconfig.json') continue;
+        let txt = '';
+        try { txt = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+        // JSONC：去块注释 / 行注释 / 尾逗号再 parse（tsconfig 实际就是 JSONC）
+        const cleaned = txt
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/(^|[^:"'\\])\/\/[^\n]*/g, '$1')
+          .replace(/,(\s*[}\]])/g, '$1');
+        let j;
+        try { j = JSON.parse(cleaned); } catch { continue; }
+        const co = j.compilerOptions || {};
+        const base = String(co.baseUrl || '.').replace(/\\/g, '/');
+        const dirRel = path.relative(root, dir).split(path.sep).join('/');
+        // 压掉 '.' / './' / 连续斜杠（tsconfig 里 baseUrl 常写成 './' / '../'）
+        const joinRel = (p2) => [dirRel, base, p2].join('/').split('/').filter((s) => s && s !== '.').join('/');
+        for (const [k, v] of Object.entries(co.paths || {})) {
+          if (!k.endsWith('*') || !Array.isArray(v)) continue;
+          for (const target of v) {
+            if (typeof target !== 'string' || !target.endsWith('*')) continue;
+            const prefix = k.slice(0, -1);
+            let dir2 = joinRel(target.slice(0, -1));
+            if (dir2.endsWith('/')) dir2 = dir2.slice(0, -1);
+            if (!prefix || !dir2) continue;
+            const key = `${prefix}|${dir2}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ prefix, dir: dir2 });
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
 export async function scan(opts) {
   const t0 = Date.now();
   const roots = (opts.roots?.length ? opts.roots : ['.']).map((r) => path.resolve(r));
@@ -1744,6 +1769,8 @@ export async function scan(opts) {
   const { files, skipped } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
   // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
   const packages = discoverPackages(roots);
+  // ③b TS/JS 的路径别名（tsconfig/jsconfig 的 paths）—— 同一套 ctx 一起传下去
+  const aliases = discoverPathAliases(roots);
 
   const langById = new Map(languages.map((l) => [l.id, l]));
   const byLang = new Map();
@@ -1885,7 +1912,7 @@ export async function scan(opts) {
       const viaImport = hit.filter((id) => {
         const cand = allTypes[id];
         const target = { ns: cand.ns, fqn: cand.fqn, path: fileRecs[cand.file]?.path };
-        return fromFile.imports.some((raw) => importMatchesTarget(raw, target, { packages }));
+        return fromFile.imports.some((raw) => importMatchesTarget(raw, target, { packages, aliases }));
       });
       if (viaImport.length === 1) return viaImport[0];
     }
@@ -2049,6 +2076,7 @@ export async function scan(opts) {
       newestMtime: newestMtime ? new Date(newestMtime).toISOString() : null,
       git,
       packages,
+      aliases,
       scanMs: 0,
       scanOptions: {
         lang: opts.lang || 'auto', maxKb, excludes, facets: facets.configPath,

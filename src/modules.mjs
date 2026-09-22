@@ -59,6 +59,12 @@ export function importMatchesTarget(rawImport, target, ctx) {
   }
   // 相对路径那种 import（'./f1.js' / '../util'）走模块名这条路：比目标文件的模块名
   if (target.path && moduleKey(imp) === moduleKey(target.path)) return true;
+  // Elixir：模块名是 CamelCase（`Phoenix.Controller`）、文件名是 snake_case（controller.ex）——
+  // 对 .ex/.exs 目标做一次**大小写不敏感**的模块名比对（只对 Elixir 开：别的语言里大小写是有意义的）
+  if (target.path && /\.exs?$/i.test(String(target.path))) {
+    const tail = String(imp).split(/[./\\]/).filter(Boolean).pop() || '';
+    if (tail && tail.toLowerCase() === moduleKey(target.path).toLowerCase()) return true;
+  }
   // 包 / 模块路径前缀（见文件头最后一条）：目标的**目录**以它开头就算“指到了”
   const tPath = String(target.path || '').replace(/\\/g, '/');
   if (tPath && !/\s/.test(imp)) {
@@ -109,6 +115,14 @@ export function importMatchesTarget(rawImport, target, ctx) {
           if (tPath === prefix || tPath.startsWith(`${prefix}/`) || tPath.startsWith(`${prefix}.`)) return true;
         }
       }
+    }
+  }
+  // ③b TS/JS 的路径别名（tsconfig / jsconfig 的 paths）：`@/x` → `<baseUrl>/x`，再按路径前缀比
+  if (ctx?.aliases?.length) {
+    for (const a of ctx.aliases) {
+      if (!a?.prefix || !imp.startsWith(a.prefix)) continue;
+      const cand = `${a.dir}/${imp.slice(a.prefix.length)}`.replace(/\/+/g, '/');
+      if (tPath === cand || tPath.startsWith(`${cand}/`) || tPath.startsWith(`${cand}.`)) return true;
     }
   }
   return false;
