@@ -11,9 +11,9 @@
 > guava 62%（引擎口径 100%）· ripgrep **0% → 63%**。
 > 第二轮：Newtonsoft.Json（C#）66%/79% · guzzle（PHP）**83%/97%** · kotlinx.coroutines 87%/96% ·
 > caddy（Go）85%/89% · axios（JS）80% · Alamofire（Swift）**1% → 50%** · tokio（Rust）52% ·
-> sinatra（Ruby）20%/22% · redis（C）39% · fmt（C++）29%。
+> sinatra（Ruby）20%/22% · redis（C）**50%** · fmt（C++）**52%**。
 > 第三轮（专挑没上过真项目的语言）：kong（Lua）**0% → 33%** · zls（Zig）**0% → 38%** ·
-> vuetify（Vue/TS）**38% → 58%** · akka（Scala）66%/75% · hcl 81%/97% · ocaml 50% · rescript 23% ·
+> vuetify（Vue/TS）**38% → 58%** · akka（Scala）66%/75% · hcl 81%/97% · ocaml **58%** · rescript 23% ·
 > spacemacs（Elisp）9% · phoenix（Elixir）5% · graphql-tools 67% · graphql-js 73% · nvm（Bash，有跨文件边了）。
 > Dart 新样本：bloc **71%** · riverpod **10% → 72%**（两跳 barrel 认出来了）。
 >
@@ -28,6 +28,9 @@
   riverpod（1,256 文件）**10% → 72%**。
 - **修复：`.h` 现在按内容判 C / C++** —— 头文件里写 C++ 的很多（redis 的 deps/、fmt 的 include/），
   以前按 C 解析出一大片 ERROR：redis **3,434 → 2,456**、fmt **14,459 → 1,200**（92% 消失）。
+- **增强：C/C++ 的 include 解析对齐编译器行为** —— ① `#include "jemalloc/internal/tsd_types.h"` 是
+  按 `-I` 根目录解析的（目标在 `deps/jemalloc/include/…`，前缀对不上、**后缀**对得上）；② 间接 include
+  （A → B → C）也算数：**include 闭包 ≤2 跳**。实测 redis **39% → 50%**、fmt **32% → 52%**、ocaml **50% → 58%**。
 - **增强：Bash 有依赖边了** —— `source x.sh` / `. x.sh` 进 import（动态路径 `$DIR/x.sh` 不猜），
   命令名（`foo x` 里的 foo）算引用：nvm 这类脚本仓库以前 0 条跨文件边，现在能连上。
 - **修复：Go 的 `import ( … )` 多行块被当成一整条字符串，跨包引用全认不出来** —— 一个 `import (...)` 块
