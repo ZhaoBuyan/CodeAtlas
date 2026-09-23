@@ -237,9 +237,10 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 > **dsh（DeepSeek Harness）用户**：不用手改 JSON —— `node src/cli.mjs mcp --print-config --client dsh`
 > 会直接吐一段现成的 Cordis patch YAML（字段照官方 `@deepseek-ai/dsh-mcp-client` 示例，路径同样是绝对路径），
 > 并入 `$DSH_HOME/cordis.patch.yml`（或 `profiles/<名字>/cordis.patch.yml`）即可。
-> ⚠ 本机没装 dsh，这条路**未经端到端验证**。
+> ✅ 已在本机 DSH Desktop 上**端到端验证**：patch 写进 profile 的用户 patch 层后**热加载**生效（不用重启，
+> 保存后几秒 MCP 服务进程就起来了），工具以 `mcp__codeatlas__*` 注册。
 
-三个细节：
+四个细节：
 
 - 输出是**紧凑文本**而不是 JSON —— 同样的问题 token 更少，AI 也更好读；
 - **工具输出跟界面语言走**：拷出来的配置里带 `CODEATLAS_LANG`，所以 AI 拿到的答案和你的界面同一种语言
@@ -257,6 +258,10 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
   所以这个判断交给调用方：多段项按**连续段序列**匹配、单段项按目录段或文件名主干、大小写不敏感、不做通配；
   每次调用带、用完即弃。**排除了多少当场写在名单后面**（整份被排空时写“全被排除”，不是 `0 个`），
   而「规模」这类**项目事实不受影响**。（`list` / `symbol` / `file` 不带这个参数 —— 浏览类工具加了会让人误判“这里没有”。）
+- **给 AI 的说明书随仓库走**：`.dsh/skills/codeatlas/SKILL.md` —— 一页“schema 里看不到的东西”：
+  开场顺序（`list` → `impact(入口函数)` → `symbol`）、别拿被引热榜当全貌、歧义名字用数字 id 直查、
+  `facets` 警告与「🔁 请重查」怎么读、什么时候干脆别用图。dsh 在仓库里开会话就自动发现；其它读 SKILL.md
+  的代理工具，把它拷到自己项目的 `.dsh/skills/` 或 `.agents/skills/`（或用户级同名目录）即可。
 
 `symbol` 另有一个可选参数 **`neighbors: true`**（**默认关**）：追加「被谁引用 / 引用了谁 / 相关测试文件」三行，
 各给前 5 个（抬头与 `refs` 同一个口径）；要证据标签与完整列表仍去 `refs`。不带它时输出**一个字节不变**。

@@ -27,6 +27,10 @@
 - **新增：监控模式下的文件变化指示** —— `scan --watch` 每趟把「第几趟 / 重解析几个文件 / 改了哪些」写进
   `bundle.source.watch`；MCP 检测到图更新时在**下一个工具结果**尾部提示「🔁 图已更新，请重查」（只提示一次）；
   `overview` 显示“监控中 —— 重查就能拿到最新数据”。
+- **新增：给 AI 的“怎么用”说明书（随仓库走的 Agent skill）** —— `.dsh/skills/codeatlas/SKILL.md`：
+  开场顺序（`list` → `impact(入口函数)` → `symbol`）、歧义名字用数字 id 直查、`facets` 警告与
+  「🔁 请重查」怎么读、什么时候干脆别用图。dsh 在仓库里开会话就自动发现；其它读 SKILL.md 的代理工具，
+  拷到自己项目的 `.dsh/skills/` 或 `.agents/skills/`（或用户级同名目录）即可。
 - **优化（来自第三方对标实测）** —— `map()` 在没配分组规则（facets）的项目上**显式警告**并给 `draft-facets`
   指引（以前静默退化）；`overview` / `map` 的热榜条目带 **id**（短名也能直接 `symbol` / `refs`）；
   `map` 页脚说清“内容已全部输出”还是“撞预算截断”；`overview` 页脚的工具清单从工具表动态生成。

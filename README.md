@@ -278,9 +278,10 @@ pointing at the resolved `node.exe`, `env` set to the current UI language):
 > **dsh (DeepSeek Harness) users**: no hand-written JSON — `node src/cli.mjs mcp --print-config --client dsh`
 > prints a ready-to-merge Cordis patch YAML (fields follow the official `@deepseek-ai/dsh-mcp-client` examples,
 > absolute paths included); merge it into `$DSH_HOME/cordis.patch.yml` (or `profiles/<name>/cordis.patch.yml`).
-> ⚠ dsh is not installed on this machine — this path is **not verified end-to-end**.
+> ✅ Verified end-to-end on a local DSH Desktop: the merge lands in the profile's user patch layer and takes effect
+> **live** (no restart — the MCP server process starts seconds after saving); tools register as `mcp__codeatlas__*`.
 
-Four details:
+Five details:
 
 - Output is **compact text, not JSON** — fewer tokens for the same question, and easier for a model to read;
 - **The tool output follows the UI language**: the copied config carries `CODEATLAS_LANG`, so answers come back in
@@ -301,6 +302,12 @@ Four details:
   reported right after the list it affected** (a list emptied by it says "everything dropped", never `0`), and project
   facts such as the "Size" line are never changed by it (`list` / `symbol` / `file` deliberately do not take it —
   filtering a browsing tool would read as "there is nothing here".)
+- **A ready-made skill ships in the repo**: `.dsh/skills/codeatlas/SKILL.md` — a short sheet for whatever agent you
+  point at these tools, covering what the schemas *do not* say (open with `list()` → `impact(entry function)` →
+  `symbol`; don't orient from the reference-count hot list; use numeric ids for ambiguous names; how to read the
+  `facets` warning and the `🔁 re-query` notice; when *not* to use the graph). dsh picks it up when the session works
+  inside this repo; for other SKILL.md-based agents, copy it into your project's `.dsh/skills/` or `.agents/skills/`
+  (or the user-level equivalents).
 
 `symbol` has another optional parameter, **`neighbors: true`** (**off by default**): it appends who references it /
 what it references / related test files, top 5 each (same wording as `refs`). For evidence tags and the full lists use

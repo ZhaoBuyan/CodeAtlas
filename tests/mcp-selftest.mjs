@@ -1286,6 +1286,30 @@ tf.proc.kill('SIGKILL');
     '㉓ map 页脚：撞预算时明说“内容在此截断”', (mpSmall.split('\n').find((l) => /token/.test(l)) || '').trim().slice(0, 90));
 }
 
+// ㉔ 2026-09-23（dsh 建议）：AI 技能说明书 —— `.dsh/skills/codeatlas/SKILL.md`。
+// 硬约束照 dsh 加载器源码（dsh-skill-filesystem）：首行 --- / 闭合 --- / name 为 kebab-case /
+// description 非空字符串 / 旧式调用字段会直接报错；内容上不写死工具前缀（serverName 可配）、不抄工具清单。
+// 门用纯 node 复刻关键检查（不依赖 dsh，任何机器可跑；带 dsh 的真验收见提交说明）。
+{
+  const skillPath = path.join(ROOT, '.dsh', 'skills', 'codeatlas', 'SKILL.md');
+  const raw = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf8') : '';
+  check(Boolean(raw), '㉔ 技能说明书存在：.dsh/skills/codeatlas/SKILL.md', skillPath);
+  const sLines = raw.split('\n');
+  const closeIdx = sLines.findIndex((l, i) => i > 0 && l === '---');
+  const fm = sLines[0] === '---' && closeIdx > 0 ? sLines.slice(1, closeIdx).join('\n') : '';
+  const sName = (fm.match(/^name: (.+)$/m) || [])[1] || '';
+  const sDesc = (fm.match(/^description: (.+)$/m) || [])[1] || '';
+  check(sLines[0] === '---' && closeIdx > 0 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(sName) && sDesc.length > 20,
+    '㉔ 技能 frontmatter：首行 ---、有闭合 ---、name 为 kebab-case、description 非空', `name=${sName} · desc ${sDesc.length} 字`);
+  check(!/disableModelInvocation|modelInvocable|userInvocable/.test(fm),
+    '㉔ 技能 frontmatter：没有旧式调用字段（写了会被 dsh 直接忽略）', fm.split('\n').map((x) => x.slice(0, 30)).join(' · ').slice(0, 80));
+  check(!/mcp__[a-z0-9-]+__/.test(raw),
+    '㉔ 技能正文不写死工具全名（只允许 `mcp__<serverName>__…` 这种占位符写法）',
+    (raw.match(/mcp__[a-z0-9-]+__/) || ['(无)'])[0]);
+  check(/impact/.test(raw) && /exclude/.test(raw) && /facets/.test(raw) && /🔁/.test(raw),
+    '㉔ 技能正文保留关键提示（impact 开场 / exclude / facets 警告 / 🔁 重查）');
+}
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;
