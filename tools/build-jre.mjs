@@ -19,6 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+// ⚠ 别用 fs.rmSync：DSH 自带的 node（v24.9.0）里它**静默不删**（见 src/fsx.mjs 的文件头）
+import { rmrf, rmFile } from '../src/fsx.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -35,7 +37,7 @@ if (!fs.existsSync(jlink) && jdkArg) {
 }
 
 console.log(`\n裁 Java 运行时 → vendor/jre\n  jlink：${jlink}\n  模块：${MODULES}\n`);
-fs.rmSync(OUT, { recursive: true, force: true });
+rmrf(OUT);
 fs.mkdirSync(OUT, { recursive: true });
 
 execFileSync(jlink, [
@@ -49,7 +51,7 @@ execFileSync(jlink, [
 
 // 链接用的导入库，运行时不需要（省 1.2 MB）
 const jvmLib = path.join(OUT, 'lib', 'jvm.lib');
-if (fs.existsSync(jvmLib)) fs.rmSync(jvmLib);
+if (fs.existsSync(jvmLib)) rmFile(jvmLib);
 
 const files = [];
 const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) e.isDirectory() ? walk(path.join(d, e.name)) : files.push(path.join(d, e.name)); };

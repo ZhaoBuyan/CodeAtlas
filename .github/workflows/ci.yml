@@ -63,10 +63,16 @@ jobs:
         run: |
           Get-ChildItem publish-sc, publish-lite | Select-Object Name, Length
 
+      # Release 正文从 CHANGELOG.md 里抽（用户可见口径），不用 generate_release_notes：
+      # 自动生成的是提交列表，而项目一贯是"挑用户看得见的变化 + 如实写局限"。
+      # 正文来源放在仓库内的 CHANGELOG 里 —— 工作文档/ 不进仓库，CI checkout 拿不到它。
+      - name: 从 CHANGELOG 抽 Release 正文
+        run: node tools/release-notes.mjs ${{ github.ref_name }} release-body.md
+
       - name: 发布到 GitHub Release（资产 = 两个 exe）
         uses: softprops/action-gh-release@v2
         with:
           files: |
             publish-sc/CodeAtlas.exe
             publish-lite/CodeAtlas-lite.exe
-          generate_release_notes: true
+          body_path: release-body.md

@@ -18,6 +18,10 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { LANGUAGES, WASM_ROOTS, resolveWasm } from '../src/languages.mjs';
+// ⚠ 别用 fs.rmSync：DSH 自带的 node（v24.9.0）里它**静默不删**（不抛错、返回后文件还在），
+//    已经害过这条流水线一次 —— 残留的 payload.zip 会让 ZipFile::CreateFromDirectory 直接失败。
+//    见 src/fsx.mjs 的文件头。
+import { rmrf, rmFile } from '../src/fsx.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -68,7 +72,7 @@ function findRealNode() {
 // ---------------------------------------------------------------------------
 console.log(`\nCode Atlas · 打包引擎（${withNode ? '完全版：带 node.exe' : '精简版：不带 node'}）\n`);
 
-fs.rmSync(STAGE, { recursive: true, force: true });
+rmrf(STAGE);
 fs.mkdirSync(STAGE, { recursive: true });
 
 // 1) 引擎代码与前端
@@ -185,7 +189,7 @@ const files = walk(STAGE);
 const bytes = files.reduce((a, f) => a + fs.statSync(path.join(STAGE, f)).size, 0);
 console.log(`  暂存：${files.length} 个文件 / ${(bytes / 1048576).toFixed(1)} MB`);
 
-fs.rmSync(OUT_ZIP, { force: true });
+rmFile(OUT_ZIP);
 const ps = `Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::CreateFromDirectory('${STAGE}', '${OUT_ZIP}')`;
 execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { stdio: 'inherit' });
 const zipBytes = fs.readFileSync(OUT_ZIP);
