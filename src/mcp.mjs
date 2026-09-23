@@ -692,7 +692,10 @@ function toolOverview(idx, a) {
   if (big.dropped) lines.push(dropNote(ex, big.dropped, bigFiles.length, ['文件', 'files'], true));
   const miss = excludeMissNote(ex, b);
   if (miss) lines.push(miss);
-  lines.push(T('深入用：search / symbol / refs / subgraph / file', 'Dig deeper with: search / symbol / refs / subgraph / file'));
+  // 页脚从 TOOLS 表生成（dsh 复验 2026-09-23：手写的 5 个名字会漏掉 impact / map / list 这些工具，
+  // 刚上手的 AI 会以为可选工具就那几个 —— 而且库只有一个名字来源就不该手抄）
+  const digNames = TOOLS.map((x) => x.name).filter((n) => n !== 'overview');
+  lines.push(T(`深入用：${digNames.join(' / ')}`, `Dig deeper with: ${digNames.join(' / ')}`));
   return lines.join('\n');
 }
 
@@ -1053,7 +1056,12 @@ function toolMap(idx, a) {
   const est = (s) => Math.ceil(s.length / 4) + 1;
   const out = [];
   let used = 0;
-  const push = (s) => { const t = est(s); if (used + t > budget) return false; out.push(s); used += t; return true; };
+  let truncated = false;   // 有没有因为预算截过东西 —— 页脚要说清“全量输出”还是“在此截断”（dsh 复验）
+  const push = (s, force = false) => {
+    const t = est(s);
+    if (!force && used + t > budget) { truncated = true; return false; }
+    out.push(s); used += t; return true;
+  };
   const pth = (t) => idx.files.get(t.file)?.path || '';
   const score = (t) => evidencedIn(idx, t) + (t.memberList?.length || 0) / 10;   // 与 overview 同一口径（有证据的引用数）
   const ex = parseExclude(a?.exclude);
@@ -1111,7 +1119,12 @@ function toolMap(idx, a) {
   const mapMiss = excludeMissNote(ex, b);
   if (mapMiss) push(mapMiss);
   if (warn.length) push(`⚠ ${warn.join('；')}`);
-  push(T(`（预算 ~${budget} token，实际约 ${used}；要细节：symbol / refs / impact —— 名字或行首的 id 都行）`, `(budget ~${budget} tokens, actual ~${used}; for detail: symbol / refs / impact — a name or the leading id both work)`));
+  // 页脚强制输出（force）：它就是“诚不诚实”的那一行，预算再紧也得在（本行不计入预算）
+  push(truncated
+    ? T(`（预算 ~${budget} token，实际约 ${used} —— **到上限了，内容在此截断**（本行说明不计入预算）；要细节：symbol / refs / impact —— 名字或行首的 id 都行）`,
+      `(budget ~${budget} tokens, actual ~${used} — hit the cap, content is cut off here (this note line is not counted); for detail: symbol / refs / impact — a name or the leading id both work)`)
+    : T(`（实际约 ${used} token —— **内容已全部输出**（预算 ~${budget} 是上限，没触顶）；要细节：symbol / refs / impact —— 名字或行首的 id 都行）`,
+      `(~${used} tokens — everything was emitted (the ~${budget} budget is a cap, and it was not hit); for detail: symbol / refs / impact — a name or the leading id both work)`), true);
   return out.join('\n');
 }
 

@@ -1261,6 +1261,31 @@ tf.proc.kill('SIGKILL');
     JSON.stringify({ 'tools/list': liveNames.length, ...perDoc }));
 }
 
+// ㉓ 2026-09-23（dsh 复验第二轮）：
+// ① file() 的类型清单**不许静默截断** —— 自报数量必须 == 行内条目数（复验里那条“22 个”实为与 src/mcp.mjs 的 61 个串了文件，本门把它锁死）；
+// ② overview 页脚的工具清单从 TOOLS 动态生成（原来手写 5 个，漏了 impact / map / list）；
+// ③ map 页脚分清“内容已全部输出（预算未触顶）”与“撞预算截断”。
+{
+  const fBig = await call('file', { path: 'src/mcp.mjs' });
+  const tline = fBig.split('\n').find((l) => /^(类型|Types) \d+/.test(l)) || '';
+  const nSelf = Number((tline.match(/^(?:类型|Types) (\d+)/) || [])[1] || 0);
+  const nEntries = (tline.match(/\[[a-z]+\]/g) || []).length;   // 每个条目都带 [kind]
+  check(nSelf > 20 && nEntries === nSelf,
+    '㉓ file()：类型清单自报数量 == 行内条目数（不静默截断）', `自报 ${nSelf} · 行内 ${nEntries}`);
+
+  const digLine = ((await call('overview', {})).split('\n').find((l) => /深入用|Dig deeper/.test(l)) || '');
+  const missing = ['search', 'symbol', 'refs', 'subgraph', 'map', 'impact', 'file', 'list'].filter((x) => !digLine.includes(x));
+  check(missing.length === 0, '㉓ overview 页脚的工具清单从 TOOLS 生成（不再手写漏掉 impact / map / list）',
+    missing.length ? `缺：${missing.join(', ')}` : digLine.trim().slice(0, 90));
+
+  const mpBig = await call('map', { budget: 80000 });
+  check(/内容已全部输出|everything was emitted/.test(mpBig),
+    '㉓ map 页脚：预算未触顶时明说“内容已全部输出”', (mpBig.split('\n').find((l) => /token/.test(l)) || '').trim().slice(0, 90));
+  const mpSmall = await call('map', { budget: 350 });
+  check(/在此截断|cut off here/.test(mpSmall),
+    '㉓ map 页脚：撞预算时明说“内容在此截断”', (mpSmall.split('\n').find((l) => /token/.test(l)) || '').trim().slice(0, 90));
+}
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;
