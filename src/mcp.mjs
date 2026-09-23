@@ -53,7 +53,8 @@ const INSTRUCTIONS = [
   'Boundaries you must know (honesty first — do not treat inference as fact):',
   '- Types / members / line counts / imports come from the syntax tree and are trustworthy; dependency edges come from static',
   '  **name matching** — dynamic calls, reflection and names built by string concatenation are invisible, and the counts of',
-  '  unmatched and ambiguous references are reported explicitly in overview and impact;',
+  '  unmatched and ambiguous references are reported explicitly in overview and impact — note the **denominator**: they are',
+  '  counted per reference site and are mostly member names, while edges are type-level, so they are not comparable to the edge count;',
   '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `backed` (the',
   '  referring file imports a module of that name, or imports the target\'s namespace / package, or both sides sit in the',
   '  same namespace / package (or one Dart part library — part files cannot import; the library\'s imports are visible to them), or the target file sits inside an imported package, or a parent namespace in C# / VB — strong evidence, not proof) > `same name only` (this',
@@ -531,11 +532,11 @@ export function freshnessNote(b) {
   if (!changed && !gone) return '';
   const cap = (n) => (n > 50 ? '50+' : fmt(n));
   if (!changed) {
-    return T(`⚠ 快照后有 ${cap(gone)} 个已纳入图里的文件已不在磁盘 —— 未反映在图里`,
-      `⚠ ${cap(gone)} mapped files are no longer on disk — not reflected in the map`);
+    return T(`⚠ 快照后有 ${cap(gone)} 个已纳入图里的文件已不在磁盘（**重扫即可清除**）—— 未反映在图里`,
+      `⚠ ${cap(gone)} mapped files are no longer on disk (**a rescan clears them**) — not reflected in the map`);
   }
-  return T(`⚠ 快照后 ${cap(changed)} 个已纳入图里的文件有改动${timeOnly ? `（其中 ${cap(timeOnly)} 个仅时间戳变化）` : ''}${gone ? `，另有 ${cap(gone)} 个已不在磁盘` : ''} —— 未反映在图里`,
-    `⚠ ${cap(changed)} mapped files changed after this snapshot${timeOnly ? ` (${cap(timeOnly)} timestamp-only)` : ''}${gone ? `, and ${cap(gone)} are no longer on disk` : ''} — not reflected in the map`);
+  return T(`⚠ 快照后 ${cap(changed)} 个已纳入图里的文件有改动${timeOnly ? `（其中 ${cap(timeOnly)} 个仅时间戳变化）` : ''}${gone ? `，另有 ${cap(gone)} 个已不在磁盘（重扫即可清除）` : ''} —— 未反映在图里`,
+    `⚠ ${cap(changed)} mapped files changed after this snapshot${timeOnly ? ` (${cap(timeOnly)} timestamp-only)` : ''}${gone ? `, and ${cap(gone)} are no longer on disk (a rescan clears them)` : ''} — not reflected in the map`);
 }
 
 // ---------------------------------------------------------------------------
@@ -676,6 +677,9 @@ function toolOverview(idx, a) {
       lines.push(T(`  一级目录的实际体量（数出来的，不在图里；.git 未数）：${shown.join(' · ')}${more}`, `  Top-level dirs by real size (counted, not in the map; .git not counted): ${shown.join(' · ')}${more}`));
     }
   }
+  // 项目规则（.gitignore / atlas.ignore）跳过的文件按来源报数（AI 实测：工作流里临时文件进图是常态，得能看出是谁挡的）
+  const pbs = Object.entries(b.stats?.skipped?.projectBySrc || {}).filter(([, n]) => n > 0).sort((x, y) => y[1] - x[1]);
+  if (pbs.length) lines.push(T(`  项目规则跳过的文件：${pbs.map(([s, n]) => `${s} ${fmt(n)}`).join(' · ')}（未进图）`, `  Files skipped by project rules: ${pbs.map(([s, n]) => `${s} ${fmt(n)}`).join(' · ')} (not in the map)`));
   if (b.totals.parseErrors) {
     const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
     const showBad = bad.slice(0, 8);
@@ -687,14 +691,20 @@ function toolOverview(idx, a) {
   if (b.totals.nonUtf8Files) lines.push(T(`注意：${b.totals.nonUtf8Files} 个文件可能不是 UTF-8 编码（其中的注释 / 字符串是乱码）`, `Note: ${b.totals.nonUtf8Files} files are probably not UTF-8 (their comments / strings are mojibake)`));
   // 诚实边界：把"依赖边是名字匹配"这个前提摆在第一屏——只调 overview 的 AI 也得看得到
   const un = b.unresolved || {};
-  lines.push(T(`可信度：依赖边是静态名字匹配（动态调用 / 反射 / 字符串拼名看不见）——未匹配 ${fmt(un.unknown || 0)} 处 · 同名歧义 ${fmt(un.ambiguous || 0)} 处`, `Confidence: dependency edges are static name matches (dynamic calls / reflection / string-built names are invisible) — ${fmt(un.unknown || 0)} unmatched · ${fmt(un.ambiguous || 0)} ambiguous`));
+  lines.push(T(`可信度：依赖边是静态名字匹配（动态调用 / 反射 / 字符串拼名看不见）——未匹配 ${fmt(un.unknown || 0)} 处（按引用处计数、以成员名为主；边是类型级的 —— 两个数不同量纲）· 同名歧义 ${fmt(un.ambiguous || 0)} 处`, `Confidence: dependency edges are static name matches (dynamic calls / reflection / string-built names are invisible) — ${fmt(un.unknown || 0)} unmatched (counted per reference site, mostly member names; edges are type-level — different denominators) · ${fmt(un.ambiguous || 0)} ambiguous`));
   const sys = b.facets?.systems || [];
   if (sys.length) lines.push(T(`系统划分（${b.facets.configFile}）：\n`, `Systems (${b.facets.configFile}):\n`) + sys.map((s) => T(`  ${sysLabel(s.name)}：${fmt(s.loc)} 行 · ${s.types} 类型 · ${s.files} 文件`, `  ${sysLabel(s.name)}: ${fmt(s.loc)} lines · ${s.types} types · ${s.files} files`)).join('\n'));
   else lines.push(T('没有系统分组规则（draft-facets 可草拟一份，或写 configs/<项目>.facets.json；否则按目录/文件看）', 'No system grouping rules (draft one with draft-facets, or write configs/<project>.facets.json; otherwise browse by directory / file)'));
   const hotLine = (t) => {
     const ev = evidencedIn(idx, t);
-    const note = ev < t.fanIn ? T(`（有证据 ${ev} 次）`, ` (${ev} with evidence)`) : '';
-    return T(`  ${t.id}\t${t.fqn} [${t.kind}] 被引用 ${t.fanIn} 次${note} · ${idx.files.get(t.file)?.path}`, `  ${t.id}\t${t.fqn} [${t.kind}] referenced ${t.fanIn} times${note} · ${idx.files.get(t.file)?.path}`);
+    // 引用方文件数（AI 实测反馈：光看次数分不出“被很多地方用”和“被一处反复调” —— `fmt` 94 次只在 1 个文件里）
+    const files = new Set();
+    for (const e of idx.ins.get(t.id) || []) { const ft = idx.byId.get(e.from); if (ft) files.add(ft.file); }
+    const bits = [];
+    if (files.size) bits.push(T(`${fmt(files.size)} 个文件`, `${fmt(files.size)} files`));
+    if (ev < t.fanIn) bits.push(T(`有证据 ${ev} 次`, `${ev} with evidence`));
+    const extra = bits.length ? T(`（${bits.join(' · ')}）`, ` (${bits.join(' · ')})`) : '';
+    return T(`  ${t.id}\t${t.fqn} [${t.kind}] 被引用 ${t.fanIn} 次${extra} · ${idx.files.get(t.file)?.path}`, `  ${t.id}\t${t.fqn} [${t.kind}] referenced ${t.fanIn} times${extra} · ${idx.files.get(t.file)?.path}`);
   };
   // 每条带 id（行首数字）——dsh 评估报告（2026-09-23）实测：热榜首位的 `t` / `T` 这种短名按名字查会歧义，
   // 没有 id 就“看得见、查不动”；id 可以直接喂给 symbol / refs / impact

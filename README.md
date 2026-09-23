@@ -563,8 +563,8 @@ so the whole file does not vanish from the map; their members (functions/variabl
 - **Whatever your project rules say**: `facets.json`'s `exclude` adds directories to ignore (upstream
   reference code, for instance). Better still, drop an **`atlas.ignore`** at the **scan target root**
   (`dirname` / `dirname/` / globs like `*.gen.ts` / `#` comments, one per line — read **only if the file exists**);
-  the launcher's **“Scan scope”** picker (last item: **`.gitignore`**) or `--gitignore` on the CLI additionally honors the project's own
-  `.gitignore` — **including the ones inside subdirectories**, with git's semantics: each file's rules only apply to its own
+  the project's own `.gitignore` is honored **by default** (the launcher's **“Scan scope”** picker, last item: **`.gitignore`** —
+  checked by default; on the CLI, `--no-gitignore` turns it off) — **including the ones inside subdirectories**, with git's semantics: each file's rules only apply to its own
   subtree (so a monorepo does not come out half-empty); directories that are excluded are not descended into.
   Whatever gets skipped is named in the report (along with how many rule files were read; `!` negations are not supported yet — also reported).
 

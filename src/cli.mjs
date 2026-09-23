@@ -120,9 +120,13 @@ function printScanReport(b, out) {
     const ignFiles = b.stats.skipped?.ignoreFiles || 0;
     const srcText = ignSrc.join(' + ') + (ignFiles > ignSrc.length ? `${t('（共 ', ' (')}${ignFiles}${t(' 份）', ' files)')}` : '');
     const srcTextEn = ignSrc.join(' + ') + (ignFiles > ignSrc.length ? ` (${ignFiles} files)` : '');
+    // 按规则来源的跳过文件数（“因为 .gitignore 跳了多少”一眼可见；AI 实测反馈：图外的脏文件是常态）
+    const pbs = Object.entries(b.stats.skipped?.projectBySrc || {}).filter(([, n]) => n > 0).sort((a, c) => c[1] - a[1]);
+    const bySrcZh = pbs.length ? `（${pbs.map(([s, n]) => `${s} ${nf(n)}`).join(' · ')}）` : '';
+    const bySrcEn = pbs.length ? ` (${pbs.map(([s, n]) => `${s} ${nf(n)}`).join(' · ')})` : '';
     console.log(t(
-      `  项目规则  ${srcText} · ${b.stats.skipped.ignorePatterns} 条${pDetail ? ` · 目录 ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · 文件 ${b.stats.skipped.projectFiles} 个` : ''}${b.stats.skipped.ignoreNegations ? `（有 ${b.stats.skipped.ignoreNegations} 条 ! 例外暂不支持）` : ''}`,
-      `  Project   ${srcTextEn} · ${b.stats.skipped.ignorePatterns} pattern(s)${pDetail ? ` · dirs ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · ${b.stats.skipped.projectFiles} file(s)` : ''}${b.stats.skipped.ignoreNegations ? ` (${b.stats.skipped.ignoreNegations} "!" negation(s) not supported yet)` : ''}`,
+      `  项目规则  ${srcText} · ${b.stats.skipped.ignorePatterns} 条${pDetail ? ` · 目录 ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · 文件 ${nf(b.stats.skipped.projectFiles)} 个${bySrcZh}` : ''}${b.stats.skipped.ignoreNegations ? `（有 ${b.stats.skipped.ignoreNegations} 条 ! 例外暂不支持）` : ''}`,
+      `  Project   ${srcTextEn} · ${b.stats.skipped.ignorePatterns} pattern(s)${pDetail ? ` · dirs ${pDetail}` : ''}${b.stats.skipped.projectFiles ? ` · ${nf(b.stats.skipped.projectFiles)} file(s)${bySrcEn}` : ''}${b.stats.skipped.ignoreNegations ? ` (${b.stats.skipped.ignoreNegations} "!" negation(s) not supported yet)` : ''}`,
     ));
   }
   console.log(`${t('  版本戳    ', '  Revision    ')}${b.source.labels.join(', ')}${b.source.git ? ` @ ${b.source.git.commit}${b.source.git.dirty ? t(' (有未提交改动)', ' (uncommitted changes)') : ''}` : t(' （非 git 仓库，用文件时间戳）', ' (not a git repo — using file timestamps)')}`);
@@ -348,8 +352,8 @@ async function cmdScan(argv) {
     facets: opts.facets || null,
     // 增量：默认关（全量）；加 --incremental 才按文件复用上次的解析结果
     incremental: opts.incremental !== undefined,
-    // 遵守项目自己的 .gitignore：默认关，--gitignore 才读（启动器上有对应的勾选框）
-    gitignore: opts.gitignore !== undefined,
+    // 遵守项目自己的 .gitignore：**默认开**（2026-09-23：agent 工作流里临时文件进图是常态）；--no-gitignore 关掉
+    gitignore: opts['no-gitignore'] === undefined,
   };
   // --watch：持续扫描（启动器里那个「内构监控」）—— 先分趟把地图长出来，然后一直监听、改了自动重扫。
   // ⚠ 这个分支**不会返回**（事件循环里挂着 watcher）；停止请强杀进程。
@@ -527,7 +531,7 @@ const HELP_ZH = `Code Atlas v${VERSION}
   atlas "C:/path/to/game.jar"        反编译 jar + 扫描
 
 细分命令：
-  atlas scan   <目录...>            只扫描源码目录（--incremental：只重解析改过的文件；--watch：持续扫描，改了自动重扫；--gitignore：按项目 .gitignore 跳过；额外规则可写在目标根的 atlas.ignore 里）
+  atlas scan   <目录...>            只扫描源码目录（--incremental：只重解析改过的文件；--watch：持续扫描，改了自动重扫；默认按项目 .gitignore 跳过（--no-gitignore 关掉）；额外规则可写在目标根的 atlas.ignore 里）
   atlas ingest <目录|.dll|.exe|.jar> 没有源码的目标先反编译再扫
   atlas serve                       起本地服务（不重新扫描）
                                       默认只绑 127.0.0.1（不弹防火墙、也不暴露到局域网）；
@@ -553,7 +557,7 @@ Easiest: just pass a path (source directory, assembly or jar all work)
   atlas "C:/path/to/game.jar"        decompile the jar + scan
 
 Subcommands:
-  atlas scan   <dir...>              scan source directories only (--incremental: re-parse changed files; --watch: keep scanning; --gitignore: also skip what the project's .gitignore ignores; extra rules can go in atlas.ignore at the target root)
+  atlas scan   <dir...>              scan source directories only (--incremental: re-parse changed files; --watch: keep scanning; skips what the project's .gitignore ignores by default (--no-gitignore to disable); extra rules can go in atlas.ignore at the target root)
   atlas ingest <dir|.dll|.exe|.jar>  decompile first, then scan (for targets without source)
   atlas serve                        start the local server (no re-scan)
                                       binds 127.0.0.1 only by default (no firewall prompt, not exposed on the LAN);

@@ -281,20 +281,21 @@ const CASES = [
     gitNone: true,
   },
   {
-    // 自选跳过：atlas.ignore（目录 + 通配 + 注释 + 一条 ! 例外）+ 可选 .gitignore（含**子目录自带的**）
+    // 自选跳过：atlas.ignore（目录 + 通配 + 注释 + 一条 ! 例外）+ .gitignore（含**子目录自带的**）。
+    // 2026-09-23 起 **.gitignore 默认生效**（agent 工作流里临时文件进图是常态）；--no-gitignore 关掉。
     // 嵌套那几条的要点：规则只管自己那棵子树（other/local.tmp.js 与 packages/app/local.tmp.js 同名，
-    // 前者必须还在图里）；深度不限（packages/app/deep/.gitignore）；不勾 .gitignore 时一份都不读
+    // 前者必须还在图里）；深度不限（packages/app/deep/.gitignore）；关了 .gitignore 后一份都不读。
     //
     // ⚠ 入库时要 `git add -f`：被夹具自己的 .gitignore 忽略的那几个文件
     //   （packages/app/generated/thing.js · packages/app/local.tmp.js · packages/app/deep/hidden.js）
     //   在 git 眼里也是被忽略的 —— 不 -f 就进不了仓库，CI 检出后它们不存在，
-    //   “没勾 .gitignore 时它还在图里” 那几条断言会直接红
+    //   “--no-gitignore 时它还在图里” 那几条断言会直接红
     dir: 'ignore-rules',
     lang: 'javascript',
     skipRules: {
-      absent: ['ingest/inner.js', 'skip.gen.js'],
-      present: ['keep.js', 'legacy/old.js'],
-      absentWithGitignore: ['legacy/old.js'],
+      absent: ['ingest/inner.js', 'skip.gen.js', 'legacy/old.js'],
+      present: ['keep.js'],
+      presentWithNoGitignore: ['legacy/old.js'],
       nested: {
         absent: ['packages/app/generated/thing.js', 'packages/app/local.tmp.js', 'packages/app/deep/hidden.js'],
         present: ['packages/app/keep.js', 'packages/app/deep/shown.js', 'other/local.tmp.js'],
@@ -411,32 +412,33 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
       push(ok, `${file} 的库字段（期望 ${JSON.stringify(want)}，实际 ${JSON.stringify(f ? { lib: f.lib, partOf: f.partOf, libImports: f.libImports } : null)}）`);
     }
   }
-  // 自选跳过：atlas.ignore（存在才生效）+ 可选 .gitignore（--gitignore 才读）
+  // 自选跳过：atlas.ignore（永远读）+ .gitignore（**默认读**；--no-gitignore 关）
   if (c.skipRules) {
     const files = b.files.map((f) => f.path);
-    for (const p of c.skipRules.absent) push(!files.includes(p), `atlas.ignore 生效：${p} 不在图里`);
+    for (const p of c.skipRules.absent) push(!files.includes(p), `默认跳过生效（atlas.ignore / .gitignore）：${p} 不在图里`);
     for (const p of c.skipRules.present) push(files.includes(p), `${p} 还在图里`);
     const sk = b.stats.skipped || {};
     push((sk.ignoreSources || []).includes('atlas.ignore'), `规则来源进报告：${JSON.stringify(sk.ignoreSources)}`);
+    push((sk.ignoreSources || []).includes('.gitignore'), `默认读 .gitignore（来源进报告）：${JSON.stringify(sk.ignoreSources)}`);
     push((sk.projectDirs || {})['ingest'] >= 1, `项目规则跳过的目录进报告：${JSON.stringify(sk.projectDirs || {})}`);
     push(sk.ignoreNegations === 1, `! 例外被计数：${sk.ignoreNegations}`);
-    const b2 = scanOne(c.dir, c.lang, null, ['--gitignore']);
+    const b2 = scanOne(c.dir, c.lang, null, ['--no-gitignore']);
     const files2 = b2.files.map((f) => f.path);
-    for (const p of c.skipRules.absentWithGitignore) push(!files2.includes(p), `--gitignore 生效：${p} 不在图里`);
-    push((b2.stats.skipped.ignoreSources || []).includes('.gitignore'), `--gitignore 来源进报告：${JSON.stringify(b2.stats.skipped.ignoreSources)}`);
+    for (const p of c.skipRules.presentWithNoGitignore) push(files2.includes(p), `--no-gitignore 时它回到图里：${p}`);
+    push(!(b2.stats.skipped.ignoreSources || []).includes('.gitignore'), `--no-gitignore 时不读 .gitignore：${JSON.stringify(b2.stats.skipped.ignoreSources)}`);
     // 嵌套 .gitignore：子目录自带的规则只管自己那棵子树（git 的口径）
     const nested = c.skipRules.nested;
     if (nested) {
       for (const p of nested.absent) {
-        push(!files2.includes(p), `嵌套 .gitignore 生效：${p} 不在图里`);
-        push(files.includes(p), `没勾 .gitignore 时它还在图里：${p}`);
+        push(!files.includes(p), `嵌套 .gitignore 生效：${p} 不在图里`);
+        push(files2.includes(p), `--no-gitignore 时它还在图里：${p}`);
       }
-      for (const p of nested.present) push(files2.includes(p), `嵌套规则只管自己那棵子树：${p} 还在图里`);
+      for (const p of nested.present) push(files.includes(p), `嵌套规则只管自己那棵子树：${p} 还在图里`);
       if (nested.filesMin != null) {
-        const n = b2.stats.skipped.ignoreFiles || 0;
+        const n = b.stats.skipped.ignoreFiles || 0;
         push(n >= nested.filesMin, `读到的规则文件份数 ${n}（期望 ≥ ${nested.filesMin}；根 + 子目录自带的都算）`);
       }
-      const pd = b2.stats.skipped.projectDirs || {};
+      const pd = b.stats.skipped.projectDirs || {};
       push(pd.generated >= 1, `嵌套规则跳过的目录进报告：${JSON.stringify(pd)}`);
     }
   }

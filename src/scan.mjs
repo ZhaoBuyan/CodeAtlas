@@ -96,7 +96,7 @@ const GENERATED_NAME_RE = /(^<|^_003C)|(__InlineArray|__DisplayClass|PrivateImpl
 // 项目自己的跳过规则（自选）
 // ---------------------------------------------------------------------------
 // `atlas.ignore`：放在扫描目标根，**存在才生效**（这就是「自选」）。
-// 可选的 `.gitignore`：默认不读，传了 --gitignore 才读（启动器上有个勾选框）。
+// `.gitignore`：**默认读**（--no-gitignore 关掉；启动器上有个勾选框）。
 // 语法先做简单版：一行一条 · `#` 注释 · `名字`（目录名或文件名都算）· `名字/`（只当目录）·
 // 含 `* ?` 或 `/` 的按相对路径 glob 匹配。**`!` 例外暂不支持**（遇到会计数、在报告里提示，不静默）。
 //
@@ -143,7 +143,7 @@ function loadIgnoreRules(roots, { gitignore } = {}) {
      * `names` 是这层 readdir 出来的名字（用来判断文件在不在，省一次失败的系统调用）。
      */
     enterDir(rootIdx, base, absDir, names) {
-      // 没勾 --gitignore 时 .gitignore 一份都不读；`atlas.ignore` 是本工具自己的约定，永远读（只有目标根那一份）
+      // 没勾 --gitignore / 传了 --no-gitignore 时 .gitignore 一份都不读；`atlas.ignore` 是本工具自己的约定，永远读（只有目标根那一份）
       if (gitignore && names.has('.gitignore')) addFile(rootIdx, base, path.join(absDir, '.gitignore'), '.gitignore');
       if (base === '' && names.has('atlas.ignore')) addFile(rootIdx, base, path.join(absDir, 'atlas.ignore'), 'atlas.ignore');
     },
@@ -220,7 +220,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   // ignoredDirs：被默认跳过表命中的目录名 → 次数。它进 bundle、进扫描报告，
   // 让“图里少了东西”这件事可见（monorepo 的 packages/ 当年就是这么被发现的）。
   const skipped = { ignored: 0, ignoredDirs: new Map(), tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map(),
-    projectDirs: new Map(), projectFiles: 0, rootDirs: new Map() };
+    projectDirs: new Map(), projectFiles: 0, projectBySrc: {}, rootDirs: new Map() };
 
   for (let rootIdx = 0; rootIdx < roots.length; rootIdx++) {
     const root = roots[rootIdx];
@@ -261,7 +261,13 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
         }
         if (!e.isFile()) continue;
         if (isIgnoredFile(e.name)) { skipped.ignored++; continue; }
-        if (ignoreRules && ignoreRules.hit(rootIdx, rel, e.name, false)) { skipped.ignored++; skipped.projectFiles++; continue; }
+        const ruleSrc = ignoreRules ? ignoreRules.hit(rootIdx, rel, e.name, false) : null;
+        if (ruleSrc) {
+          // 按规则来源记账（atlas.ignore / .gitignore）——“因为 .gitignore 跳了多少”要能直接报出来
+          skipped.ignored++; skipped.projectFiles++;
+          skipped.projectBySrc[ruleSrc] = (skipped.projectBySrc[ruleSrc] || 0) + 1;
+          continue;
+        }
         // 清单文件（包名 / 路径别名）：**只记路径**，遵守跳过规则（默认表 / --exclude / atlas.ignore / .gitignore）
         if (MANIFEST_NAMES.has(e.name)) manifests.push({ abs, rel: path.relative(root, abs).split(path.sep).join('/'), name: e.name });
         const ext = path.extname(e.name).toLowerCase();
@@ -1845,8 +1851,8 @@ export async function scan(opts) {
 
   const facetsDoc = loadFacets(opts, roots);
   const excludes = [...(opts.excludes || []), ...(facetsDoc?.config?.exclude || [])];
-  // 项目自己的跳过规则：atlas.ignore（存在才生效）+ 可选的 .gitignore（--gitignore 才读）
-  const ignoreRules = loadIgnoreRules(roots, { gitignore: opts.gitignore });
+  // 项目自己的跳过规则：atlas.ignore（存在才生效）+ .gitignore（**默认读**，--no-gitignore 关）
+  const ignoreRules = loadIgnoreRules(roots, { gitignore: opts.gitignore !== false });   // 默认读；opts.gitignore === false 才关
   const { files, skipped, manifests } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
   // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
   // （清单来自 collectFiles —— 遵守跳过规则，图外的包不再泄进图内）
@@ -2329,6 +2335,7 @@ export async function scan(opts) {
       // 项目自己的规则（atlas.ignore / .gitignore）命中多少：进 bundle，报告和 MCP 都能看见
       projectDirs: Object.fromEntries(skipped.projectDirs || []),
       projectFiles: skipped.projectFiles || 0,
+      projectBySrc: skipped.projectBySrc || {},
       ignoreSources: skipped.ignoreSources || [],
       ignorePatterns: skipped.ignorePatterns || 0,
       // 读了几份规则文件：嵌套 .gitignore 之后，光看 sources（只有名字）看不出到底读了几份
@@ -2409,7 +2416,7 @@ export async function watchScan(opts) {
   };
 
   // ① 分趟长出来（小项目就一趟全量）
-  const { files: all } = collectFiles(roots, { languages, maxKb, excludes, ignoreRules: loadIgnoreRules(roots, { gitignore: opts.gitignore }) });
+  const { files: all } = collectFiles(roots, { languages, maxKb, excludes, ignoreRules: loadIgnoreRules(roots, { gitignore: opts.gitignore !== false }) });
   const total = all.length;
   const c = (f) => Math.max(20, Math.round(total * f));
   const caps = [...new Set([c(0.02), c(0.1), c(0.25), c(0.5)].filter((n) => n < total).concat([total]))].sort((a, b) => a - b);

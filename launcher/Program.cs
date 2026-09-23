@@ -108,8 +108,8 @@ namespace CodeAtlas
         public string Langs { get; set; } = "";
         /// <summary>增量扫描：只重新解析改过的文件（默认关 = 每次全量）</summary>
         public bool Incremental { get; set; }
-        /// <summary>扫描时是否按项目自己的 .gitignore 跳过（默认关；和“扫描范围”一起选）</summary>
-        public bool RespectGitignore { get; set; }
+        /// <summary>扫描时是否按项目自己的 .gitignore 跳过（**默认开**，2026-09-23 起；和“扫描范围”一起选）</summary>
+        public bool RespectGitignore { get; set; } = true;
         /// <summary>界面与引擎输出的语言："zh"（默认）或 "en"</summary>
         public string Lang { get; set; } = "zh";
         /// <summary>我们不认识的字段：原样留着。保存时是整体重写，若不带着它们，别的版本写的字段会被抹掉
@@ -588,7 +588,7 @@ namespace CodeAtlas
             // 语言：空串 = 引擎默认（auto）。显式选过就原样传过去。
             if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
             if (cfg.Incremental) args.Append(" --incremental");   // 只重解析改过的文件
-            if (cfg.RespectGitignore) args.Append(" --gitignore"); // 按项目自己的 .gitignore 跳过（默认关）
+            if (!cfg.RespectGitignore) args.Append(" --no-gitignore"); // 默认按项目自己的 .gitignore 跳过；用户明确关掉才传这个
             if (watch) args.Append(" --watch");                   // 内构监控：分趟长出来 + 改动自动重扫（不会自己结束）
             // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
             if (!string.IsNullOrWhiteSpace(facets)) args.Append(" --facets \"").Append(facets.Trim()).Append('"');
@@ -797,7 +797,7 @@ namespace CodeAtlas
             Style(_langs);
             SetBtn(_langs, true); // 常驻可用（IsOn 检查要求 Tag=on，漏了就跟当初"扫描"一样点了没反应）
             _langs.Click += (s, e) => { if (IsOn(_langs)) PickLangs(); };
-            SetTip(_langs, "扫描范围（默认自动：全部代码语言，不含配置文件）。\r\n限定语言可显著提速；列表最后还有一项 .gitignore，勾上就按项目自己的 .gitignore 跳（目录和文件都跳）。", "What to scan (auto by default: all code languages; config files are not scanned).\r\nLimiting languages is much faster; the last item, \".gitignore\", also honors the project's own .gitignore (dirs and files).");
+            SetTip(_langs, "扫描范围（默认自动：全部代码语言，不含配置文件）。\r\n限定语言可显著提速；列表最后还有一项 .gitignore（**默认勾上**：按项目自己的 .gitignore 跳，目录和文件都跳；要把它含进图里就取消勾选）。", "What to scan (auto by default: all code languages; config files are not scanned).\r\nLimiting languages is much faster; the last item, \".gitignore\", is **checked by default** (honors the project's own .gitignore for dirs and files; uncheck to include them).");
 
             // 项目设置向导：选项目 → 勾语言 → 草拟分组规则 → 存下来（再打开就不用重配）
             SetText(_wiz, "项目设置…", "Setup…");
@@ -1399,7 +1399,7 @@ namespace CodeAtlas
         /// <summary>要不要按项目自己的 .gitignore 跳过（和语言一起选、一起返回）</summary>
         public bool GitignoreWanted;
 
-        public LangPicker(LangInfo[] langs, string current, bool gitignore = false)
+        public LangPicker(LangInfo[] langs, string current, bool gitignore = true)
         {
             GitignoreWanted = gitignore;
             _langs = langs ?? Array.Empty<LangInfo>();

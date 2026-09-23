@@ -13,7 +13,7 @@ launcher/bin/
 launcher/obj/
 
 # 本地调试产物
-.o-*/
+.o-*
 tests/.out/
 tests/.*.txt
 cli-test.*

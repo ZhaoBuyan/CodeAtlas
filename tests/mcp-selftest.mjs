@@ -101,7 +101,7 @@ check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把
 // 不再是同一个数，标签必须说清是哪个）。这里认两种语言的新措辞。
 const hotLines = overview.split('\n').filter((l) => /被引用 \d+ 次|referenced \d+ times/.test(l));
 const evOf = (l) => {
-  const m = l.match(/有证据 (\d+) 次|\((\d+) with evidence\)/);       // 括号里的是“算数的”引用次数
+  const m = l.match(/有证据 (\d+) 次|(\d+) with evidence/);       // 括号里的是“算数的”引用次数（可能和文件数合并成一个括号）
   if (m) return Number(m[1] ?? m[2]);
   const n = l.match(/被引用 (\d+) 次|referenced (\d+) times/);
   return Number(n[1] ?? n[2]);
@@ -291,6 +291,11 @@ fs.rmSync(fC);                                             // 已纳入图里、
 const lGone = freshLine(await fresh.call('overview', {}));
 check(!!lGone && cntChanged(lGone) === 2 && cntTimeOnly(lGone) === 1 && cntGone(lGone) === 1,
   '快照新鲜度：已不在磁盘的要白送一句', lGone.trim().slice(0, 80));
+// P0-b（dsh 可行性报告）：陈述句升级为行动建议 —— gone 分支要带“重扫即可清除”
+check(/重扫即可清除|a rescan clears them/.test(lGone),
+  '快照新鲜度：gone 分支带“重扫即可清除”行动提示', lGone.trim().slice(0, 90));
+check(/重扫即可清除|a rescan clears them/.test(freshnessNote({ source: { roots: [freshRoot] }, files: [{ path: 'nope.js', mtime: 1, bytes: 1 }] })),
+  '快照新鲜度：纯 gone 分支也带行动提示（合成输入）');
 
 // 不许乱报的几种输入：多了根（path 归谁无法判定）、没有根、文件没记 mtime（老 bundle）
 const quiet = [
@@ -1388,6 +1393,45 @@ tf.proc.kill('SIGKILL');
   const bnBundle = readBundle(path.join(bnTmp, 'out'));
   check((bnBundle.source.failedLanguages || []).every((x) => x.spawn) && !/null/.test(JSON.stringify(bnBundle.source.failedLanguages || [])),
     '㉖ bundle 里失败原因标成“子进程起不来”（不是“退出码 null”）', JSON.stringify((bnBundle.source.failedLanguages || [])[0] || null));
+}
+
+// ㉗ 2026-09-23（dsh 可行性报告的前五项）：
+// ① .gitignore 默认生效 + 按来源记账（P0-a）；--no-gitignore 反向（验收 #3：不能变成静默少扫）；
+// ② overview 按来源报“项目规则跳过的文件”；
+// ③ instructions 写明未匹配数的量纲（P1）；④ 热榜每行带“涉及几个文件”（P2-a）。
+{
+  const giTmp = path.join(os.tmpdir(), `codeatlas-gitignore-${process.pid}`);
+  const { root: giRoot, out: giOut } = scanProject(giTmp, {
+    '.gitignore': '.o-*\nignored/\n',
+    'src/a.js': 'export const a = 1;\n',
+    'src/.o-scratch.mjs': 'export const scratch = 1;\n',
+    'ignored/x.js': 'export const x = 1;\n',
+  });
+  const giB = readBundle(giOut);
+  const giFiles = giB.files.map((f) => f.path);
+  check(!giFiles.some((p) => p.includes('.o-scratch') || p.startsWith('ignored/')) && giFiles.includes('src/a.js'),
+    '㉗ .gitignore 默认生效（临时文件 / 被忽略目录不进图）', giFiles.join(', '));
+  check((giB.stats.skipped.projectBySrc || {})['.gitignore'] >= 1,
+    '㉗ 跳过按来源记账（projectBySrc）', JSON.stringify(giB.stats.skipped.projectBySrc));
+  const giSvc = spawnMcp(giOut);
+  await giSvc.ready;
+  const giOv = await giSvc.call('overview', {});
+  check(/项目规则跳过的文件|Files skipped by project rules/.test(giOv) && /\.gitignore/.test(giOv),
+    '㉗ overview：按来源报“项目规则跳过的文件”', (giOv.split('\n').find((l) => /项目规则跳过的文件|Files skipped/.test(l)) || '').trim().slice(0, 80));
+  giSvc.proc.kill('SIGKILL');
+  // 反向：--no-gitignore（只保留 atlas.ignore）
+  execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', giRoot, '--lang', 'javascript', '--no-gitignore', '--out', path.join(giTmp, 'out2')], { stdio: 'pipe' });
+  const giB2 = readBundle(path.join(giTmp, 'out2'));
+  check(giB2.files.some((f) => f.path.includes('.o-scratch')) && !(giB2.stats.skipped.ignoreSources || []).includes('.gitignore'),
+    '㉗ --no-gitignore：关闭后临时文件回到图里（不能变成静默少扫）', giB2.files.map((f) => f.path).join(', '));
+
+  // ③ 量纲说明进 instructions（拿主服务 initialize 回来的那份原文）
+  check(/denominator/.test(String(init.result?.instructions || '')),
+    '㉗ instructions：写明未匹配数按引用处计数、与类型级边不同量纲（P1）');
+  // ④ 热榜每行带“涉及几个文件”
+  const mainHotLine = (await call('overview', {})).split('\n').find((l) => /被引用|referenced/.test(l)) || '';
+  check(/（\d+ 个文件|\(\d+ files?/.test(mainHotLine),
+    '㉗ overview 热榜：每行带“涉及几个文件”（P2-a）', mainHotLine.trim().slice(0, 90));
 }
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
