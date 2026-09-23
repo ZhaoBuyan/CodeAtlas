@@ -1147,8 +1147,9 @@ if (mOwner) {
 tf.proc.kill('SIGKILL');
 
 // ⑳ 2026-09-23：dsh（DeepSeek Harness）接入 —— `mcp --print-config --client dsh` 吐 Cordis patch YAML。
-// 字段名照 dsh 官方示例（serverName / transport / command / args / cwd）；⚠ 本机没装 dsh，
-// 这道门只钉住配置结构（端到端验证另算，见工作文档）。
+// 字段名照 dsh 官方示例（serverName / transport / command / args / cwd）；
+// 2026-09-23 晚：本机 DSH Desktop 已装，配置已端到端验过（服务进程真的被拉起、工具注册）——
+// 这道门继续钉住配置结构，防以后改坏。
 {
   const dshOutDir = path.join(os.tmpdir(), `codeatlas-dsh-${process.pid}`);
   const dshYaml = execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'mcp', '--print-config', '--client', 'dsh', '--out', dshOutDir], { encoding: 'utf8' });
@@ -1163,6 +1164,46 @@ tf.proc.kill('SIGKILL');
   check(defOut.includes('"mcpServers"') && defOut.includes('"code-atlas"'),
     '⑳ 不带 --client 时仍是 mcpServers JSON（Chatbox / Claude Desktop 老路径不变）',
     (defOut.split('\n').find((l) => /mcpServers/.test(l)) || '').trim().slice(0, 60));
+}
+
+// ㉑ 2026-09-23（用户点菜）：监控模式下的文件变化指示 ——
+// watch 把“第几趟 / 重解析几个 / 改了哪些”写进 bundle.source.watch；MCP 检测到 bundle 更新后
+// 在下一个工具结果尾部提示“请重查”（只提示一次）；overview 展示“图在自动跟进”。
+{
+  const watchTmp = path.join(os.tmpdir(), `codeatlas-watch-${process.pid}`);
+  const watchRoot = path.join(watchTmp, 'proj');
+  const watchOut = path.join(watchTmp, 'out');
+  fs.rmSync(watchTmp, { recursive: true, force: true });
+  fs.mkdirSync(watchRoot, { recursive: true });
+  fs.writeFileSync(path.join(watchRoot, 'a.js'), 'export function alpha() { return 1; }\n');
+  const watchProc = spawn(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', watchRoot, '--watch', '--out', watchOut, '--no-open', '--port', String(5210 + (process.pid % 200))], { stdio: 'pipe', windowsHide: true });
+  watchProc.stdout.on('data', () => {});
+  watchProc.stderr.on('data', () => {});
+  const readWB = () => { try { return JSON.parse(fs.readFileSync(path.join(watchOut, 'bundle.json'), 'utf8')); } catch { return null; } };
+  const waitFor = async (fn, ms = 30000) => { const t0 = Date.now(); for (;;) { const r = fn(); if (r) return r; if (Date.now() - t0 > ms) return null; await new Promise((s) => setTimeout(s, 300)); } };
+  const w1 = await waitFor(() => { const b2 = readWB(); return b2?.source?.watch?.pass >= 1 ? b2 : null; });
+  check(Boolean(w1) && w1.source.watch.reason === 'initial' && Number.isInteger(w1.source.watch.reparsed),
+    '㉑ 监控：首扫把趟信息写进 bundle（pass / reason / reparsed）', JSON.stringify(w1?.source?.watch || null));
+  fs.appendFileSync(path.join(watchRoot, 'a.js'), 'export function beta() { return 2; }\n');
+  const w2 = await waitFor(() => { const b2 = readWB(); return b2?.source?.watch?.pass > (w1?.source?.watch?.pass || 0) ? b2 : null; });
+  check(Boolean(w2) && w2.source.watch.reason === 'change' && w2.source.watch.reparsed >= 1
+    && Array.isArray(w2.source.watch.changed) && w2.source.watch.changed.includes('a.js'),
+    '㉑ 监控：改动后自动重扫（趟数+1 · 重解析 ≥1 · 改动清单含 a.js）', JSON.stringify(w2?.source?.watch || null));
+  watchProc.kill('SIGKILL');
+  await new Promise((s) => setTimeout(s, 1000));
+
+  const watchSvc = spawnMcp(watchOut);
+  await watchSvc.ready;
+  const wOv = await watchSvc.call('overview', {});
+  check(/监控模式|Watch mode/.test(wOv),
+    '㉑ 监控：overview 显示“这张图在自动跟进”', (wOv.split('\n').find((l) => /监控模式|Watch mode/.test(l)) || '').trim().slice(0, 80));
+  execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', watchRoot, '--out', watchOut], { stdio: 'pipe' });
+  const wL1 = await watchSvc.call('list', {});
+  check(/🔁/.test(wL1) && /重新查询|re-query/.test(wL1),
+    '㉑ 图更新后：下一个工具结果带“已更新、请重查”提示', (wL1.split('\n').find((l) => /🔁/.test(l)) || '').trim().slice(0, 90));
+  const wL2 = await watchSvc.call('list', {});
+  check(!/🔁/.test(wL2), '㉑ 提示只出现一次（再下一个调用不带）');
+  watchSvc.proc.kill('SIGKILL');
 }
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);

@@ -1839,6 +1839,11 @@ export async function scan(opts) {
   if (opts.incremental) {
     console.log(t(`  增量扫描：复用 ${reused.size} 个没变的文件，重新解析 ${freshFiles.length} 个` + (cache ? '' : '（没有可用缓存，本次算全量）'), `  Incremental: reused ${reused.size} unchanged files, re-parsing ${freshFiles.length}` + (cache ? '' : ' (no usable cache — treating this as a full scan)')));
   }
+  // 持续扫描（--watch）把本趟信息带进来：把增量统计补全（MCP 读侧靠它提示 AI“图刚更新过、重解析了多少”）
+  if (opts.watchInfo) {
+    opts.watchInfo.reparsed = freshFiles.length;
+    opts.watchInfo.reused = reused.size;
+  }
 
   const freshParts = [];
   const failedLanguages = [];   // 整门语言没抽出来（子进程崩了等）——要记进 bundle，不能只飘一行日志
@@ -2238,6 +2243,9 @@ export async function scan(opts) {
       // 结果"整门语言消失"看起来像"扫完了、就是空的"（实测：3000 层嵌套触发爆栈）。
       failedLanguages,
       ingest: opts.ingest || null,
+      // 持续扫描（scan --watch）的“趟信息”：第几趟 / 什么触发的 / 本趟重解析几个文件、改了哪几个
+      //——MCP 据此在每个工具结果后提示“图更新过、请重查”（不写就是 null，老 bundle 没有这个键）
+      watch: opts.watchInfo || null,
     },
     languages: langStats,
     totals,
@@ -2321,9 +2329,20 @@ export async function watchScan(opts) {
   const excludes = opts.excludes || [];
   let lastFiles = [];
   let pass = 0;
+  let dirtyList = [];        // 本轮巡检发现的改动 → 写进 bundle.source.watch.changed（MCP 拿它提示 AI）
 
-  const runPass = async (budget) => {
-    const r = await scanToDisk({ ...base, fileBudget: budget });
+  const runPass = async (budget, reason) => {
+    const r = await scanToDisk({
+      ...base,
+      fileBudget: budget,
+      watchInfo: {
+        pass: pass + 1,
+        reason,                                                    // 'initial'（首扫分趟）/ 'change'（检测到改动）
+        changed: reason === 'change' && dirtyList.length ? dirtyList.slice(0, 30) : null,
+        changedMore: reason === 'change' ? Math.max(0, dirtyList.length - 30) : 0,
+      },
+    });
+    dirtyList = [];
     lastFiles = r.files || [];
     pass++;
     console.log(t(`  ✓ 地图已更新（第 ${pass} 趟）：${r.bundle.totals.files} 文件 · ${r.bundle.totals.types} 类型 · ${new Date().toLocaleTimeString()}`,
@@ -2337,7 +2356,7 @@ export async function watchScan(opts) {
   const c = (f) => Math.max(20, Math.round(total * f));
   const caps = [...new Set([c(0.02), c(0.1), c(0.25), c(0.5)].filter((n) => n < total).concat([total]))].sort((a, b) => a - b);
   for (let i = 0; i < caps.length; i++) {
-    await runPass(caps[i] >= total ? null : caps[i]);
+    await runPass(caps[i] >= total ? null : caps[i], 'initial');
     if (i < caps.length - 1) await new Promise((s) => setTimeout(s, 1200));   // 留出时间让网页看出来
   }
 
@@ -2364,7 +2383,7 @@ export async function watchScan(opts) {
     if (busy) { again = true; return; }        // 正在扫就排队，扫完再补一次
     busy = true;
     try {
-      await runPass(null);                     // 增量重扫（缓存让没变的文件不用重解析）
+      await runPass(null, 'change');           // 增量重扫（缓存让没变的文件不用重解析）
       snapDirs();
     } catch (err) {
       console.error(t(`  ⚠ 重扫失败：${err.message}`, `  ⚠ Rescan failed: ${err.message}`));
@@ -2373,17 +2392,19 @@ export async function watchScan(opts) {
     if (again) { again = false; fire(); }
   };
 
-  /** 一遗轻量巡检：文件 mtime/大小变了、或某个目录的条目数变了 → 需要重扫 */
+  /** 一遗轻量巡检：文件 mtime/大小变了、或某个目录的条目数变了 → 需要重扫（顺手记下改了哪些，给 MCP 提示用） */
   const dirty = () => {
+    const hits = [];
     for (const f of lastFiles) {
       let st;
-      try { st = fs.statSync(f.abs); } catch { return true; }        // 被删 / 改名了
-      if (st.size !== f.bytes || Math.round(st.mtimeMs) !== Math.round(f.mtime)) return true;
+      try { st = fs.statSync(f.abs); } catch { hits.push(f.rel); continue; }        // 被删 / 改名了
+      if (st.size !== f.bytes || Math.round(st.mtimeMs) !== Math.round(f.mtime)) hits.push(f.rel);
     }
     for (const [d, n] of dirSnap) {
-      try { if (fs.readdirSync(d).length !== n) return true; } catch { return true; }
+      try { if (fs.readdirSync(d).length !== n) hits.push(`${path.basename(d)}/`); } catch { hits.push(`${path.basename(d)}/`); }
     }
-    return false;
+    if (hits.length) dirtyList = hits;
+    return hits.length > 0;
   };
 
   snapDirs();

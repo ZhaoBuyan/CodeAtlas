@@ -108,7 +108,9 @@ come with sources**. It reads the local scan result: **no re-scan, no upload**.
    restart the client.
 
 > **⚠ Freshness**: MCP clients do not hot-reload servers — **restart the client after upgrading CodeAtlas**
-> (or disconnect and reconnect that MCP server). Data itself is re-read on every call, so a rescan needs no reconnect.
+> (or disconnect and reconnect that MCP server). Data itself is re-read on every call, so a rescan needs no reconnect —
+> and when the map updates between your calls (watch mode), the first result afterwards says `🔁 the map was updated …`
+> so the AI re-queries instead of reusing earlier answers.
 
 What gets copied looks like this (all paths are **absolute**, nothing to edit):
 

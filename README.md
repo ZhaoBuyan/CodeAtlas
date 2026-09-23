@@ -133,6 +133,8 @@ The launcher button is **two-state**: click once to go from “structure snapsho
 In monitor mode the engine polls every 1.5 s and rescans **incrementally** (only the files that changed), and the map in
 your browser updates by itself; the button shows “last update HH:MM”. “Scan” is disabled while monitoring (so two paths
 never write the bundle at once), and “Stop” kills the child process too.
+**MCP clients follow along**: the MCP server reloads the bundle whenever it changes, and after an update the first tool
+result carries a `🔁 the map was updated …` line, so the AI knows to re-query instead of reusing stale answers.
 
 ## Packaging and releases (two editions)
 
@@ -284,7 +286,9 @@ Four details:
 - **The tool output follows the UI language**: the copied config carries `CODEATLAS_LANG`, so answers come back in
   the same language as your interface (the env var wins; delete it and the engine speaks Chinese);
 - The bundle is a snapshot and can go stale. Before every call the server checks mtime and **switches to a
-  freshly scanned bundle automatically**; it will not answer from yesterday's data;
+  freshly scanned bundle automatically**; it will not answer from yesterday's data. When the bundle *did* change
+  between your calls (watch mode / a re-scan), the first result afterwards carries a `🔁 the map was updated …`
+  line — the AI is told to re-query instead of reusing earlier answers;
 - **If the files in the map changed on disk, `overview` says so**:
   `⚠ 3 mapped files changed after this snapshot (1 timestamp-only) — not reflected in the map`.
   It only re-stats the files **already in the map** (no directory walking), so **newly added files** are not detected —

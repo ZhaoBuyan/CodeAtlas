@@ -75,6 +75,8 @@ const INSTRUCTIONS = [
   '- The data is a snapshot (UTC): overview spells out the generation time (scan options included) and every tool result ends',
   '  with the same short "snapshot" stamp; a freshly scanned bundle is picked up automatically, but an **engine code update**',
   '  does need this server process restarted (the client reconnects and gets the new tool list);',
+  '  If the bundle changes between your calls (watch mode / a manual re-scan), the first result you get afterwards carries a',
+  '  `\u{1F501} the map was updated …` line \u2014 treat earlier answers as possibly stale and re-query;',
   '- overview also checks freshness: it re-stats the files already in the map, and when some of them changed on disk after',
   '  the scan it says so (`N mapped files changed…`, of which M are timestamp-only). It only covers files already in the',
   '  map — mapped files that disappeared ARE reported, while newly added files are not; a re-scan is how you pick those up;',
@@ -637,6 +639,10 @@ function toolOverview(idx, a) {
   lines.push(T(`数据快照：${when} · 扫描耗时 ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · 语言 ${so.lang || 'auto'} · 单文件上限 ${so.maxKb || 1024}KB · ${so.incremental ? '增量' : '全量'}`, `Snapshot: ${when} · scan took ${(Number(b.source.scanMs || 0) / 1000).toFixed(1)}s · languages ${so.lang || 'auto'} · max file ${so.maxKb || 1024}KB · ${so.incremental ? 'incremental' : 'full'}`));
   const fresh = freshnessNote(b);
   if (fresh) lines.push(fresh);
+  // 监控模式（scan --watch）：图会自动跟着文件改动走 —— 告诉 AI“重查就能拿最新”
+  const w = b.source?.watch;
+  if (w) lines.push(T(`🔭 监控模式：这张图由 scan --watch 维护（第 ${w.pass} 趟${w.reason === 'change' ? '（检测到改动后重扫）' : ''} · 本趟重新解析 ${fmt(w.reparsed || 0)} 个文件）—— 文件改动会自动进图，重查就能拿到最新数据`,
+    `🔭 Watch mode: this map is maintained by scan --watch (pass ${w.pass}${w.reason === 'change' ? ', after a change' : ''} · ${fmt(w.reparsed || 0)} files re-parsed this pass) — changes land automatically; re-query for the latest`));
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
   // 被默认跳过表命中的目录：AI 也该知道“这张图缺了东西”（诚实优先）。老 bundle 没这个字段 → 当空处理。
   // **项目规则跳掉的那几类排前面**（那是"这个项目自己选跳的"，通常才是需要注意的），
@@ -938,6 +944,27 @@ function stampShort(b) {
 }
 
 /**
+ * 图在两次调用之间更新过（监控模式的自动重扫 / 手动重扫也算）：
+ * 给下一个工具结果的末尾挂一条提示 —— AI 的上下文里可能有更新前的旧结论，得让它知道“重查”。
+ * 只提示一次（下次调用不带），免得变成噪声。
+ */
+function mapUpdateNote(b) {
+  const w = b?.source?.watch;
+  const bits = [stampShort(b)];
+  if (w) {
+    bits.push(T(`监控第 ${w.pass} 趟`, `watch pass ${w.pass}`));
+    bits.push(T(`重解析 ${fmt(w.reparsed || 0)} 个文件`, `${fmt(w.reparsed || 0)} files re-parsed`));
+    const names = Array.isArray(w.changed) ? w.changed : [];
+    if (names.length) {
+      const tail = names.length > 5 || w.changedMore ? T(' …', ' …') : '';
+      bits.push(T(`含 ${names.slice(0, 5).join('、')}${tail}`, `incl. ${names.slice(0, 5).join(', ')}${tail}`));
+    }
+  }
+  return T(`🔁 图在这次调用之前更新过（${bits.join(' · ')}）—— 之前拿到的结论可能已过时，请重新查询。`,
+    `🔁 The map was updated since your previous call (${bits.join(' · ')}) — earlier answers may be stale; re-query.`);
+}
+
+/**
  * list(path?, limit?)：目录浏览 —— AI 从零探索陌生库的入口（以前只能靠 search 猜名字）。
  * 不传 path 就列扫描根的顶层；输出里的路径可以直接喂给 file() / search()。
  */
@@ -1204,12 +1231,15 @@ export function startMcp({ bundlePath }) {
   }
 
   // bundle 是快照，会过时。每次调用前看一眼 mtime：重新扫描过就自动换新的（AI 不会拿到隔夜数据）
+  // 换新了要**告诉 AI**（reloaded）：它的上下文里可能还留着旧图上的结论 —— 下一个工具结果尾部会挂一条“图更新过、请重查”
+  let reloaded = false;
   function maybeReload() {
     try {
-      const t = fs.statSync(bundlePath).mtimeMs;
-      if (t !== mtime) {
-        mtime = t;
+      const tm = fs.statSync(bundlePath).mtimeMs;
+      if (tm !== mtime) {
+        mtime = tm;
         idx = buildIndex(JSON.parse(fs.readFileSync(bundlePath, 'utf8')));
+        reloaded = true;
         process.stderr.write(T(`MCP：检测到 bundle 更新，已重载（${idx.b.types.length} 个类型）\n`, `MCP: bundle changed, reloaded (${idx.b.types.length} types)\n`));
       }
     } catch { /* 读不到就继续用旧的 */ }
@@ -1256,7 +1286,12 @@ export function startMcp({ bundlePath }) {
       maybeReload();
       const text = callTool(idx, name, args);
       // 结尾挂一条快照时间（overview 那行已经写全了，不重复）：单点调用时也能看出数据新不新
-      const body = name === 'overview' ? text : `${text}\n${T(`（快照 ${stampShort(idx.b)}）`, `(snapshot ${stampShort(idx.b)})`)}`;
+      let body = name === 'overview' ? text : `${text}\n${T(`（快照 ${stampShort(idx.b)}）`, `(snapshot ${stampShort(idx.b)})`)}`;
+      // 图在两次调用之间更新过：这一条结果尾部带上“已更新”提示（只带一次）
+      if (reloaded) {
+        body += `\n${mapUpdateNote(idx.b)}`;
+        reloaded = false;
+      }
       return ok(id, { content: [{ type: 'text', text: body }], isError: false });
     }
     if (id !== undefined) fail(id, -32601, T(`不支持的方法：${method}`, `Unsupported method: ${method}`));
