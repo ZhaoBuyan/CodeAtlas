@@ -82,3 +82,27 @@ internal class WithPrimaryCtor(Animal dep) : Animal
 
     public string Tag { get; init; }
 }
+
+// ── 回归：把 async 当标识符用（C# 里合法，但语法包会把它当修饰符关键字）──
+// 不修的话**整个文件塌进一个 ERROR 节点**：这个类的类型/方法/引用全部丢失，
+// 而且它引用的 Animal 这条边也会丢（实测 efcore 454 个文件、aspnetcore 51 个受影响）。
+public class AsyncKeywordParam
+{
+    /// <summary>参数就叫 async：靠"解析出 ERROR 才兜底改名"救回来。</summary>
+    public Animal Load(bool async, Animal source)
+    {
+        if (async) { return source; }
+        return null;
+    }
+}
+
+// ── 反向回归：真修饰符写法**绝不能**被改名 ──
+// 两条都是合法的 async 方法（`async void` 的返回类型是小写，`async` 单独一行更是容易误判），
+// 早期版本的前瞻用了 \s*（跨行）导致这两个被误改、本来正常的文件反而多出 ERROR。
+public class AsyncModifierKept
+{
+    public async void FireAndForget() { await System.Threading.Tasks.Task.Yield(); }
+
+    public async
+        System.Threading.Tasks.Task<int> SplitAcrossLines() { await System.Threading.Tasks.Task.Yield(); return 1; }
+}

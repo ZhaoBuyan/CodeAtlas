@@ -17,7 +17,7 @@ import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages, expandUseTree
 import { moduleKey, importMatchesTarget } from './modules.mjs';
 import { rmrf, rmFile } from './fsx.mjs';
 import { t } from './i18n.mjs';
-import { preprocess } from './preprocess.mjs';
+import { preprocess, csharpAsyncIdentifier } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
 export const VERSION = '1.7.0';
@@ -838,6 +838,18 @@ function headerDocOf(tree) {
 }
 
 /**
+ * 数一棵语法树里的 ERROR 节点（不递归进 ERROR 内部，避免嵌套放大；与 extractFile 里
+ * `facts.errors` 的口径**刻意不同**——这里要的是"这份源码解析得有多差"的可比较量）。
+ * 用途：C# 的 async 兜底改写只在这条数**真的下降**时才采纳（见 extractFiles）。
+ */
+function countErrorNodes(node) {
+  if (node.type === 'ERROR') return 1;
+  let n = 0;
+  for (const c of node.namedChildren) n += countErrorNodes(c);
+  return n;
+}
+
+/**
  * 提取一个文件的全部事实。
  * @returns {{types: object[], imports: string[], refs: object[], namespaces: string[], commentRows: number, decisions: number}}
  */
@@ -1471,8 +1483,24 @@ async function extractFiles(files) {
     // 本文件的结果：id 都是**文件内局部**的，父进程合并时统一平移到全局
     const part = { rel: f.rel, lang: f.lang.id, ns: null, types: [], refs: [], uses: [], file: null };
     const parser = await getParser(f.lang);
-    const source = f.lang.preprocess ? preprocess(rawSource, f.lang.preprocess) : rawSource;
-    const tree = parser.parse(source);
+    let source = f.lang.preprocess ? preprocess(rawSource, f.lang.preprocess) : rawSource;
+    let tree = parser.parse(source);
+    // C# 兜底：`async` 当标识符（`bool async` 参数）时语法包会把它当修饰符关键字，
+    // **整个文件塌进一个 ERROR 节点**（实测 efcore 454 个文件、aspnetcore 51 个 —— 那些文件在图上
+    // 几乎是隐形的：0 个类 / 0 个方法）。改名重解析一次，**只在真的减少 ERROR 时才采纳** ——
+    // 判据是"数出来的 ERROR 总数"，不是"根节点有没有错"（后者对新旧两份都成立，分不出好坏）。
+    if (f.lang.id === 'csharp' && source.includes('async')) {
+      const before = countErrorNodes(tree.rootNode);
+      if (before > 0) {
+        const renamed = csharpAsyncIdentifier(source);
+        if (renamed !== source) {
+          const tree2 = parser.parse(renamed);
+          const after = countErrorNodes(tree2.rootNode);
+          if (after < before) { tree.delete?.(); tree = tree2; source = renamed; }
+          else tree2.delete?.();
+        }
+      }
+    }
     const facts = extractFile(source, tree, f.lang);
     tree.delete?.();
 

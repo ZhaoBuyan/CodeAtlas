@@ -73,6 +73,18 @@
   实测 **oss3-akka**：`jdocs.ddata.protobuf.TwoPhaseSetSerializer → jdocs.ddata.TwoPhaseSet`（w=9）等
   **7 条**边由 `name` 升为 `import`（档位合计 24,977 → 24,984 · `name` 939 → 932，**边数与端点一个没动**）。
   挑候选的优先级**不变**（宁可缺边不接错）。
+- **修复（C#：文件因为一个参数名叫 `async` 而整个从图上消失）** —— `async` 在 C# 里可以当标识符
+  （`bool async` 是合法参数名），但语法包一律把它当修饰符关键字 → **整个文件塌进一个 ERROR 节点**：
+  抽到 **0 个类 / 0 个方法**，连 import 也几乎丢光。实测 `EFCore.Specification.Tests/LoadTestBase.cs`
+  （5,609 行）只因为第 171 行 `… Load_collection(…, bool async)` 就变成 0 个类（真实 32 个类 / 129 个方法）。
+  影响面：**efcore 454 个文件、aspnetcore 51 个、newtonsoft 1 个** —— 这些文件此前在图上基本是隐形的。
+  修法是**错误驱动兜底**：文件原样解析出 ERROR 时，才把"当标识符用的 `async`"改名重解析一次，
+  **只在 ERROR 数量真的下降时才采纳**；判据（后面跟不跟标识符字符）经实测能同时做到"能修"且
+  "不误伤真修饰符"（`async Task` / `async void` / `async` 单独一行后接返回类型一律不动）。
+  实测 efcore：解析异常 **44,733 → 1,619**、"有异常且抽不到任何类型"的文件 **510 → 0**；
+  efcore 的 Specification.Tests 一个目录就**多恢复 4,063 个方法**（2,851 → 6,914）。
+  同一批还系统排掉了 27 个 C# 上下文关键字（await/var/dynamic/nameof/record/init/partial/yield/… ），
+  **只有 `async` 会塌整棵树**；`nint`/`nuint` 只造成局部 ERROR，不值得为它冒改名的风险，未处理。
 - **修复（清理路径上的静默失效删除）** —— 新增 `src/fsx.mjs`（`rmrf` / `rmFile`）：先试 `fs.rmSync`，
   **删完复查一次**，还在就退到手写 `unlinkSync` + 自底向上 `rmdirSync`。
   起因：DSH Desktop 自带的 node（**v24.9.0**）里 `fs.rmSync` **不抛错、返回后文件/目录原封不动**

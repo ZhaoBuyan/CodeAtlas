@@ -191,6 +191,56 @@ export function csharpRequiredIdentifier(src) {
 }
 
 /**
+ * C# 里把 `async` **当标识符用**时，语法包会把它当修饰符关键字 → 整个文件塌进一个 ERROR 节点。
+ *
+ * 为什么单列这一条（2026-09-23 实测，66 样本全量扫出来的）：
+ * 它不是"某几行报错"，而是**整棵树废掉**——`EFCore.Specification.Tests/LoadTestBase.cs`（5,609 行）
+ * 只因为第 171 行 `public virtual async Task Load_collection(…, bool async)` 的参数名叫 async，
+ * 就变成 root=ERROR：抽出 **0 个类 / 3 个方法**（真实是 32 个类 / 129 个方法），
+ * 连带 2,036 处解析异常。改名后 root=compilation_unit、ERROR 归零、类与方法全部恢复。
+ * 影响面实测：efcore **454 个文件**、aspnetcore 51 个、newtonsoft 1 个含这种写法 ——
+ * 这些文件此前在图上基本是隐形的。同一批里还系统测过 27 个上下文关键字（await/var/dynamic/
+ * nameof/record/init/partial/yield/when/where/… ），**只有 async 会塌整棵树**；nint/nuint 只造成
+ * 局部 ERROR、根节点仍正常，不值得为它冒改名的风险。
+ *
+ * 用法：**不在默认预处理链里**（见 `csharp()` 的注释）—— 由 `scan.mjs` 在"原样解析出了 ERROR"时
+ * 才作为**兜底候选**试一次，并且只在真的减少 ERROR 时才采纳。这样误判的代价有上界。
+ *
+ * 判据：**后面跟的不是标识符字符**（字母 / 下划线 / `@`）的 `async` 就是标识符，改名；
+ * 后面跟着标识符字符的是**修饰符**（`async Task` / `async void` / `async IAsyncEnumerable<T>` /
+ * `async` 单独一行后接 `Task`），必须保留。反过来，作标识符用时后面一定是 `,` `)` `=` `;` `?` `.`
+ * 或行尾，绝不会直接跟字母。
+ *
+ * ⚠ 试过的三种写法，只有这一种同时满足"能修"和"不误伤"（实测，见下表）：
+ * ```
+ *                                   参数 bool async    async void M()   真文件(原本 0 ERROR)
+ *   \s*[A-Z]   排除                        1→0              0→1              0→1   ✗ 误伤
+ *   [ \t]*[A-Z] 排除                       1→0              0→1              0→1   ✗ 误伤（且跨行漏判）
+ *   后面跟标识符就保留（本实现）                1→0              0→0              0→0   ✓
+ * ```
+ * 关键点：**`\s` 要能跨行**（`async` 单独一行后接返回类型是合法写法），而且 **`void` 是小写**，
+ * 所以"排除大写开头"这类判据一定漏。按"后面是不是标识符字符"判才自洽。
+ *
+ * ⚠ 替换目标用 `_asyncKw`（前导下划线，C# 里合法且几乎不可能与真名撞车）：
+ * 试过 `async_`（样本库里有 8 处 `Async_xxx` 方法名，撞车）和注入零宽字符
+ * （web-tree-sitter 不认，实测反而解析更差）。这个改写的**产物只喂给解析器**，
+ * 不进 bundle，所以不必与源码逐字一致；行号也不动（不增删换行）。
+ */
+export function csharpAsyncIdentifier(src) {
+  const mask = codeMask(src);
+  const re = /\basync\b(?![\s]*[@A-Za-z_])/g;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(src))) {
+    if (mask[m.index] !== 1) continue;
+    out += src.slice(last, m.index) + '_asyncKw';
+    last = m.index + m[0].length;
+  }
+  return out + src.slice(last);
+}
+
+/**
  * .vue 单文件组件：把 <script> / <script setup> 之外的一切换成空格，只把 script 里的代码留给 TSX 语法。
  *
  * 两条铁律（和本文件开头一样）：

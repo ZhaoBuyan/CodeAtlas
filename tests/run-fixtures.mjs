@@ -113,9 +113,9 @@ const CASES = [
   {
     dir: 'csharp',
     lang: 'csharp',
-    types: 10,
-    names: ['Animal', 'Dog', 'IWalker', 'Mood', 'Point', 'Nested', 'Size', 'FileOnlyHelper', 'WithPrimaryCtor', 'MultiLineDoc'],
-    kinds: { class: 6, interface: 1, enum: 1, record: 2 },
+    types: 12,
+    names: ['Animal', 'Dog', 'IWalker', 'Mood', 'Point', 'Nested', 'Size', 'FileOnlyHelper', 'WithPrimaryCtor', 'MultiLineDoc', 'AsyncKeywordParam', 'AsyncModifierKept'],
+    kinds: { class: 8, interface: 1, enum: 1, record: 2 },
     extends: ['Dog -> Animal', 'WithPrimaryCtor -> Animal'],
     importsMin: 2,
     docs: 3,
