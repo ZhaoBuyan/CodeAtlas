@@ -44,7 +44,13 @@ for (let i = start + 1; i < lines.length; i++) {
   if (/^##\s+/.test(lines[i])) { end = i; break; }
 }
 
-const body = [`# CodeAtlas v${version}`, '', ...lines.slice(start + 1, end)].join('\n').trim() + '\n';
+// CHANGELOG 的小节正文以**空行**开头（`## 1.7.0（…）` 之后那行是空的），
+// 直接拼进正文会让标题后面多出两个空行 —— 去掉开头的空行，只留标题与正文之间那一行。
+const section = lines.slice(start + 1, end);
+while (section.length && section[0].trim() === '') section.shift();
+while (section.length && section[section.length - 1].trim() === '') section.pop();
+
+const body = [`# CodeAtlas v${version}`, '', ...section].join('\n').trim() + '\n';
 
 if (outFile) {
   fs.writeFileSync(outFile, body);
