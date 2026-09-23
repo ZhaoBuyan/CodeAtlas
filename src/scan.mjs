@@ -555,6 +555,13 @@ function parseImports(text) {
   // C/C++：#include <stdio.h> / #include "x.h"
   const inc = stmt.match(/^#\s*include\s*[<"]([^>"]+)[>"]/);
   if (inc) return [inc[1]];
+  // **单行别名导入**：Go 的 `import pb "go.etcd.io/etcd/api/v3/etcdserverpb"`。
+  // 已有那条 `^import\s*\(…\)` 只管**括号块**，单行这种落到最后的通用分支 →
+  // 剥掉 import 后剩 `pb "path"`，取最后一段就成了 `pb "path"`（别名 + 引号都留着，
+  // 整条 import 永远对不上任何目标）。实测 etcd / grpc-go / prometheus 共 8 条。
+  // 别名（`pb` / `_` / `.`）对"指到哪个包"没有意义，要的就是引号里那个路径。
+  const aliased = stmt.match(/^import\s+(?:[A-Za-z_][\w.]*|[_.])\s+(['"])([^'"]+)\1/);
+  if (aliased) return [aliased[2]];
   const py = stmt.match(/^from\s+([^\s]+)\s+import/i);
   if (py) return [py[1]];
   // Go 的括号块导入：逐行拆（`import ( "crypto/subtle"\n"fmt" )`）。
@@ -591,7 +598,10 @@ function parseImports(text) {
   t = t.trim();
   const m = t.match(/from\s+['"]([^'"]+)['"]/) || t.match(/^['"]([^'"]+)['"]$/);
   if (m) t = m[1];
-  return [t.split(',')[0].trim().replace(/\s+as\s+\S+$/i, '')];
+  // 折换行：import 是**单行概念**，留着换行只会让下游的字符串比对（moduleKey / 前缀匹配）失配。
+  // 实测 aspnetcore：`using X = CSharpCodeFixVerifier<\n    …Analyzer,\n    …Fixer>;` 采出来带换行，
+  // 谁也认不出它（24 条）。折成空格是对"声明本身跨行写的"最保守的处理（不猜、不合并）。
+  return [t.split(',')[0].trim().replace(/\s+as\s+\S+$/i, '').replace(/\s+/g, ' ')];
 }
 
 /**
@@ -2109,16 +2119,16 @@ export async function scan(opts) {
    *
    * 取值（强 → 弱）：
    *   same   —— 同一个文件里声明的（最强，几乎不可能是巧合）
-   *   import —— C# 父命名空间 / Dart part 库 / C-C++ include 闭包等"语言上不需要写 import 也算有依据"的边
-   *   unique —— **全图只有这一个同名类型**（名字唯一，不是"名字撞上了"）
-   *   name   —— 兜底档（同命名空间 / 同根包近似）；同名但无任何依据，噪声主要在这一档
-   * 注意 unique 与 name 的区别：前者是"没有别的候选"，后者是"有候选但挑不出来"。
+   *   import —— 有语言层面的依据 —— C# 父命名空间 / Dart part 库 / C-C++ include 闭包 / 同命名空间等
+   *             "不需要写 import 也算有依据"的边（见 hasImportBacking）
+   *   unique —— 引用名在**候选表里唯一**（不是"名字撞上了"）
+   *   name   —— 兜底档（同命名空间 / 同根包近似挑出来的）；同名但挑不出唯一候选，依据最弱
+   * 注意 unique 与 name 的区别：前者是"这个名字没有别的候选"，后者是"有多个候选、靠近似挑的"。
    *
-   * ⚠ 实测（2026-09-23，六种语言十几种构造）：**`name` 档在真实代码里几乎够不着**。
-   * 原因是"有候选但挑不出来"的名字在 `resolveName` 里**直接放弃并计入 ambiguous**（宁可缺边不接错），
-   * 所以它根本不会变成边。本项目自扫 978 条边里 `name` 是 0；C#/JS/Python/TS 的同名两处构造
-   * 一律产出 `ambiguous=1`、0 条边。它保留为兜底档（同命名空间恰好只要一个候选时才轮到），
-   * **不要把它当成"图上还有一片噪声边"的依据** —— 真要判断噪声，看 `unresolved.ambiguous`。
+   * ⚠ 别用"name 是不是够得着"来判断档位实现对不对：我一度以为它够不着（自扫 0 条、人工构造 6 种语言都没有），
+   * 结论是**错的** —— 31 个真样本上 179,732 条边里 `name` 有 2,616 条（约 1.5%）。
+   * 真样本里"同名多候选"是存在的（测试类与生产类同名、`Cell`/`Token` 这类通用名），
+   * 只是自扫这个小仓库没有。**要验证这类判断，必须跑真样本**（见 工作文档\样本库\复扫.mjs）。
    */
   const TIER_RANK = { name: 0, unique: 1, import: 2, same: 3 };
 
@@ -2180,15 +2190,16 @@ export async function scan(opts) {
   const unresolved = { ambiguous: 0, unknown: 0 };
   const resolveName = (name, fromTypeId) => {
     const hit = bySimpleName.get(name);
+    // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
     if (!hit || !hit.length) { unresolved.unknown++; return null; }
     if (hit.length === 1) {
       // 唯一候选也得看 import：这个档位差很多（有 import 依据 > 只是没撞名）
       const id = hit[0];
-      return { id, import: hasImportBacking(fromTypeId, id) };
+      return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
     }
     const from = allTypes[fromTypeId];
     const sameFile = hit.filter((id) => allTypes[id].file === from.file);
-    if (sameFile.length === 1) return { id: sameFile[0], same: true };
+    if (sameFile.length === 1) return { id: sameFile[0] };
     // ③ 复测报告 §1：同名两处 + 第三方调用时，以前**直接放弃**（静默丢边）—— JS 没有命名空间，
     // “同文件”是唯一能救它的一档，救不到就丢；自扫实测 57 处这种被丢掉的引用。
     // 补一档：**用引用方文件的 imports 消歧**（与读期 evidenceOf 同一套口径，见 src/modules.mjs）。
@@ -2227,16 +2238,27 @@ export async function scan(opts) {
   /**
    * 档位判定：把 `resolveName` 的结果翻成边上的 `tier`。
    *   same   —— 两端同一个文件（最强；解析路径无关，同文件就是同文件）
-   *   import —— 引用方文件的 import 指得到目标（有语言层面的连接）
-   *   unique —— 该名字在**全图只有一个类型**（所以这条边不可能是撞名）
-   *   name   —— 兜底：靠同命名空间 / 同根包近似挑出来的（名字有歧义，依据最弱）
+   *   import —— 有语言层面的依据（import / 父命名空间 / part 库 / include 闭包 / 同命名空间）
+   *   unique —— 引用名在**候选表里唯一**（所以这条边不可能是撞名）
+   *   name   —— 兜底：名字有多个候选、靠同命名空间 / 同根包近似挑出来的（依据最弱）
+   *
+   * ⚠ 唯一性必须用 `resolveName` 当时算的 `hit.length`，**不能**回头用 `bySimpleName.get(b.name)` 反查：
+   * 引用名可能是**限定名**（Go 的 `package hclsyntax.Attributes`、Rust 的 `crate::x::Y`），
+   * 而 bySimpleName 只按简单名建表 —— 反查会查不到，于是把一批本来唯一的边误判成 `name`
+   * （实测 oss3-hcl 上 91 条、oss-guava 5 条）。
    */
   const tierOf = (fromTypeId, toTypeId, hit) => {
     const a = allTypes[fromTypeId], b = allTypes[toTypeId];
-    if (a && b && a.file === b.file) return 'same';
     if (hit?.same) return 'same';
+    if (a && b && a.file === b.file) return 'same';
     if (hit?.import) return 'import';
-    return (bySimpleName.get(b?.name) || []).length === 1 ? 'unique' : 'name';
+    // ⚠ 两端**同命名空间** = 有依据（语言语义上不需要 import 就能互相引用），必须算 import 档。
+    // 漏了这一条会把一大批同包互引误判成 name 档（实测 oss3-hcl 131 条 / oss-guava 5 条：
+    // Go 的 `package hclsyntax` 内部互引、Java 的 `com.google.common.hash` 内部互引）。
+    // 判据与 hasImportBacking 里那条保持一致 —— 两处口径必须相同，否则又会出现"扫描说有、
+    // 读侧说没有"的自相矛盾（modules.mjs 文件头记的就是这类事故）。
+    if (a && b && a.ns && a.ns === b.ns) return 'import';
+    return hit?.uniq ? 'unique' : 'name';
   };
 
   for (const r of allRefs) {

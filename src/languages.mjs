@@ -116,6 +116,27 @@ export function splitTopLevel(s) {
  */
 export function expandUseTree(body) {
   const out = [];
+  // **先剥注释**：Rust 的 use 树常常跨几十行、中间还夹着 `//` 注释（rust-analyzer 实测）：
+  //   use hir_def::{
+  //       import_map,
+  //       // FIXME: This is here since some queries take it as input
+  //       {GenericParamId, ModuleDefId, TraitId},
+  //   },
+  // 不剥的话，注释行会和后面那行路径**粘成一段**（`// FIXME…{GenericParamId`），
+  // expandUseTree 就会把这堆垃圾当路径吐出去 —— 整条 import 永远对不上任何目标。
+  // 剥在这里而不是 parseImports 里：Elixir 的 `alias` 走的是**直达** expandUseTree 的路径，
+  // 只在 parseImports 里剥会漏掉它（我第一版就错在那儿）。
+  // 只切"行首或前面是空白"的 `//` —— `https://` 这种前面是标识符字符，不动；块注释整段删。
+  const cleaned = String(body)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split(/\r?\n/)
+    .map((line) => {
+      const m = line.match(/(^|\s)\/\//);
+      return m ? line.slice(0, m.index + m[1].length) : line;
+    })
+    .join(' ')
+    // 折成单行：多行 use 树里的缩进/换行留着只会混进路径
+    .replace(/\s+/g, ' ');
   const walk = (part, prefix) => {
     let s = String(part).trim();
     if (!s) return;
@@ -133,7 +154,7 @@ export function expandUseTree(body) {
     const head = s.slice(0, brace);
     for (const piece of splitTopLevel(s.slice(brace + 1, close))) walk(piece, prefix + head);
   };
-  walk(body, '');
+  walk(cleaned, '');
   return out;
 }
 
@@ -152,6 +173,7 @@ const elixirImportText = (node) => {
   // 只取最后一段（Shape.Utils → Utils）：跟类型名字保持一致，解析器才匹配得上
   return lastSeg(t);
 };
+
 const elixirIsDecision = (node) => {
   const c = elixirCallee(node);
   if (!c || !/^[a-z]/.test(c)) return false;   // 模块属性等（@doc）不要算进来

@@ -322,12 +322,21 @@ function evidenceTag(ev) {
 
 /**
  * 某个类型“算数的”被引用**次数**（同文件 + 有支撑的边，按权重相加）—— overview 热点榜拿它排序。
- * 与 fanIn（全部入边权重之和）同一个口径：都是“次”；差别只是这里扣掉了“仅同名”那一档噪声。
- * （权重以前恒为 1，这两个数等价；2026-09-20 边权重变成真的引用次数后，必须按权重加才不失真）
+ * 与 fanIn（全部入边权重之和）同一个口径：都是“次”；差别只是这里扣掉了**强档之外**的边。
+ *
+ * ⚠ 哪些档算"有证据"：只算 `same`（同文件）与 `import`（有语言依据 —— import / 父命名空间 /
+ * part 库 / include 闭包 / 同命名空间）。`unique`（名字全图唯一）与 `name` **不算** ——
+ * 它们仍会显示、也会计入 fanIn，但"名字没撞车"不等于"这条边有依据"：
+ * 实测 oss3-akka 上 6,168 条边是 `unique` 却没任何 import / 同命名空间支撑，
+ * 若把它们并进"有证据"，热点榜会重新被名字巧合抬起来（正是这一档要解决的问题）。
+ * 口径与测试脚本 复扫.mjs 的「A = import 支撑」一致。
  */
 function evidencedIn(idx, t) {
   let n = 0;
-  for (const e of idx.ins.get(t.id) || []) if (evidenceOf(idx, e) !== 'name') n += e.w || 1;
+  for (const e of idx.ins.get(t.id) || []) {
+    const ev = evidenceOf(idx, e);
+    if (ev === 'same' || ev === 'import') n += e.w || 1;
+  }
   return n;
 }
 
