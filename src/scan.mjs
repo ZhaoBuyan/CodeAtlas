@@ -15,6 +15,7 @@ import { Parser, Language } from 'web-tree-sitter';
 import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages, expandUseTree } from './languages.mjs';
 // 模块名归一 / import 是否能指到目标 —— 与读期（mcp.mjs 的证据分档）**共用同一套口径**
 import { moduleKey, importMatchesTarget } from './modules.mjs';
+import { rmrf, rmFile } from './fsx.mjs';
 import { t } from './i18n.mjs';
 import { preprocess } from './preprocess.mjs';
 
@@ -1953,9 +1954,12 @@ export async function scan(opts) {
       }
       // 注意：子进程是 SIGKILL 硬退的（绕开退出阶段的 libuv 断言），所以**成功时退出码也是 1**。
       // 不要用“退出码非 0”去判定失败，也不要据此打日志（否则每门语言都会刷一行）——成败只看 emit。
-      try { fs.rmSync(emit, { force: true }); } catch { }
+      // ⚠ 清理必须真的删掉：emit 是本轮的产物，下一门语言（或下一趟扫描）看到旧的 emit 就会把
+      // 上一轮的结果当成本轮结果（`fs.rmSync` 在 DSH 自带的 node v24.9.0 上**静默不删**，
+      // 见 src/fsx.mjs 的文件头）——所以走 rmFile（删完复查）。
+      rmFile(emit);
     }
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { }
+    rmrf(tmp);
   }
 
   // 按 collectFiles 的顺序合并（缓存命中的 + 新解析的）：顺序稳定，只改几个文件时 id 不会乱跳
@@ -2146,7 +2150,12 @@ export async function scan(opts) {
    * 就是引用的那个（本地作用域胜过包/命名空间近似）；反过来，同一包里另一个文件里的
    * 同名符号只是“看起来像”，按名字接上去就是误归。
    *
-   * 返回 `{ id, tier }`（tier 见 TIER_RANK）；对不上时返回 null。
+   * 返回值（`import` 与 `evidenced` 只影响档位、不影响挑谁）：
+   *   `import: true`    —— 唯一候选 / 靠 import 消歧挑出来的
+   *   `evidenced: true` —— 同名候选**都**有 import 依据（挑不出唯一的那个），退回同名档挑出来的，
+   *                        但挑中的这个确实有 import 依据 → `tierOf` 仍记 import 档
+   * 两者都不带，才落到 unique / name。
+   * 返回 `{ id, ... }`；对不上时返回 null。
    * 外层还会按"两端是不是同一个文件"把 tier 升到 same —— 解析路径与边的性质是两件事。
    */
   /**
@@ -2205,14 +2214,19 @@ export async function scan(opts) {
     // 补一档：**用引用方文件的 imports 消歧**（与读期 evidenceOf 同一套口径，见 src/modules.mjs）。
     const viaImport = hit.filter((id) => hasImportBacking(fromTypeId, id));
     if (viaImport.length === 1) return { id: viaImport[0], import: true };
+    // ⚠ `viaImport.length > 1` 不等于"没有 import 依据"：候选**都**有依据、挑不出唯一的那一个
+    // （典型：import `a.b.X.Something` 经前缀规则同时指得到 `a.b.X` 与 `a.b.X.Something`，
+    //  于是引用 `X` 时三个同名候选一起命中）。下面挑出来的候选仍然可能**确实有** import 依据，
+    //  此时必须把 `evidenced` 带出去 —— 否则 `tierOf` 只会看到 `{id}`，把有依据的边记成 name 档。
+    //  实测 oss3-akka：7 条这样的边（`jdocs.ddata.protobuf.TwoPhaseSetSerializer → jdocs.ddata.TwoPhaseSet` 等）。
     const sameNs = hit.filter((id) => allTypes[id].ns === from.ns);
-    if (sameNs.length === 1) return { id: sameNs[0] };
+    if (sameNs.length === 1) return { id: sameNs[0], evidenced: hasImportBacking(fromTypeId, sameNs[0]) };
     const sameRoot = hit.filter((id) => {
       const a = allTypes[id].ns.split('.')[0];
       const b = from.ns.split('.')[0];
       return a && a === b;
     });
-    if (sameRoot.length === 1) return { id: sameRoot[0] };
+    if (sameRoot.length === 1) return { id: sameRoot[0], evidenced: hasImportBacking(fromTypeId, sameRoot[0]) };
     unresolved.ambiguous++;
     return null;
   };
@@ -2251,7 +2265,7 @@ export async function scan(opts) {
     const a = allTypes[fromTypeId], b = allTypes[toTypeId];
     if (hit?.same) return 'same';
     if (a && b && a.file === b.file) return 'same';
-    if (hit?.import) return 'import';
+    if (hit?.import || hit?.evidenced) return 'import';
     // ⚠ 两端**同命名空间** = 有依据（语言语义上不需要 import 就能互相引用），必须算 import 档。
     // 漏了这一条会把一大批同包互引误判成 name 档（实测 oss3-hcl 131 条 / oss-guava 5 条：
     // Go 的 `package hclsyntax` 内部互引、Java 的 `com.google.common.hash` 内部互引）。
@@ -2480,7 +2494,7 @@ export async function scanToDisk(opts) {
     fs.renameSync(tmpOut, out);
   } catch {
     fs.writeFileSync(out, JSON.stringify(result.bundle));   // 极端情况下（被占 / 跨卷）退回去直接写
-    try { fs.rmSync(tmpOut, { force: true }); } catch { /* 忽略 */ }
+    rmFile(tmpOut);                                        // 同样是"删不掉就会留下旧产物"，走复查版
   }
   return { ...result, out };
 }

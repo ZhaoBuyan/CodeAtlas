@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { freshnessNote, parseExclude, isExcluded } from '../src/mcp.mjs';
 import { importMatchesTarget } from '../src/modules.mjs';
 import { csharpConditionalDirectives } from '../src/preprocess.mjs';
+import { rmrf } from '../src/fsx.mjs';   // 见 src/fsx.mjs：本环境 DSH 的 node 里 fs.rmSync 会静默不删
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -284,7 +285,7 @@ function spawnMcp(outDir) {
 function scanProject(tmpDir, files, lang = 'javascript') {
   const root = path.join(tmpDir, 'proj');
   const out = path.join(tmpDir, 'out');
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  rmrf(tmpDir);
   for (const [rel, content] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), content);
@@ -329,7 +330,11 @@ const lTouch = freshLine(await fresh.call('overview', {}));
 check(!!lTouch && cntChanged(lTouch) === 2 && cntTimeOnly(lTouch) === 1 && !cntGone(lTouch),
   '快照新鲜度：“仅时间戳变化”单独计数（也不叫“未改”——证明不了内容没变）', lTouch.trim().slice(0, 80));
 
-fs.rmSync(fC);                                             // 已纳入图里、磁盘上已经没了
+// 已纳入图里、磁盘上已经没了。
+// ⚠ 这里必须用 `unlinkSync`，**不能**用 `fs.rmSync(f)`：本环境里 `rmSync` 会静默不删
+// （不抛错、返回后文件还在 —— 实测 node v24.9.0 / win32，删文件与删目录都失效），
+// 于是这条断言永远看不到 gone 分支。踩过：这一条会稳定报"未通过"，而真因与引擎无关。
+fs.unlinkSync(fC);
 const lGone = freshLine(await fresh.call('overview', {}));
 check(!!lGone && cntChanged(lGone) === 2 && cntTimeOnly(lGone) === 1 && cntGone(lGone) === 1,
   '快照新鲜度：已不在磁盘的要白送一句', lGone.trim().slice(0, 80));
@@ -692,7 +697,7 @@ check(!/调用 \/ 访问位置|Call \/ access sites/.test(rDeclT),
 ds.proc.kill('SIGKILL');
 // 真·老图：把同一份 bundle 的引擎版本改小 → 必须走“没记录”那个分支
 const oldTmp2 = path.join(os.tmpdir(), `codeatlas-oldeng-${process.pid}`);
-fs.rmSync(oldTmp2, { recursive: true, force: true });
+rmrf(oldTmp2);
 fs.mkdirSync(oldTmp2, { recursive: true });
 const oldB = JSON.parse(JSON.stringify(readBundle(declOut)));
 oldB.generator.version = '1.4.2';
@@ -1222,7 +1227,7 @@ tf.proc.kill('SIGKILL');
   const watchTmp = path.join(os.tmpdir(), `codeatlas-watch-${process.pid}`);
   const watchRoot = path.join(watchTmp, 'proj');
   const watchOut = path.join(watchTmp, 'out');
-  fs.rmSync(watchTmp, { recursive: true, force: true });
+  rmrf(watchTmp);
   fs.mkdirSync(watchRoot, { recursive: true });
   fs.writeFileSync(path.join(watchRoot, 'a.js'), 'export function alpha() { return 1; }\n');
   const watchProc = spawn(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', watchRoot, '--watch', '--out', watchOut, '--no-open', '--port', String(5210 + (process.pid % 200))], { stdio: 'pipe', windowsHide: true });
@@ -1420,7 +1425,7 @@ tf.proc.kill('SIGKILL');
 
   // ② 子进程起不来：一句说清 + bundle 标 spawn（NODE_BIN 指向不存在的文件来模拟）
   const bnTmp = path.join(os.tmpdir(), `codeatlas-spawnfail-${process.pid}`);
-  fs.rmSync(bnTmp, { recursive: true, force: true });
+  rmrf(bnTmp);
   const bnRoot = path.join(bnTmp, 'proj');
   fs.mkdirSync(bnRoot, { recursive: true });
   fs.writeFileSync(path.join(bnRoot, 'a.js'), 'export function alpha() { return 1; }\n');

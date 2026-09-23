@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { rmrf, rmFile } from '../src/fsx.mjs';   // 见 src/fsx.mjs：本环境 DSH 的 node 里 fs.rmSync 会静默不删
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -32,7 +33,7 @@ function scanOne(dir, lang, rootAbs, extra = []) {
   // "有没有写出新的 bundle"来判，不能靠"bucket 在不在"——上一趟的旧产物会让
   // 失败的扫描看起来像成功（踩过：35/36 那次就是 scanOne 把上一轮的 bundle 当成
   // 这一轮的结果返回，断言于是拿旧数据比对，报出来的错和真因完全无关）。
-  try { fs.rmSync(p, { force: true }); } catch { /* 删不掉也不至于更糟 */ }
+  rmFile(p);
   const t0 = Date.now();
   try {
     execFileSync(NODE, [
@@ -60,7 +61,7 @@ const GIT_FIXTURE = path.join(TMPROOT, 'git-heat');
 const PLAIN_FIXTURE = path.join(TMPROOT, 'no-git');
 const git = (cwd, args) => execFileSync('git', args, { cwd, stdio: 'ignore' });
 function makeGitFixture() {
-  fs.rmSync(GIT_FIXTURE, { recursive: true, force: true });
+  rmrf(GIT_FIXTURE);
   fs.mkdirSync(GIT_FIXTURE, { recursive: true });
   fs.writeFileSync(path.join(GIT_FIXTURE, 'a.js'), 'function alpha(x) { return x + 1; }\n');
   fs.writeFileSync(path.join(GIT_FIXTURE, 'b.js'), 'function beta(y) { return y * 2; }\n');
@@ -75,7 +76,7 @@ function makeGitFixture() {
   fs.writeFileSync(path.join(GIT_FIXTURE, 'c.js'), 'function gamma(z) { return z; }\n');
 }
 function makePlainFixture() {
-  fs.rmSync(PLAIN_FIXTURE, { recursive: true, force: true });
+  rmrf(PLAIN_FIXTURE);
   fs.mkdirSync(PLAIN_FIXTURE, { recursive: true });
   fs.writeFileSync(path.join(PLAIN_FIXTURE, 'solo.js'), 'function solo(x) { return x; }\n');
 }
@@ -88,7 +89,7 @@ makePlainFixture();
 // 注：`fixtures` 目录**不特判**（试过、已撤）—— “样例语料算不算测试”是因项目而异的判断，写进分类器就是按某一个项目调规则。
 const TESTPATH_FIXTURE = path.join(TMPROOT, 'testpath');
 function makeTestPathFixture() {
-  fs.rmSync(TESTPATH_FIXTURE, { recursive: true, force: true });
+  rmrf(TESTPATH_FIXTURE);
   const files = {
     'src/app.js': 'export function app() { return 1; }\n',
     'src/latest.js': 'export function latest() { return 2; }\n',
@@ -336,7 +337,7 @@ if (fs.existsSync(outRoot)) {
   const removed = [];
   for (const e of fs.readdirSync(outRoot, { withFileTypes: true })) {
     if (!e.isDirectory() || CASE_DIRS.has(e.name)) continue;
-    try { fs.rmSync(path.join(outRoot, e.name), { recursive: true, force: true }); removed.push(e.name); } catch { /* 删不掉就留着 */ }
+    if (rmrf(path.join(outRoot, e.name))) removed.push(e.name);
   }
   if (removed.length) console.log(`清理旧产物目录 ${removed.length} 个（无用例在写）：${removed.join(', ')}\n`);
 }
@@ -544,7 +545,7 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
 }
 
 // 现造的夹具用完就收（true 忽略删不掉的情况）
-try { fs.rmSync(TMPROOT, { recursive: true, force: true }); } catch { /* 忽略 */ }
+rmrf(TMPROOT);
 
 let failed = 0;
 for (const r of results) {
