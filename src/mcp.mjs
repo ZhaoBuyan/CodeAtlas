@@ -55,11 +55,14 @@ const INSTRUCTIONS = [
   '  **name matching** — dynamic calls, reflection and names built by string concatenation are invisible, and the counts of',
   '  unmatched and ambiguous references are reported explicitly in overview and impact — note the **denominator**: they are',
   '  counted per reference site and are mostly member names, while edges are type-level, so they are not comparable to the edge count;',
-  '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `backed` (the',
-  '  referring file imports a module of that name, or imports the target\'s namespace / package, or both sides sit in the',
-  '  same namespace / package (or one Dart part library — part files cannot import; the library\'s imports are visible to them), or the target file sits inside an imported package, or a parent namespace in C# / VB — strong evidence, not proof) > `same name only` (this',
-  '  bucket holds both coincidences and real references we failed to recognize — a parent namespace needs no `using`, and a',
-  '  qualified name like `A.B.C` is not covered either — so check the source when in doubt). Solitary `same name only` edges are',
+  '- `refs` tags every edge with its evidence strength, and the tier is now **recorded when the edge is built** (not',
+  '  re-guessed at read time) — `same file` (both sides in one file — solid) > `backed` (the referring file imports a module',
+  '  of that name, or imports the target\'s namespace / package, or both sides sit in the same namespace / package (or one Dart',
+  '  part library — part files cannot import; the library\'s imports are visible to them), or the target file sits inside an',
+  '  imported package, or a parent namespace in C# / VB — strong evidence, not proof) > `only candidate` (the name resolves to',
+  '  exactly one type in the whole map: usually a real reference that needs no import syntax, NOT a coincidence) > `same name',
+  '  only` (this bucket holds the coincidences — but note a qualified name like `A.B.C` is not covered either, so check the',
+  '  source when in doubt). Solitary `same name only` edges are',
   '  why a raw reference count can be misleading, so the `overview`',
   '  "most depended-on" list is ranked by references with evidence instead (the number in brackets is how many count);',
   '- Files with parse errors are flagged individually; their data may be incomplete;',
@@ -244,17 +247,29 @@ function fmt(n) {
 // 模块名归一（basename / SRC_EXT / moduleKey）已挑到 src/modules.mjs —— 扫描器与读期必须判得一样
 
 /**
- * 引用证据强度 —— 依赖边是静态名字匹配，所以“同名但无关”的边会混进来：实测（一个真实 monorepo 样本）
- * 有个函数 145 条入边里 141 条来自别的文件里同名对象的方法调用，跟它根本无关。
- * 读侧分三档（不动引擎数据）：同文件最硬；引用方文件的 imports 能指到被引用方（模块名 / 命名空间 / 包）
- * = 有支撑；剩下只共享一个名字的归“仅同名”，噪声主要在这一档。
- * Dart 补两条（2026-09-23，riverpod / bloc 实测）：part 文件继承库的 imports（libImports）、
- * 同一个库（part 组）内互相引用不需要 import（lib 相同）—— 两者都归“有支撑”。
- * ⚠ 复测报告 §3：以前只比“被引用文件的文件名主干”，于是**命名空间语言（C#/Java/Kotlin）全军塔成“仅同名”**
- * （一个 C# 项目 53 条边里“有支撑”0 条，连 `using MuSync.Models;` 都认不出来），overview 热点榜跟着失真。
- * 现在改走 modules.mjs 的 `importMatchesTarget`（模块名 + 命名空间 + 包路径 + Rust 段后缀 + 仓库内包名自引用）。
+ * 引用证据强度 —— 现在**直接读边上记的 tier**（扫描期 `resolveName` 落进 bundle 的字段）。
+ *
+ * 为什么不再重算：以前这里是"把同一套启发式在每条边上重跑一遍"（判引用方文件的 imports 能不能指到目标）。
+ * 但解析路径与判定路径是两件事 —— 一条边可能是靠**唯一命中**接上的（全图只有这一个同名类型，
+ * 压根没经过 import 判定），读侧重算就只能给出"没有 import 依据"，于是把真引用说成噪声。
+ * 更重要的是两份推理链会漂移（modules.mjs 文件头记的同类事故），而且每次调用都要重跑
+ * 一遍字符串匹配（自扫实测 914 条边 2,043 次，无缓存）。
+ *
+ * 取值（强 → 弱）：same（同文件） > import（有 import 依据） > unique（名字全图唯一） > name（仅同名）。
+ * `unique` 单独一档的理由：**名字唯一不是"撞名"** —— Result / init 这类名字在全图只有一个候选时，
+ * 那条边几乎必然是真引用，只是语言上不需要（或我们没抓到）import 语句。
+ * 老 bundle 没有 tier 字段时回退到重算（口径与扫描期共用 modules.mjs，不会两套）。
  */
 function evidenceOf(idx, e) {
+  const t = e?.tier;
+  if (t === 'same' || t === 'import') return t;
+  if (t === 'name') return 'name';
+  if (t === 'unique') return 'unique';
+  return evidenceRecomputed(idx, e);      // 老 bundle（或边来自手写数据）
+}
+
+/** 老 bundle 的回退口径：按引用方文件的 imports / 闭包 / part 库重算一遍 */
+function evidenceRecomputed(idx, e) {
   const src = idx.byId.get(e.from);
   const dst = idx.byId.get(e.to);
   if (!src || !dst) return 'name';
@@ -295,12 +310,13 @@ function evidenceOf(idx, e) {
   return 'name';
 }
 
-const EVIDENCE_RANK = { same: 2, import: 1, name: 0 };
+const EVIDENCE_RANK = { same: 3, import: 2, unique: 1, name: 0 };
 
 /** refs 每行尾的短标签（有证据的排前面，标了才看得出来哪几条是噪声） */
 function evidenceTag(ev) {
   if (ev === 'same') return T('  [同文件]', '  [same file]');
   if (ev === 'import') return T('  [有支撑]', '  [backed]');
+  if (ev === 'unique') return T('  [唯一]', '  [only candidate]');
   return T('  [仅同名]', '  [same name only]');
 }
 
@@ -680,6 +696,25 @@ function toolOverview(idx, a) {
   // 项目规则（.gitignore / atlas.ignore）跳过的文件按来源报数（AI 实测：工作流里临时文件进图是常态，得能看出是谁挡的）
   const pbs = Object.entries(b.stats?.skipped?.projectBySrc || {}).filter(([, n]) => n > 0).sort((x, y) => y[1] - x[1]);
   if (pbs.length) lines.push(T(`  项目规则跳过的文件：${pbs.map(([s, n]) => `${s} ${fmt(n)}`).join(' · ')}（未进图）`, `  Files skipped by project rules: ${pbs.map(([s, n]) => `${s} ${fmt(n)}`).join(' · ')} (not in the map)`));
+  // 边的自审：这张图的边是**凭什么接上的**（扫描期记的 tier）。以前这个分布要读侧重算才看得到，
+  // 而"仅同名"那一档正是噪声所在 —— 摆在第一屏，读者一眼知道有多少边没有依据。
+  {
+    const et = b.stats?.edgeTiers;
+    if (et && Object.keys(et).length) {
+      const n = (k) => et[k] || 0;
+      const parts = [];
+      if (n('same')) parts.push(T(`同文件 ${fmt(n('same'))}`, `same file ${fmt(n('same'))}`));
+      if (n('import')) parts.push(T(`有 import 支撑 ${fmt(n('import'))}`, `import-backed ${fmt(n('import'))}`));
+      if (n('unique')) parts.push(T(`名字唯一 ${fmt(n('unique'))}`, `only candidate ${fmt(n('unique'))}`));
+      if (n('name')) parts.push(T(`**仅同名 ${fmt(n('name'))}**`, `**same name only ${fmt(n('name'))}**`));
+      // 老 bundle（引擎 < 记 tier 那版）没有这个字段 → 直说"这份图没带"，别让人读成"没有仅同名边"
+      lines.push(T(`边 ${fmt(b.totals.edges)} 条按证据分：${parts.join(' · ')}（仅同名那档没有依据，排序/连线都会把它算进去）`,
+        `Edge evidence (${fmt(b.totals.edges)} total): ${parts.join(' · ')} (the "same name only" bucket has no backing — ranking and links still count it)`));
+    } else if (b.totals.edges) {
+      lines.push(T('边没有证据档标记 —— 这份 bundle 是更早的引擎扫的（重扫一次就会带上 same/import/unique/name 分档）',
+        'Edges carry no evidence tiers — this bundle was produced by an older engine (a rescan adds the same/import/unique/name breakdown)'));
+    }
+  }
   if (b.totals.parseErrors) {
     const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
     const showBad = bad.slice(0, 8);

@@ -27,6 +27,13 @@ const NODE = process.env.NODE_BIN || 'node';
 function scanOne(dir, lang, rootAbs, extra = []) {
   const srcDir = rootAbs || path.join(HERE, 'fixtures', dir);
   const outDir = path.join(HERE, '.out', dir);
+  const p = path.join(outDir, 'bundle.json');
+  // 产物先删掉再扫：outDir 是**固定路径**，"这一趟到底扫成功没有"必须靠
+  // "有没有写出新的 bundle"来判，不能靠"bucket 在不在"——上一趟的旧产物会让
+  // 失败的扫描看起来像成功（踩过：35/36 那次就是 scanOne 把上一轮的 bundle 当成
+  // 这一轮的结果返回，断言于是拿旧数据比对，报出来的错和真因完全无关）。
+  try { fs.rmSync(p, { force: true }); } catch { /* 删不掉也不至于更糟 */ }
+  const t0 = Date.now();
   try {
     execFileSync(NODE, [
       path.join(ROOT, 'src', 'cli.mjs'), 'scan', srcDir,
@@ -34,10 +41,15 @@ function scanOne(dir, lang, rootAbs, extra = []) {
     ], { stdio: 'pipe' });
   } catch (e) {
     // 有的语法包在进程退出时会崩（bundle 已经写好），只要产物在就算成功
-    const p = path.join(outDir, 'bundle.json');
     if (!fs.existsSync(p)) throw e;
   }
-  return JSON.parse(fs.readFileSync(path.join(outDir, 'bundle.json'), 'utf8'));
+  if (!fs.existsSync(p)) throw new Error(`扫描没有写出 bundle：${p}`);
+  // 时间戳兜底（万一上面那次 remove 没生效）：产物必须是这一趟写的
+  const st = fs.statSync(p);
+  if (st.mtimeMs < t0) {
+    throw new Error(`bundle 是旧的（mtime ${st.mtime.toISOString()} 早于本次扫描开始）—— 扫描没真正跑成功：${p}`);
+  }
+  return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
 // ---- git 热度用例的两个根目录 ----
@@ -313,6 +325,21 @@ const CASES = [
     notTestFiles: ['src/app.js', 'src/latest.js', 'src/tester.js', 'spec/api.js'],
   },
 ];
+
+// 跑测之前把"没有用例在写"的旧产物清掉：`tests/.out/` 里的目录是**按用例名**建的，
+// 用例改名 / 删掉之后旧目录会一直留着 —— 里面是几周前的 bundle，很容易被人（和 AI）
+// 当成"最近一轮的结果"来读（实测：`i18n-en` 那份躺了 5.7 天）。只清**确定不在本轮用例里**的，
+// 不动任何会被本轮写入的目录。
+const CASE_DIRS = new Set([...CASES, ...EXTRA_CASES].map((c) => c.dir));
+const outRoot = path.join(HERE, '.out');
+if (fs.existsSync(outRoot)) {
+  const removed = [];
+  for (const e of fs.readdirSync(outRoot, { withFileTypes: true })) {
+    if (!e.isDirectory() || CASE_DIRS.has(e.name)) continue;
+    try { fs.rmSync(path.join(outRoot, e.name), { recursive: true, force: true }); removed.push(e.name); } catch { /* 删不掉就留着 */ }
+  }
+  if (removed.length) console.log(`清理旧产物目录 ${removed.length} 个（无用例在写）：${removed.join(', ')}\n`);
+}
 
 const results = [];
 for (const c of [...CASES, ...EXTRA_CASES]) {

@@ -47,8 +47,17 @@ const call = async (name, args) => {
   return r.result?.content?.[0]?.text ?? JSON.stringify(r.error || r.result);
 };
 
+/**
+ * 读一份 bundle（gate 里查边 / 查 unresolved / 查证据档用）。
+ * 定义在这里而不是中段：P4-a 的证据档断言在文件靠前的位置就要用它，
+ * 而 `const` 有暂时性死区（踩过：Cannot access 'readBundle' before initialization）。
+ */
+const readBundle = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'bundle.json'), 'utf8'));
+
 const failed = [];
+let total = 0;
 const check = (ok, label, detail = '') => {
+  total++;
   console.log(`${ok ? '✓' : '✗'} ${label}${detail ? '  ' + detail : ''}`);
   if (!ok) failed.push(label);
 };
@@ -87,15 +96,50 @@ check(refs.length > 10 && /×/.test(refs), 'refs', refs.split('\n')[0].slice(0, 
 const refsTrunc = await call('refs', { name: String(hottest.id), direction: 'in', limit: 1 });
 check(hottest.fanIn <= 1 || /还有 .*条没显示|more not shown/.test(refsTrunc), 'refs 超限时告知还剩多少', refsTrunc.split('\n').slice(-1)[0].slice(0, 60));
 
-// 引用证据强度：refs 每条边挂一个标签（同文件 / 有支撑（import、同命名空间 / 同包、C# 父命名空间）/ 仅同名），
+// 引用证据强度：refs 每条边挂一个标签。档位由**扫描期记在边上**（bundle 的 edges[].tier）：
+// 同文件 / 有支撑（import、同命名空间、C# 父命名空间、Dart part 库、C/C++ include 闭包）
+// / 唯一（该名字全图只有一个类型 —— 不是撞名）/ 仅同名（有歧义且挑不出来，噪声在这一档）
 // overview 热点榜按“有证据的引用数”排 —— 免得好多“同名但无关”的边把没人真用的类型顶到第一
 const refsAll = await call('refs', { name: String(hottest.id), direction: 'in', limit: 200 });
-const tagCount = (refsAll.match(/\[(同文件|有支撑|仅同名|same file|backed|same name only)\]/g) || []).length;
+const tagCount = (refsAll.match(/\[(同文件|有支撑|唯一|仅同名|same file|backed|only candidate|same name only)\]/g) || []).length;
 const edgeCount = (refsAll.match(/×/g) || []).length;
 check(edgeCount > 0 && tagCount === edgeCount, 'refs 每条边都标了引用证据强度', `${tagCount}/${edgeCount} 条带标签`);
 const hasNameOnly = /\[(仅同名|same name only)\]/.test(refsAll);
 // 图例只在会话首个 refs 出现（AI 实测反馈：每次重复是固定税）—— 所以查上面那次 refs（首个）
 check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把“仅同名”说准（图例只出现一次 · 首个 refs 上）', hasNameOnly ? '有仅同名边，首条 refs 带说明' : '这个 bundle 里没有仅同名边');
+
+// ── P4-a：证据档记在**边**上（edges[].tier），读侧不再重算 ────────────────────────
+// 为什么断言在 bundle 上而不是只看 refs 的文字：这一条要钉的是**数据**——
+// 档位是扫描期 `resolveName` 判出来的（同文件 / import / 唯一候选 / 仅同名），
+// 读侧只负责显示。以前读侧每次调用都把同一套启发式在每条边上重跑一遍，
+// 两份推理链会漂移（实测：唯一候选的边被读侧说成"无依据"）。
+{
+  const tb = readBundle(outDir);
+  const tiers = tb.edges.map((e) => e.tier);
+  const noTier = tiers.filter((t) => !t).length;
+  const bad = [...new Set(tiers)].filter((t) => !['same', 'import', 'unique', 'name'].includes(t));
+  check(noTier === 0 && bad.length === 0, '㉘ 每条边都记了证据档（edges[].tier）', `缺 ${noTier} 条 · 越界取值 ${JSON.stringify(bad)}`);
+  const et = tb.stats?.edgeTiers || {};
+  const sum = Object.values(et).reduce((a, b2) => a + b2, 0);
+  check(sum === tb.edges.length, '㉘ edgeTiers 分布与边数对得上', `分布 ${JSON.stringify(et)} · 合计 ${sum}/${tb.edges.length}`);
+  check((et.same || 0) + (et.import || 0) + (et.unique || 0) > 0, '㉘ 证据档分布不是空的', JSON.stringify(et));
+  // 跨文件、名字全图唯一的边：既不该标“有支撑”（没有 import 依据），也不该标“仅同名”（那个名字没撞）
+  const fileOf = new Map(tb.files.map((f) => [f.id, f.path]));
+  const typeOf = new Map(tb.types.map((t) => [t.id, t]));
+  const nameCount = new Map();
+  for (const t of tb.types) nameCount.set(t.name, (nameCount.get(t.name) || 0) + 1);
+  const uniqueCross = tb.edges.filter((e) => e.tier === 'unique');
+  const wrongUnique = uniqueCross.filter((e) => {
+    const a = typeOf.get(e.from), b2 = typeOf.get(e.to);
+    return !a || !b2 || a.file === b2.file || nameCount.get(b2.name) !== 1;
+  });
+  check(uniqueCross.length > 0 && wrongUnique.length === 0, '㉘ tier=unique 的边确实“跨文件且名字全图唯一”',
+    `${uniqueCross.length} 条 · 不符 ${wrongUnique.length}`);
+  // overview 第一屏要把这个分布报出来（AI 不用自己数）
+  const ovTiers = (await call('overview', {})).split('\n').find((l) => /按证据分|Edge evidence/.test(l)) || '';
+  check(/同文件|same file/.test(ovTiers) && /仅同名|same name only/.test(ovTiers),
+    '㉘ overview 报出边的证据档分布（第一屏自审）', ovTiers.trim().slice(0, 110));
+}
 
 // 措辞跟着改过两轮：`被 N 处引用` → `被引用 N 次`（边权重变成真的引用次数后，"处（来源数）" 与 "次（次数）"
 // 不再是同一个数，标签必须说清是哪个）。这里认两种语言的新措辞。
@@ -109,8 +153,7 @@ const evOf = (l) => {
 const evCounts = hotLines.map(evOf);
 check(hotLines.length >= 3 && evCounts.every((v, i) => i === 0 || evCounts[i - 1] >= v), 'overview 热点榜按「有证据的引用数」排', evCounts.join(' ≥ '));
 
-const sub = await call('subgraph', { name: String(hottest.id), depth: 2 });
-check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));
+const sub = await call('subgraph', { name: String(hottest.id), depth: 2 });check(sub.length > 10, 'subgraph', sub.split('\n')[0].slice(0, 70));
 
 const fileOut = await call('file', { path: biggestFile.path.slice(0, Math.max(4, biggestFile.path.length - 4)) });
 check(fileOut.includes('行') || fileOut.includes('line'), 'file', fileOut.split('\n')[0].slice(0, 70));
@@ -250,8 +293,7 @@ function scanProject(tmpDir, files, lang = 'javascript') {
   return { root, out };
 }
 
-/** 读一份 bundle（gate 里查边 / 查 unresolved 用） */
-const readBundle = (outDir) => JSON.parse(fs.readFileSync(path.join(outDir, 'bundle.json'), 'utf8'));
+/** 读一份 bundle —— 见文件顶部那份定义（这里不再重复声明） */
 
 const freshTmp = path.join(os.tmpdir(), `codeatlas-fresh-${process.pid}`);
 const { root: freshRoot, out: freshOut } = scanProject(freshTmp, {
@@ -1434,6 +1476,6 @@ tf.proc.kill('SIGKILL');
     '㉗ overview 热榜：每行带“涉及几个文件”（P2-a）', mainHotLine.trim().slice(0, 90));
 }
 
-console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
+console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : `✓ 全部通过（${total} 道）`}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;

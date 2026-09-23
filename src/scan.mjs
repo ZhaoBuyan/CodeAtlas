@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 扫描器：源码目录 -> bundle（中间数据）
  *
  * 流程：遍历文件 -> tree-sitter 解析 -> 提取（命名空间/类型/成员/导入/引用/复杂度/LOC）
@@ -2099,6 +2099,30 @@ export async function scan(opts) {
   }
 
   /**
+   * 边上的 `tier`：**这条边是凭什么接上的**（写进 bundle，读侧直接读，不再重算一遍）。
+   *
+   * 为什么要落这个字段：边是这张图的主数据（web / MCP 的排序、连线、波及面全建在它上面），
+   * 而"这条边有多可信"以前只活在两个地方 —— 建图时 `resolveName` 的优先级（用完即弃）、
+   * 读图时 `mcp.mjs` 的 `evidenceOf`（把同一套启发式在每条边上**重跑一遍**）。
+   * 两份推理链会漂移（modules.mjs 文件头记的就是同类事故：解析时按 A 口径接边、读时说没支撑），
+   * 而且读侧永远无法知道"当初是靠哪一档接上的"（唯一命中 / 同命名空间 / import 消歧 走的路径完全不同）。
+   *
+   * 取值（强 → 弱）：
+   *   same   —— 同一个文件里声明的（最强，几乎不可能是巧合）
+   *   import —— C# 父命名空间 / Dart part 库 / C-C++ include 闭包等"语言上不需要写 import 也算有依据"的边
+   *   unique —— **全图只有这一个同名类型**（名字唯一，不是"名字撞上了"）
+   *   name   —— 兜底档（同命名空间 / 同根包近似）；同名但无任何依据，噪声主要在这一档
+   * 注意 unique 与 name 的区别：前者是"没有别的候选"，后者是"有候选但挑不出来"。
+   *
+   * ⚠ 实测（2026-09-23，六种语言十几种构造）：**`name` 档在真实代码里几乎够不着**。
+   * 原因是"有候选但挑不出来"的名字在 `resolveName` 里**直接放弃并计入 ambiguous**（宁可缺边不接错），
+   * 所以它根本不会变成边。本项目自扫 978 条边里 `name` 是 0；C#/JS/Python/TS 的同名两处构造
+   * 一律产出 `ambiguous=1`、0 条边。它保留为兜底档（同命名空间恰好只要一个候选时才轮到），
+   * **不要把它当成"图上还有一片噪声边"的依据** —— 真要判断噪声，看 `unresolved.ambiguous`。
+   */
+  const TIER_RANK = { name: 0, unique: 1, import: 2, same: 3 };
+
+  /**
    * 名字解析：把一个引用名（可能是简单名，比如 `Widget`）对到一个符号上。
    *
    * 优先级（从强到弱）：
@@ -2111,35 +2135,73 @@ export async function scan(opts) {
    * 为什么 2 要排在 3/4 前面：同一个文件里声明的同名符号，在 Java/JS/C# 这些语言里
    * 就是引用的那个（本地作用域胜过包/命名空间近似）；反过来，同一包里另一个文件里的
    * 同名符号只是“看起来像”，按名字接上去就是误归。
+   *
+   * 返回 `{ id, tier }`（tier 见 TIER_RANK）；对不上时返回 null。
+   * 外层还会按"两端是不是同一个文件"把 tier 升到 same —— 解析路径与边的性质是两件事。
    */
+  /**
+   * **import 依据**：引用方文件里有没有哪条 import 指得到这个候选？
+   *
+   * 这里必须把**读侧（mcp.mjs 的 evidenceRecomputed）认的那几种依据全覆盖**，否则会出现
+   * "扫描时说这条边有依据、读时说没有"的自相矛盾（modules.mjs 文件头记的就是这类事故）。
+   * 语言语义上"不需要写 import 也算有依据"的几种：
+   *   · C# / VB 的子命名空间引用父命名空间（`Demo.Deep` 用 `Demo.Root`，不需要 using）
+   *   · Dart 的 part 文件（part 不能写 import，但它所属库的 imports 对它可见）
+   *   · Dart 同库（同一 part 组里的文件同作用域，互相引用连 import 都不需要）
+   *   · C/C++ 的 include 闭包（≤2 跳：A include B、B include C ⇒ A 撑得住 C 里的引用）
+   * 另外还有一条与 import 无关但同样"有依据"的：**两端同命名空间**。
+   *
+   * 为什么要单独查一次、而不是只在"同名多候选"时用：**唯一候选也可能有 import 依据**，
+   * 而且那个依据比"名字恰好唯一"强得多（前者有语言层面的连接，后者只是这张图里没撞名）。
+   * 早先只在多候选分支里查，等于把单候选边的 import 证据整片丢掉（实测：一条 C# 的
+   * `using Demo.A;` 引过去的边会被记成"名字唯一"，跟"没有任何依据"挤在同一档）。
+   */
+  const hasImportBacking = (fromTypeId, toTypeId) => {
+    const fromType = allTypes[fromTypeId], cand = allTypes[toTypeId];
+    if (!fromType || !cand) return false;
+    const fromFile = fileRecs[fromType.file], candFile = fileRecs[cand.file];
+    if (!fromFile || !candFile) return false;
+    const target = { ns: cand.ns, fqn: cand.fqn, path: candFile.path };
+    for (const raw of fromFile.imports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
+    // Dart 的 part 文件：库文件的 import 对它可见（part 文件自己不能写 import，这是语言语义）
+    for (const raw of fromFile.libImports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
+    // C/C++ 的 include 闭包（≤2 跳）
+    if (Array.isArray(fromFile.closure) && fromFile.closure.includes(cand.file)) return true;
+    // Dart：同一个 part 库组里的文件同作用域
+    if (fromFile.lib && candFile.lib && fromFile.lib === candFile.lib) return true;
+    // C# / VB：子命名空间不用 using 也能引用父命名空间里的类型
+    const candExt = String(candFile.path || '').split('.').pop().toLowerCase();
+    if ((candExt === 'cs' || candExt === 'vb') && cand.ns && fromType.ns && fromType.ns.startsWith(`${cand.ns}.`)) return true;
+    // 同命名空间（不需要 import 语句就有依据）
+    if (cand.ns && fromType.ns === cand.ns) return true;
+    return false;
+  };
+
   const unresolved = { ambiguous: 0, unknown: 0 };
   const resolveName = (name, fromTypeId) => {
     const hit = bySimpleName.get(name);
     if (!hit || !hit.length) { unresolved.unknown++; return null; }
-    if (hit.length === 1) return hit[0];
+    if (hit.length === 1) {
+      // 唯一候选也得看 import：这个档位差很多（有 import 依据 > 只是没撞名）
+      const id = hit[0];
+      return { id, import: hasImportBacking(fromTypeId, id) };
+    }
     const from = allTypes[fromTypeId];
     const sameFile = hit.filter((id) => allTypes[id].file === from.file);
-    if (sameFile.length === 1) return sameFile[0];
+    if (sameFile.length === 1) return { id: sameFile[0], same: true };
     // ③ 复测报告 §1：同名两处 + 第三方调用时，以前**直接放弃**（静默丢边）—— JS 没有命名空间，
     // “同文件”是唯一能救它的一档，救不到就丢；自扫实测 57 处这种被丢掉的引用。
     // 补一档：**用引用方文件的 imports 消歧**（与读期 evidenceOf 同一套口径，见 src/modules.mjs）。
-    const fromFile = fileRecs[from.file];
-    if (fromFile?.imports?.length) {
-      const viaImport = hit.filter((id) => {
-        const cand = allTypes[id];
-        const target = { ns: cand.ns, fqn: cand.fqn, path: fileRecs[cand.file]?.path };
-        return fromFile.imports.some((raw) => importMatchesTarget(raw, target, { packages, aliases }));
-      });
-      if (viaImport.length === 1) return viaImport[0];
-    }
+    const viaImport = hit.filter((id) => hasImportBacking(fromTypeId, id));
+    if (viaImport.length === 1) return { id: viaImport[0], import: true };
     const sameNs = hit.filter((id) => allTypes[id].ns === from.ns);
-    if (sameNs.length === 1) return sameNs[0];
+    if (sameNs.length === 1) return { id: sameNs[0] };
     const sameRoot = hit.filter((id) => {
       const a = allTypes[id].ns.split('.')[0];
       const b = from.ns.split('.')[0];
       return a && a === b;
     });
-    if (sameRoot.length === 1) return sameRoot[0];
+    if (sameRoot.length === 1) return { id: sameRoot[0] };
     unresolved.ambiguous++;
     return null;
   };
@@ -2149,31 +2211,54 @@ export async function scan(opts) {
   //   · 网页里连线的粗细（stroke-width = min(4, 1 + log2(1 + w))）、依赖矩阵的浓淡都用它
   //   · fanIn / fanOut 也是权重之和 → "被引用多少次 / 引用别人多少次"
   //   · 同名不同含义的"仅同名边"会在读侧被标出来，别只看数字大小（见 mcp.mjs 的 evidenceOf）
+  // tier 记在边上（见 TIER_RANK 的说明）：同一条边被多次引用时**取最强的那一档** ——
+  // 一边有 import 依据、另一边只是撞名，这条边的可信度按有依据的算。
   const edgeMap = new Map();
-  const addEdge = (from, to, kind, n = 1) => {
+  const addEdge = (from, to, kind, n = 1, tier = 'name') => {
     if (from == null || to == null || from === to) return;
     const key = `${from}|${to}|${kind}`;
-    edgeMap.set(key, (edgeMap.get(key) || 0) + n);
+    const cur = edgeMap.get(key);
+    if (!cur) edgeMap.set(key, { w: n, tier });
+    else {
+      cur.w += n;
+      if ((TIER_RANK[tier] ?? 0) > (TIER_RANK[cur.tier] ?? 0)) cur.tier = tier;
+    }
+  };
+  /**
+   * 档位判定：把 `resolveName` 的结果翻成边上的 `tier`。
+   *   same   —— 两端同一个文件（最强；解析路径无关，同文件就是同文件）
+   *   import —— 引用方文件的 import 指得到目标（有语言层面的连接）
+   *   unique —— 该名字在**全图只有一个类型**（所以这条边不可能是撞名）
+   *   name   —— 兜底：靠同命名空间 / 同根包近似挑出来的（名字有歧义，依据最弱）
+   */
+  const tierOf = (fromTypeId, toTypeId, hit) => {
+    const a = allTypes[fromTypeId], b = allTypes[toTypeId];
+    if (a && b && a.file === b.file) return 'same';
+    if (hit?.same) return 'same';
+    if (hit?.import) return 'import';
+    return (bySimpleName.get(b?.name) || []).length === 1 ? 'unique' : 'name';
   };
 
   for (const r of allRefs) {
-    const to = resolveName(r.name, r.owner);
-    if (to != null) addEdge(r.owner, to, 'ref', r.n || 1);
+    const hit = resolveName(r.name, r.owner);
+    if (hit) addEdge(r.owner, hit.id, 'ref', r.n || 1, tierOf(r.owner, hit.id, hit));
   }
   for (const t of allTypes) {
     for (const b of t.bases) {
-      const to = resolveName(b, t.id);
-      if (to != null) addEdge(t.id, to, 'inherit');
+      const hit = resolveName(b, t.id);
+      if (hit) addEdge(t.id, hit.id, 'inherit', 1, tierOf(t.id, hit.id, hit));
     }
   }
 
   const edges = [];
-  for (const [key, w] of edgeMap) {
+  const edgeTiers = {};        // 证据档分布：写进 bundle.stats，overview 直接报（不必读侧重算）
+  for (const [key, rec] of edgeMap) {
     const [f, t, k] = key.split('|');
     const from = Number(f), to = Number(t);
-    edges.push({ from, to, kind: k, w });
-    allTypes[from].fanOut += w;
-    allTypes[to].fanIn += w;
+    edges.push({ from, to, kind: k, w: rec.w, tier: rec.tier });
+    edgeTiers[rec.tier] = (edgeTiers[rec.tier] || 0) + 1;
+    allTypes[from].fanOut += rec.w;
+    allTypes[to].fanIn += rec.w;
   }
   edges.sort((a, b) => b.w - a.w);
 
@@ -2326,6 +2411,8 @@ export async function scan(opts) {
     ...totals,
     namespaces: nsByPath.size - 1,
     edgeKinds: edges.reduce((acc, e) => { acc[e.kind] = (acc[e.kind] || 0) + 1; return acc; }, {}),
+    // 证据档分布（same / import / unique / name，见 TIER_RANK）：读侧直接报，不再重算一遍
+    edgeTiers,
     // 被跳过的文件：默认忽略目录 / 生成物、超限大小、以及“还不支持的语言”（后者要能看见，不能静静吞掉）
     skipped: {
       ignored: skipped.ignored || 0,
