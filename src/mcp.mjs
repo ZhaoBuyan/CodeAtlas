@@ -244,6 +244,30 @@ function fmt(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
+/**
+ * 相对时间（用于"图里最新入库的文件是多久以前"）。
+ *
+ * 为什么要有这一行（2026-09-23 重新决定 P0-c）：原可行性报告把"新文件年龄标注"列为**不做**，
+ * 理由是"会泄露用户在编辑什么"。这个理由**已经被数据结构本身超越**：
+ * `files[].mtime` 全都在 bundle 里、任何客户端都读得到，`source.newestMtime` 更是**早就算好写进去了**
+ * （`scan.mjs` 的 totals 段）—— 只是从没被读出来过。所以现状不是"没暴露"，而是
+ * "暴露着、但没标出来"，那才是真正的回避。
+ *
+ * 按诚实优先，这里采取**聚合口径**：只报"最新那个入库多久以前"，**不报路径**。
+ * 路径本来可读（`file()` / `list` 都给），所以这不是新增暴露面，而是把一个已有信号显式化：
+ * agent 由此能判断"这图里有没有刚生成的东西"（生成物通常 mtime 极新），而不必去猜。
+ */
+function agoText(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return T('刚刚', 'just now');
+  if (min < 60) return T(`${min} 分钟前`, `${min} min ago`);
+  const h = Math.floor(min / 60);
+  if (h < 24) return T(`${h} 小时前`, `${h} h ago`);
+  const d = Math.floor(h / 24);
+  return T(`${d} 天前`, `${d} d ago`);
+}
+
 // 模块名归一（basename / SRC_EXT / moduleKey）已挑到 src/modules.mjs —— 扫描器与读期必须判得一样
 
 /**
@@ -682,6 +706,14 @@ function toolOverview(idx, a) {
   if (w) lines.push(T(`🔭 监控模式：这张图由 scan --watch 维护（第 ${w.pass} 趟${w.reason === 'change' ? '（检测到改动后重扫）' : ''} · 本趟重新解析 ${fmt(w.reparsed || 0)} 个文件）—— 文件改动会自动进图，重查就能拿到最新数据`,
     `🔭 Watch mode: this map is maintained by scan --watch (pass ${w.pass}${w.reason === 'change' ? ', after a change' : ''} · ${fmt(w.reparsed || 0)} files re-parsed this pass) — changes land automatically; re-query for the latest`));
   lines.push(T(`规模：${fmt(b.files.length)} 文件 · ${fmt(b.totals.types)} 类型 · ${fmt(b.totals.edges)} 依赖边 · ${fmt(b.totals.code)} 行代码`, `Size: ${fmt(b.files.length)} files · ${fmt(b.totals.types)} types · ${fmt(b.totals.edges)} dependency edges · ${fmt(b.totals.code)} lines of code`));
+  // 图里最新入库的文件有多新（只报时间，不报路径 —— 见 agoText 的注释）：
+  // agent 由此判断"这图里有没有刚生成的东西"，而不是靠猜；老 bundle 没这个字段就整行不打。
+  const newestMs = Date.parse(String(b.source?.newestMtime || ''));
+  if (Number.isFinite(newestMs)) {
+    const ago = agoText(Date.now() - newestMs);
+    if (ago) lines.push(T(`图里最新的文件：${ago}入库（新文件多 = 可能有生成物 / 当前正在改的东西也进了图）`,
+      `Newest mapped file: landed ${ago} (many very new files ⇒ generated artifacts, or work-in-progress is in the map)`));
+  }
   // 被默认跳过表命中的目录：AI 也该知道“这张图缺了东西”（诚实优先）。老 bundle 没这个字段 → 当空处理。
   // **项目规则跳掉的那几类排前面**（那是"这个项目自己选跳的"，通常才是需要注意的），
   // 默认表命中的（.git / node_modules / dist…）跟在后面 —— 不删名字（删了就是瞒着人），只把顺序分开

@@ -1352,6 +1352,18 @@ tf.proc.kill('SIGKILL');
   const mpSmall = await call('map', { budget: 350 });
   check(/在此截断|cut off here/.test(mpSmall),
     '㉓ map 页脚：撞预算时明说“内容在此截断”', (mpSmall.split('\n').find((l) => /token/.test(l)) || '').trim().slice(0, 90));
+
+  // ④ 2026-09-23 重新决定 P0-c：图里最新文件的年龄 —— **只报时间、不报路径**。
+  // 原决定是"不做"（理由：隐私面），但 files[].mtime 与 source.newestMtime 本来就在 bundle 里、
+  // 完全可读，所以现状是"暴露着却没标出来"。改成聚合口径把这个已有信号显式化。
+  const ovLines = (await call('overview', {})).split('\n');
+  const ageLine = ovLines.find((l) => /图里最新的文件|Newest mapped file/.test(l)) || '';
+  check(/刚刚|分钟前|小时前|天前|just now|min ago|h ago|d ago/.test(ageLine),
+    '㉓ overview：报“图里最新文件”的年龄（聚合口径）', ageLine.trim().slice(0, 100));
+  // 不许把"最新那个文件是谁"印出来 —— 那条路径应由 file()/list 显式查，不在 overview 白送
+  const newestPath = (bundle.files || []).slice().sort((x, y) => (y.mtime || 0) - (x.mtime || 0))[0]?.path;
+  check(!!ageLine && (!newestPath || !ageLine.includes(newestPath)),
+    '㉓ overview：年龄行**不泄露具体路径**（只报时间）', newestPath ? `不得含 ${newestPath}` : '(无文件)');
 }
 
 // ㉔ 2026-09-23（dsh 建议）：AI 技能说明书 —— `.dsh/skills/codeatlas/SKILL.md`。
