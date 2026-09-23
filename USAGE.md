@@ -152,7 +152,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `symbol(name, neighbors?)` | Details of one type: members (**with parameter list and return type**), bases, reference count |
 | `refs(name, dir?)` | Who references it / what it references (each edge shows `×count` and an evidence tag). Member names / `Type.Member` are accepted too (you get the owning type and its referrers — an upper bound — plus the member's call / access sites as `file:line`, matched by name) |
 | `subgraph(name, depth)` | The dependency subgraph around one place |
-| `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members) |
+| `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members); without a grouping config it says so and falls back to a most-referenced list |
 | `impact(name, depth)` | **Blast radius**: who is affected if you change it (multi-hop), plus the test files that would be affected |
 | `file(path)` | The types inside one file |
 

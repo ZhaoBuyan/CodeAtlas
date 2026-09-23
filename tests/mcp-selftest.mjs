@@ -1206,6 +1206,61 @@ tf.proc.kill('SIGKILL');
   watchSvc.proc.kill('SIGKILL');
 }
 
+// ㉒ 2026-09-23（dsh 评估报告里能优化的三条）：
+// ① map 在没有 facets 的项目上必须显式警告（以前静默退化成热榜）；配了 facets 才出 systems 层；
+// ② 热榜每条带 id（行首数字）—— 短名/通用名也能直接 symbol/refs，不再“看得见、查不动”；
+// ③ 文档自述的工具数与实现一致（四份文档的工具表行数 == tools/list）。
+{
+  // ①a 没有 facets → 警告 + draft-facets 指引
+  const noFacTmp = path.join(os.tmpdir(), `codeatlas-nofacets-${process.pid}`);
+  const { out: noFacOut } = scanProject(noFacTmp, { 'a.js': 'export function alpha() { return 1; }\n' });
+  const noFacSvc = spawnMcp(noFacOut);
+  await noFacSvc.ready;
+  const noFacMap = await noFacSvc.call('map', { budget: 4000 });
+  check(/没有系统分组规则|No system grouping/.test(noFacMap) && /draft-facets/.test(noFacMap),
+    '㉒ map：无 facets 时显式警告并给 draft-facets 指引（不再静默退化）',
+    (noFacMap.split('\n').find((l) => /facets/.test(l)) || '').trim().slice(0, 90));
+  noFacSvc.proc.kill('SIGKILL');
+
+  // ①b 有 facets → systems 层出现
+  const facTmp = path.join(os.tmpdir(), `codeatlas-facets-${process.pid}`);
+  const { out: facOut } = scanProject(facTmp, {
+    'atlas.facets.json': '{ "systems": [ { "name": "core", "paths": ["core/**"] }, { "name": "ui", "paths": ["ui/**"] } ] }\n',
+    'core/a.js': 'export function alpha() { return 1; }\n',
+    'ui/b.js': 'export function beta() { return 2; }\n',
+  });
+  const facSvc = spawnMcp(facOut);
+  await facSvc.ready;
+  const facMap = await facSvc.call('map', { budget: 4000 });
+  check(/## 系统|## Systems/.test(facMap) && /\[(core|ui)\]/.test(facMap),
+    '㉒ map：配了 facets 就出 systems 层', (facMap.split('\n').find((l) => /系统|Systems/.test(l)) || '').trim().slice(0, 70));
+  facSvc.proc.kill('SIGKILL');
+
+  // ② 热榜带 id，且 id 能直接查（用主 bundle）
+  const ovNow = await call('overview', {});
+  const hotIdLine = ovNow.split('\n').find((l) => /^\s+\d+\t/.test(l)) || '';
+  const hotId = (hotIdLine.match(/^\s+(\d+)\t/) || [])[1] || '';
+  const rById = hotId ? await call('refs', { name: hotId }) : '';
+  check(Boolean(hotId) && !/匹配到|matched \d+ symbols?/.test(rById) && rById.length > 20,
+    '㉒ overview 热榜每条带 id，且 refs(id) 直接查得通（短名不再“查不动”）',
+    hotIdLine.trim().slice(0, 70));
+
+  // ③ 文档工具数与实现一致：四份文档的工具表行名集合 == tools/list 的名字集合
+  const liveNames = (await req('tools/list', {})).result.tools.map((t) => t.name);
+  const docToolNames = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8').split('\n')
+    .map((l) => (l.match(/^\|\s*`([a-z][a-z-]*)\(?/) || [])[1])
+    .filter((n) => n && liveNames.includes(n));
+  const perDoc = {};
+  let docsOk = true;
+  for (const f of ['README.md', 'README_CN.md', 'USAGE.md', '使用说明.md']) {
+    const got = docToolNames(f);
+    perDoc[f] = got.length;
+    if (got.length !== liveNames.length || new Set(got).size !== liveNames.length) docsOk = false;
+  }
+  check(docsOk, '㉒ 文档工具数与实现一致（四份文档的工具表行 == tools/list 的工具集合）',
+    JSON.stringify({ 'tools/list': liveNames.length, ...perDoc }));
+}
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;

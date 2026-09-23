@@ -47,7 +47,8 @@ const INSTRUCTIONS = [
   'How to use it: start with overview for the big picture. If you do not know any names yet, call list(path) to browse',
   'directories and file names (its output is meant to be fed into file() / search()). Then search for symbols (it returns',
   'ids) and drill down with symbol / refs / subgraph / impact. When context is tight, call map(budget) first to get the',
-  'skeleton (systems -> key types -> key members).',
+  'skeleton (systems -> key types -> key members); if the project has no system grouping config, map says so and degrades',
+  'to a most-referenced list instead of pretending to be the whole picture.',
   '',
   'Boundaries you must know (honesty first — do not treat inference as fact):',
   '- Types / members / line counts / imports come from the syntax tree and are trustworthy; dependency edges come from static',
@@ -306,6 +307,13 @@ function evidencedIn(idx, t) {
   let n = 0;
   for (const e of idx.ins.get(t.id) || []) if (evidenceOf(idx, e) !== 'name') n += e.w || 1;
   return n;
+}
+
+/** 按“有证据的引用次数”排（同档再看 fanIn）—— 预计算一遍，别在比较器里重复遍历边 */
+function sortByEvidence(idx, types) {
+  const ev = new Map();
+  for (const t of types) ev.set(t.id, evidencedIn(idx, t));
+  return [...types].sort((a, c) => (ev.get(c.id) - ev.get(a.id)) || (c.fanIn - a.fanIn));
 }
 
 /** 搜索命中上挂的一行说明摘要：压空白、截到 n 字（省 AI 一次 symbol 调用） */
@@ -623,8 +631,7 @@ function toolOverview(idx, a) {
   // 热点榜按“有证据的引用数”排（并列再按原始引用数）——
   // 不这么排的话，“同名但无关”的边会把一个没人真用的类型顶到第一（实测样本上就是这样）
   // exclude 在**切片之前**生效：否则排掉两条就只剩 6 条了（名单会莫名其妙变短）
-  const hot = applyExclude(b.types.slice()
-    .sort((a, c) => (evidencedIn(idx, c) - evidencedIn(idx, a)) || (c.fanIn - a.fanIn)), ex, pathOfType);
+  const hot = applyExclude(sortByEvidence(idx, b.types), ex, pathOfType);
   const topIn = hot.items.slice(0, 8);
   const big = applyExclude(b.files.slice().sort((a, c) => c.code - a.code), ex, (f) => f.path);
   const bigFiles = big.items.slice(0, 6);
@@ -671,13 +678,15 @@ function toolOverview(idx, a) {
   lines.push(T(`可信度：依赖边是静态名字匹配（动态调用 / 反射 / 字符串拼名看不见）——未匹配 ${fmt(un.unknown || 0)} 处 · 同名歧义 ${fmt(un.ambiguous || 0)} 处`, `Confidence: dependency edges are static name matches (dynamic calls / reflection / string-built names are invisible) — ${fmt(un.unknown || 0)} unmatched · ${fmt(un.ambiguous || 0)} ambiguous`));
   const sys = b.facets?.systems || [];
   if (sys.length) lines.push(T(`系统划分（${b.facets.configFile}）：\n`, `Systems (${b.facets.configFile}):\n`) + sys.map((s) => T(`  ${sysLabel(s.name)}：${fmt(s.loc)} 行 · ${s.types} 类型 · ${s.files} 文件`, `  ${sysLabel(s.name)}: ${fmt(s.loc)} lines · ${s.types} types · ${s.files} files`)).join('\n'));
-  else lines.push(T('没有系统分组规则（可用 configs/<项目>.facets.json 定义；否则按目录/文件看）', 'No system grouping rules (define them in configs/<project>.facets.json; otherwise browse by directory / file)'));
+  else lines.push(T('没有系统分组规则（draft-facets 可草拟一份，或写 configs/<项目>.facets.json；否则按目录/文件看）', 'No system grouping rules (draft one with draft-facets, or write configs/<project>.facets.json; otherwise browse by directory / file)'));
   const hotLine = (t) => {
     const ev = evidencedIn(idx, t);
     const note = ev < t.fanIn ? T(`（有证据 ${ev} 次）`, ` (${ev} with evidence)`) : '';
-    return T(`  ${t.fqn} [${t.kind}] 被引用 ${t.fanIn} 次${note} · ${idx.files.get(t.file)?.path}`, `  ${t.fqn} [${t.kind}] referenced ${t.fanIn} times${note} · ${idx.files.get(t.file)?.path}`);
+    return T(`  ${t.id}\t${t.fqn} [${t.kind}] 被引用 ${t.fanIn} 次${note} · ${idx.files.get(t.file)?.path}`, `  ${t.id}\t${t.fqn} [${t.kind}] referenced ${t.fanIn} times${note} · ${idx.files.get(t.file)?.path}`);
   };
-  lines.push(T('被依赖最多（改动的波及面最大；按“有证据的引用次数”排 —— 仅同名的边不算，见 refs）：\n', 'Most depended-on (biggest blast radius; ranked by references with evidence — same-name-only edges do not count, see refs):\n') + topIn.map(hotLine).join('\n'));
+  // 每条带 id（行首数字）——dsh 评估报告（2026-09-23）实测：热榜首位的 `t` / `T` 这种短名按名字查会歧义，
+  // 没有 id 就“看得见、查不动”；id 可以直接喂给 symbol / refs / impact
+  lines.push(T('被依赖最多（改动的波及面最大；按“有证据的引用次数”排 —— 仅同名的边不算，见 refs；行首数字是 id，可直接查）：\n', 'Most depended-on (biggest blast radius; ranked by references with evidence — same-name-only edges do not count, see refs; the leading number is the id — call symbol / refs with it):\n') + topIn.map(hotLine).join('\n'));
   if (hot.dropped) lines.push(dropNote(ex, hot.dropped, topIn.length, ['类型', 'types'], true));
   lines.push(T('最大的文件（按代码行）：\n', 'Largest files (by code lines):\n') + bigFiles.map((f) => T(`  ${f.path}  ${fmt(f.code)} 代码行`, `  ${f.path}  ${fmt(f.code)} code lines`)).join('\n'));
   if (big.dropped) lines.push(dropNote(ex, big.dropped, bigFiles.length, ['文件', 'files'], true));
@@ -1046,7 +1055,7 @@ function toolMap(idx, a) {
   let used = 0;
   const push = (s) => { const t = est(s); if (used + t > budget) return false; out.push(s); used += t; return true; };
   const pth = (t) => idx.files.get(t.file)?.path || '';
-  const score = (t) => t.fanIn + (t.memberList?.length || 0) / 10;
+  const score = (t) => evidencedIn(idx, t) + (t.memberList?.length || 0) / 10;   // 与 overview 同一口径（有证据的引用数）
   const ex = parseExclude(a?.exclude);
   const mt = applyExclude(b.types, ex, pth);
   const types = mt.items;
@@ -1063,17 +1072,25 @@ function toolMap(idx, a) {
     for (const s of [...systems].sort((x, y) => y.types - x.types)) {
       if (!push(T(`[${sysLabel(s.name)}] ${s.types} 类型 / ${s.files} 文件`, `[${sysLabel(s.name)}] ${s.types} types / ${s.files} files`))) break;
       for (const t of types.filter((x) => x.system === s.name).sort((x, y) => score(y) - score(x)).slice(0, 5)) {
-        if (!push(T(`  - ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`, `  - ${t.fqn} [${t.kind}] refs ${t.fanIn} · ${pth(t)}`))) break;
+        if (!push(T(`  - ${t.id}\t${t.fqn} [${t.kind}] 被引 ${t.fanIn} 次 · ${pth(t)}`, `  - ${t.id}\t${t.fqn} [${t.kind}] referenced ${t.fanIn} times · ${pth(t)}`))) break;
       }
       if (used >= budget * 0.6) break;
     }
     push('');
+  } else {
+    // dsh 评估报告（2026-09-23）实测：没有 facets 时这里**静默退化**成热榜，AI 会以为这就是全貌 ——
+    // 必须自己说出来，并给一条能修的动作（draft-facets）
+    push(T(`⚠ 没有系统分组规则（facets）—— systems 层为空，这页只是“引用最多的类型”；生成一份就能按系统看：atlas draft-facets <项目根> --out atlas.facets.json（或放进 configs/<项目>.facets.json）`,
+      `⚠ No system grouping config (facets) — the systems layer is empty and this page is just "most-referenced types". Draft one: atlas draft-facets <project root> --out atlas.facets.json (or put it in configs/<project>.facets.json)`));
+    push('');
   }
 
   if (used < budget) {
-    push(T('## 关键类型（被引用最多 = 改动的波及面最大）', '## Key types (most referenced = biggest blast radius)'));
-    for (const t of [...types].sort((x, y) => y.fanIn - x.fanIn).slice(0, 25)) {
-      if (!push(T(`  ${t.fqn} [${t.kind}] 被引${t.fanIn} · ${pth(t)}`, `  ${t.fqn} [${t.kind}] refs ${t.fanIn} · ${pth(t)}`))) break;
+    push(T('## 关键类型（被引用最多 = 改动的波及面最大；行首数字是 id）', '## Key types (most referenced = biggest blast radius; the leading number is the id)'));
+    for (const t of sortByEvidence(idx, types).slice(0, 25)) {
+      const ev = evidencedIn(idx, t);
+      const note = ev < t.fanIn ? T(`（有证据 ${ev} 次）`, ` (${ev} with evidence)`) : '';
+      if (!push(T(`  ${t.id}\t${t.fqn} [${t.kind}] 被引 ${t.fanIn} 次${note} · ${pth(t)}`, `  ${t.id}\t${t.fqn} [${t.kind}] referenced ${t.fanIn} times${note} · ${pth(t)}`))) break;
     }
     push('');
   }
@@ -1094,7 +1111,7 @@ function toolMap(idx, a) {
   const mapMiss = excludeMissNote(ex, b);
   if (mapMiss) push(mapMiss);
   if (warn.length) push(`⚠ ${warn.join('；')}`);
-  push(T(`（预算 ~${budget} token，实际约 ${used}；要细节：symbol(id) / refs(名字) / impact(名字)）`, `(budget ~${budget} tokens, actual ~${used}; for detail: symbol(id) / refs(name) / impact(name))`));
+  push(T(`（预算 ~${budget} token，实际约 ${used}；要细节：symbol / refs / impact —— 名字或行首的 id 都行）`, `(budget ~${budget} tokens, actual ~${used}; for detail: symbol / refs / impact — a name or the leading id both work)`));
   return out.join('\n');
 }
 
