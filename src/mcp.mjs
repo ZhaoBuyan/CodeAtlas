@@ -73,11 +73,16 @@ const INSTRUCTIONS = [
   '  a signature means "not extracted", **not** "takes no arguments" — do not read absence as fact;',
   '- Decompiled output (.dll / .exe / .jar) carries no source comments, so an empty "description" is expected;',
   '- Every path in the output is **relative to the scan root**, which overview reports (use it to build absolute paths and read source yourself);',
-  '- The data is a snapshot (UTC): overview spells out the generation time (scan options included) and every tool result ends',
-  '  with the same short "snapshot" stamp; a freshly scanned bundle is picked up automatically, but an **engine code update**',
+  '- The data is a snapshot (UTC): overview spells out the generation time (scan options included) and the first non-overview',
+  '  result of a session ends with a short "snapshot" stamp — later results skip it to save tokens (it comes back after a',
+  '  reload); a freshly scanned bundle is picked up automatically, but an **engine code update**',
   '  does need this server process restarted (the client reconnects and gets the new tool list);',
   '  If the bundle changes between your calls (watch mode / a manual re-scan), the first result you get afterwards carries a',
   '  `\u{1F501} the map was updated …` line \u2014 treat earlier answers as possibly stale and re-query;',
+  '  Repeated caveats (the `refs` evidence legend, the `impact` notes) are printed on their **first** use in a session, not',
+  '  on every call;',
+  '- `list(path)` and `file(path)` carry a one-line summary taken from each file\'s **header comment** (when the source has',
+  '  one) — often enough to know what a file does without opening it;',
   '- overview also checks freshness: it re-stats the files already in the map, and when some of them changed on disk after',
   '  the scan it says so (`N mapped files changed…`, of which M are timestamp-only). It only covers files already in the',
   '  map — mapped files that disappeared ARE reported, while newly added files are not; a re-scan is how you pick those up;',
@@ -657,12 +662,19 @@ function toolOverview(idx, a) {
   const projDirs = new Set(Object.keys(b.stats?.skipped?.projectDirs || {}));
   const allIgn = Object.entries(b.stats?.skipped?.ignoredDirs || {}).sort((x, y) => y[1] - x[1]);
   const ordered = [...allIgn.filter(([n]) => projDirs.has(n)), ...allIgn.filter(([n]) => !projDirs.has(n))];
-  const ignDirs = ordered.slice(0, 8);
-  if (ignDirs.length) {
-    const detail = ignDirs.map(([n, c]) => `${n}(${c})`).join(' · ')
-      + (ordered.length > ignDirs.length ? T(` …共 ${ordered.length} 类`, ` …${ordered.length} dir names in total`) : '')
+  const rootDirs = Object.entries(b.stats?.skipped?.rootDirs || {}).sort((x, y) => (y[1]?.files || 0) - (x[1]?.files || 0));
+  if (ordered.length) {
+    // 名字列表不再带 “(1)” 这种会被误读的计数（AI 实测反馈：量纲不明、而且没体量）—— 体量单独一行报
+    const names = ordered.slice(0, 8).map(([n]) => `${n}/`).join(' · ')
+      + (ordered.length > 8 ? T(` …共 ${ordered.length} 类`, ` …${ordered.length} names in total`) : '')
       + (projDirs.size ? T(`（前 ${projDirs.size} 个是项目规则跳的${ordered.length > projDirs.size ? '，其余是默认表命中' : ''}）`, ` (the first ${projDirs.size} came from project rules${ordered.length > projDirs.size ? ', the rest matched the default list' : ''})`) : '');
-    lines.push(T(`跳过目录：${detail} —— 这些目录里的源码不在本图里`, `Skipped dirs: ${detail} — source inside them is not in this map`));
+    lines.push(T(`跳过目录（里面的源码不在本图里）：${names}`, `Skipped dirs (their source is not in this map): ${names}`));
+    // 一级被跳过目录的体量（AI 实测：只说“图里 72 个文件”会被读成“仓库就 72 个文件”，差三个数量级）
+    if (rootDirs.length) {
+      const shown = rootDirs.slice(0, 6).map(([n, v]) => `${n}/ ${v.capped ? '≥' : ''}${fmt(v.files)} 文件`);
+      const more = rootDirs.length > shown.length ? T(`等 ${rootDirs.length} 个一级目录`, `${rootDirs.length} top-level dirs in total`) : '';
+      lines.push(T(`  一级目录的实际体量（数出来的，不在图里；.git 未数）：${shown.join(' · ')}${more}`, `  Top-level dirs by real size (counted, not in the map; .git not counted): ${shown.join(' · ')}${more}`));
+    }
   }
   if (b.totals.parseErrors) {
     const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
@@ -840,7 +852,7 @@ function toolSymbol(idx, a) {
   return lines.join('\n');
 }
 
-function toolRefs(idx, a) {
+function toolRefs(idx, a, sess = {}) {
   const r = resolve(idx, a.name);
   if (r.error) return r.error;
   const t = r.type;
@@ -899,9 +911,12 @@ function toolRefs(idx, a) {
   }
   const rMiss = excludeMissNote(ex, idx.b);
   if (rMiss) out.push(rMiss);
-  const legend = sawAnyEdge
-    ? T('（边尾的标签：同文件 / **有支撑**（引用方 import 的模块 / 命名空间 / 包能指到目标（Python 的 `from X import Y` 只记得到 X，所以包级也算）、C# / VB 父命名空间、Dart 的 part 同库（part 文件继承库的 import））/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (the referrer imports the target module / namespace / package — a package-level import counts, a C# / VB parent namespace too, and for Dart part files both the library\'s imports and same-library siblings) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
-    : '';
+  // 图例只在本会话的**首次** refs（或图更新后首次）出现 —— AI 实测反馈：每次重复是固定税（这份说明比小载荷还长）
+  let legend = '';
+  if (sawAnyEdge && !sess.refsFull) {
+    sess.refsFull = true;
+    legend = T('（边尾的标签：同文件 / **有支撑**（引用方 import 的模块 / 命名空间 / 包能指到目标（Python 的 `from X import Y` 只记得到 X，所以包级也算）、C# / VB 父命名空间、Dart 的 part 同库（part 文件继承库的 import））/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (the referrer imports the target module / namespace / package — a package-level import counts, a C# / VB parent namespace too, and for Dart part files both the library\'s imports and same-library siblings) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n');
+  }
   return `${t.fqn} [${t.kind}]\n${legend}${out.join('\n')}`;
 }
 
@@ -943,6 +958,7 @@ function toolFile(idx, a) {
   const lines = [
     T(`${f.path}  [${f.lang}]  ${f.loc} 行（其中代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines total (code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
   ];
+  if (f.doc) lines.push(T(`说明：${briefDoc(f.doc, 120)}`, `Doc: ${briefDoc(f.doc, 120)}`));   // 文件头注释的“半句话”（AI 实测：注释的信息密度高于图）
   if (f.errors) lines.push(T(`注意：${f.errors} 处解析异常`, `Note: ${f.errors} parse errors`));
   lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.fqn && t.fqn !== t.name ? t.fqn : t.name}[${t.kind}]`).join('  '));
   const imports = f.imports || [];
@@ -1039,7 +1055,7 @@ function toolList(idx, a) {
     : T(`${prefix}本层 ${rows.length} 项 · 这棵子树 ${fmt(tot.files)} 文件 / ${fmt(tot.types)} 类型 / ${fmt(tot.code)} 行代码`, `${prefix} ${rows.length} entries here · ${fmt(tot.files)} files / ${fmt(tot.types)} types / ${fmt(tot.code)} lines of code below`));
   for (const r of rows.slice(0, cap)) {
     if (r.dir) out.push(T(`  [目录] ${r.name}  ${fmt(r.agg.files)} 文件 · ${fmt(r.agg.types)} 类型 · ${fmt(r.agg.code)} 行`, `  [dir]  ${r.name}  ${fmt(r.agg.files)} files · ${fmt(r.agg.types)} types · ${fmt(r.agg.code)} lines`));
-    else out.push(T(`  [文件] ${r.name}  ${fmt(r.f.code)} 行 · ${(r.f.types || []).length} 类型${r.f.errors ? ` · ${r.f.errors} 处解析异常` : ''}`, `  [file] ${r.name}  ${fmt(r.f.code)} lines · ${(r.f.types || []).length} types${r.f.errors ? ` · ${r.f.errors} parse errors` : ''}`));
+    else out.push(T(`  [文件] ${r.name}  ${fmt(r.f.code)} 行 · ${(r.f.types || []).length} 类型${r.f.errors ? ` · ${r.f.errors} 处解析异常` : ''}`, `  [file] ${r.name}  ${fmt(r.f.code)} lines · ${(r.f.types || []).length} types${r.f.errors ? ` · ${r.f.errors} parse errors` : ''}`) + (r.f.doc ? T(` —— ${briefDoc(r.f.doc)}`, ` — ${briefDoc(r.f.doc)}`) : ''));
   }
   if (rows.length > cap) out.push(T(`（只列前 ${cap} / 共 ${rows.length} 项：用 path= 缩到某个子目录，或调大 limit）`, `(first ${cap} of ${rows.length}: narrow it with path=, or raise limit)`));
   out.push(T('（看单个文件的类型/导入用 file，按名字找符号用 search）', '(use file for one file\'s types/imports, search to find symbols by name)'));
@@ -1132,10 +1148,13 @@ function toolMap(idx, a) {
  * impact(name, depth)：影响面分析——“改它会影响谁”。
  * 沿**被引用**方向多跳展开，按层给，并明说看不见的部分（诚实优先）。
  */
-function toolImpact(idx, a) {
+function toolImpact(idx, a, sess = {}) {
   const r = resolve(idx, a.name);
   if (!r.type) return r.error;
   const t0 = r.type;
+  // 样板降级（AI 实测反馈）：完整说明只在本次会话的**首次** impact 输出（图更新后算新会话）
+  const firstTime = !sess.impactFull;
+  sess.impactFull = true;
   const depth = Math.max(1, Math.min(Number(a.depth) || 2, 4));
   const ex = parseExclude(a?.exclude);
   const b = idx.b;
@@ -1201,7 +1220,7 @@ function toolImpact(idx, a) {
     const show = testFiles.slice(0, 8);
     out.push(T(`会被波及的测试文件（${testFiles.length} 个）：${show.join(' · ')}${testFiles.length > show.length ? ` …还有 ${testFiles.length - show.length} 个` : ''}`,
       `Test files affected (${testFiles.length}): ${show.join(' · ')}${testFiles.length > show.length ? ` …${testFiles.length - show.length} more` : ''}`));
-    out.push(T('  （测试文件是按**路径**认的：test / tests / __tests__ 目录 · `.test.` / `.spec.` / `_test.` / `_spec.` · `test_` 开头；认不出的不在这个名单里）',
+    if (firstTime) out.push(T('  （测试文件是按**路径**认的：test / tests / __tests__ 目录 · `.test.` / `.spec.` / `_test.` / `_spec.` · `test_` 开头；认不出的不在这个名单里）',
       '  (test files are recognized **by path**: test / tests / __tests__ dirs · `.test.` / `.spec.` / `_test.` / `_spec.` · a `test_` prefix; anything else is not in this list)'));
   } else {
     // 一个字节都不许懒：名单为空要能分出“测试都不引用它” / “图里真没测试” / “这份图根本没带这个标记”
@@ -1219,11 +1238,18 @@ function toolImpact(idx, a) {
       `  ⚠ but exclude dropped ${fmt(droppedTypes)} types in this call, so the test list may have been emptied by it — retry without exclude to be sure.`));
   }
   out.push('');
-  out.push(T('要注意的：', 'Worth knowing:'));
-  out.push(T('  · 这是**静态名字匹配**的结果：动态调用 / 反射 / 字符串拼出来的名字看不见；', '  · these edges come from **static name matching**: dynamic calls / reflection / string-built names are invisible;'));
-  if (b.unresolved?.unknown) out.push(T(`  · 本项目有 ${fmt(b.unresolved.unknown)} 处引用没匹配上任何类型（这些边不在图里）；`, `  · ${fmt(b.unresolved.unknown)} references in this project matched no type (those edges are not in the graph);`));
-  if (b.unresolved?.ambiguous) out.push(T(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标 —— **这些边没有计入**（宁可缺边也不接错）；`, `  · ${fmt(b.unresolved.ambiguous)} references matched several same-named targets — those edges are **left out** (a missing edge beats a wrong one);`));
-  out.push(T('  · 想看更宽：depth 加大（最多 4）；某个方向：refs(名字, in|out)。', '  · go wider: raise depth (max 4); one direction only: refs(name, in|out).'));
+  // 样板降级（AI 实测反馈）：完整说明只在首次 impact（或图更新后首次）；之后每次一行口径，
+  // “说明比结果还长”对省 token 的工具是自相矛盾的
+  if (firstTime) {
+    out.push(T('要注意的：', 'Worth knowing:'));
+    out.push(T('  · 这是**静态名字匹配**的结果：动态调用 / 反射 / 字符串拼出来的名字看不见；', '  · these edges come from **static name matching**: dynamic calls / reflection / string-built names are invisible;'));
+    if (b.unresolved?.unknown) out.push(T(`  · 本项目有 ${fmt(b.unresolved.unknown)} 处引用没匹配上任何类型（这些边不在图里）；`, `  · ${fmt(b.unresolved.unknown)} references in this project matched no type (those edges are not in the graph);`));
+    if (b.unresolved?.ambiguous) out.push(T(`  · 还有 ${fmt(b.unresolved.ambiguous)} 处匹配到多个同名目标 —— **这些边没有计入**（宁可缺边也不接错）；`, `  · ${fmt(b.unresolved.ambiguous)} references matched several same-named targets — those edges are **left out** (a missing edge beats a wrong one);`));
+    out.push(T('  · 想看更宽：depth 加大（最多 4）；某个方向：refs(名字, in|out)。', '  · go wider: raise depth (max 4); one direction only: refs(name, in|out).'));
+  } else {
+    out.push(T(`（口径同本会话首次：静态名字匹配；未匹配 ${fmt(b.unresolved?.unknown || 0)} · 歧义 ${fmt(b.unresolved?.ambiguous || 0)}；depth 最多 4，方向用 refs(名字, in|out)）`,
+      `(same caveats as the first impact call this session: static name matching; ${fmt(b.unresolved?.unknown || 0)} unmatched · ${fmt(b.unresolved?.ambiguous || 0)} ambiguous; depth max 4, directions via refs(name, in|out))`));
+  }
   const iMiss = excludeMissNote(ex, b);
   if (iMiss) out.push(iMiss);
   return out.join('\n');
@@ -1231,11 +1257,11 @@ function toolImpact(idx, a) {
 
 const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, refs: toolRefs, subgraph: toolSubgraph, file: toolFile, list: toolList, map: toolMap, impact: toolImpact };
 
-function callTool(idx, name, args) {
+function callTool(idx, name, args, sess) {
   const fn = IMPL[name];
   if (!fn) return T(`未知工具：${name}`, `Unknown tool: ${name}`);
   try {
-    return fn(idx, args || {});
+    return fn(idx, args || {}, sess || {});
   } catch (err) {
     return T(`工具执行出错：${err.message}`, `Tool failed: ${err.message}`);
   }
@@ -1262,7 +1288,9 @@ export function startMcp({ bundlePath }) {
 
   // bundle 是快照，会过时。每次调用前看一眼 mtime：重新扫描过就自动换新的（AI 不会拿到隔夜数据）
   // 换新了要**告诉 AI**（reloaded）：它的上下文里可能还留着旧图上的结论 —— 下一个工具结果尾部会挂一条“图更新过、请重查”
+  // sess：本进程的“会话状态”（AI 实测反馈：快照戳/图例/口径块每次都重复是固定税）—— 只在首次或图更新后重发
   let reloaded = false;
+  const sess = { stampShown: false, refsFull: false, impactFull: false };
   function maybeReload() {
     try {
       const tm = fs.statSync(bundlePath).mtimeMs;
@@ -1270,6 +1298,7 @@ export function startMcp({ bundlePath }) {
         mtime = tm;
         idx = buildIndex(JSON.parse(fs.readFileSync(bundlePath, 'utf8')));
         reloaded = true;
+        sess.stampShown = false; sess.refsFull = false; sess.impactFull = false;
         process.stderr.write(T(`MCP：检测到 bundle 更新，已重载（${idx.b.types.length} 个类型）\n`, `MCP: bundle changed, reloaded (${idx.b.types.length} types)\n`));
       }
     } catch { /* 读不到就继续用旧的 */ }
@@ -1314,9 +1343,14 @@ export function startMcp({ bundlePath }) {
       const name = params?.name;
       const args = params?.arguments || {};
       maybeReload();
-      const text = callTool(idx, name, args);
-      // 结尾挂一条快照时间（overview 那行已经写全了，不重复）：单点调用时也能看出数据新不新
-      let body = name === 'overview' ? text : `${text}\n${T(`（快照 ${stampShort(idx.b)}）`, `(snapshot ${stampShort(idx.b)})`)}`;
+      const text = callTool(idx, name, args, sess);
+      // 快照戳只挂**本会话首次**（或图更新后首次）的非 overview 结果（AI 实测反馈：每次重复是固定税）；
+      // 图更新那一条已带时间，不重复挂
+      let body = text;
+      if (name !== 'overview') {
+        if (reloaded) sess.stampShown = true;
+        else if (!sess.stampShown) { body += `\n${T(`（快照 ${stampShort(idx.b)}）`, `(snapshot ${stampShort(idx.b)})`)}`; sess.stampShown = true; }
+      }
       // 图在两次调用之间更新过：这一条结果尾部带上“已更新”提示（只带一次）
       if (reloaded) {
         body += `\n${mapUpdateNote(idx.b)}`;

@@ -100,6 +100,16 @@ function printScanReport(b, out) {
       `  跳过目录  ${detail}（默认表 + 项目规则；里面的源码不会进这张图）`,
       `  Skipped dirs ${detail} (default list + project rules; source inside them is not in this map)`,
     ));
+    // 一级被跳过目录的“体量”（数出来的文件数；.git 不数）—— AI 实测反馈：只列名字会让人把图里文件数当仓库规模
+    const rDirs = Object.entries(b.stats.skipped?.rootDirs || {}).sort((a, c) => (c[1]?.files || 0) - (a[1]?.files || 0));
+    if (rDirs.length) {
+      const rDetail = rDirs.slice(0, 6).map(([n, v]) => `${n} ${v.capped ? '≥' : ''}${nf(v.files)}`).join(' · ')
+        + (rDirs.length > 6 ? t(` …共 ${rDirs.length} 个一级目录`, ` … ${rDirs.length} top-level dirs`) : '');
+      console.log(t(
+        `  一级目录体量  ${rDetail}（文件数；未进图；.git 未数）`,
+        `  Top-level dir sizes  ${rDetail} (file counts; not in the map; .git skipped)`,
+      ));
+    }
   }
   // 项目自己的规则（atlas.ignore / .gitignore）也点名：写了规则却没生效，一眼能看出来
   const ignSrc = b.stats.skipped?.ignoreSources || [];

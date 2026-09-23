@@ -94,7 +94,8 @@ const tagCount = (refsAll.match(/\[(同文件|有支撑|仅同名|same file|back
 const edgeCount = (refsAll.match(/×/g) || []).length;
 check(edgeCount > 0 && tagCount === edgeCount, 'refs 每条边都标了引用证据强度', `${tagCount}/${edgeCount} 条带标签`);
 const hasNameOnly = /\[(仅同名|same name only)\]/.test(refsAll);
-check(!hasNameOnly || /真引用|real references/.test(refsAll), 'refs 的图例把“仅同名”说准（既有巧合、也可能有没认出来的真引用）', hasNameOnly ? '有仅同名边，已带说明' : '这个 bundle 里没有仅同名边');
+// 图例只在会话首个 refs 出现（AI 实测反馈：每次重复是固定税）—— 所以查上面那次 refs（首个）
+check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把“仅同名”说准（图例只出现一次 · 首个 refs 上）', hasNameOnly ? '有仅同名边，首条 refs 带说明' : '这个 bundle 里没有仅同名边');
 
 // 措辞跟着改过两轮：`被 N 处引用` → `被引用 N 次`（边权重变成真的引用次数后，"处（来源数）" 与 "次（次数）"
 // 不再是同一个数，标签必须说清是哪个）。这里认两种语言的新措辞。
@@ -130,9 +131,10 @@ if (seedDir.length > 3) {
   check(hintOut.includes(seedDir + '/'), `list（近似候选："${q2}" 能找到 "${seedDir}/"）`, hintOut.split('\n')[0].slice(0, 70));
 }
 
-// 每个工具结果末尾都挂快照时间（单点调用也能看出数据新不新）
-const symTail = sym.split('\n').slice(-1)[0];
-check(/(快照|snapshot).*UTC/.test(symTail), '非 overview 工具也带快照时间', symTail.slice(0, 60));
+// 快照戳：只挂“本会话首个非 overview 结果”（下面是 search）—— AI 实测反馈：每次重复是固定税（2026-09-23）
+const symTail2 = sym.split('\n').slice(-1)[0];
+check(/(快照|snapshot).*UTC/.test(search) && !/(快照|snapshot).*UTC/.test(symTail2),
+  '快照戳只挂本会话首个非 overview 结果（后面不再重复）', `first:${/(快照|snapshot)/.test(search)} later:${/(快照|snapshot)/.test(symTail2)}`);
 
 const miss = await call('symbol', { name: 'zzz-this-does-not-exist' });
 check(/没有|找不到|No symbol|not found/i.test(miss), '找不到时给提示', miss.split('\n')[0].slice(0, 60));
@@ -474,9 +476,9 @@ await nb.ready;
 const symDef = await nb.call('symbol', { name: 'Widget', members: 0 });
 const symOff = await nb.call('symbol', { name: 'Widget', members: 0, neighbors: false });
 const symOn = await nb.call('symbol', { name: 'Widget', members: 0, neighbors: true });
-// 最后一行是每个工具都挂的快照时间，比较前去掉它
+// 最后一行可能是一次性快照戳（只挂本会话首个非 overview 结果），比较前去掉它
 const strip = (s) => s.split('\n').filter((l) => !/^（快照 |^\(snapshot /.test(l)).join('\n');
-check(symDef === symOff && !/邻居|Neighbors/.test(symDef),
+check(strip(symDef) === strip(symOff) && !/邻居|Neighbors/.test(symDef),
   'symbol：不带 neighbors 时输出**一个字节不变**（邻居块默认不显示）');
 check(strip(symOn).startsWith(strip(symDef)),
   'symbol(neighbors:true)：只是在原有输出后面**追加**（原有内容一字不动）');
@@ -1308,6 +1310,47 @@ tf.proc.kill('SIGKILL');
     (raw.match(/mcp__[a-z0-9-]+__/) || ['(无)'])[0]);
   check(/impact/.test(raw) && /exclude/.test(raw) && /facets/.test(raw) && /🔁/.test(raw),
     '㉔ 技能正文保留关键提示（impact 开场 / exclude / facets 警告 / 🔁 重查）');
+}
+
+// ㉕ 2026-09-23（AI 实测反馈的三条修复）：
+// ① 跳过目录报“体量”（vendor/ 3 个文件数出来；overview 里有“一级目录的实际体量”）；
+// ② 样板降级：快照戳 / refs 图例 / impact 完整说明只在（本会话）首次出现，之后压成一行或省略；
+// ③ list / file 带上文件头注释的“半句话”（briefDoc 接到了这两处）。
+{
+  const fbTmp = path.join(os.tmpdir(), `codeatlas-feedback-${process.pid}`);
+  const { out: fbOut } = scanProject(fbTmp, {
+    'a.js': '/** 演示模块：干这个的 */\nexport function alpha() { return 1; }\n',
+    'b.js': "import { alpha } from './a.js';\nexport function beta() { return alpha(); }\n",
+    'vendor/v1.js': 'export const x1 = 1;\n',
+    'vendor/v2.js': 'export const x2 = 2;\n',
+    'vendor/sub/v3.js': 'export const x3 = 3;\n',
+  });
+  const fbBundle = readBundle(fbOut);
+  check(fbBundle.stats?.skipped?.rootDirs?.vendor?.files === 3,
+    '㉕ 跳过目录的体量被数出来（vendor/ 3 个文件）', JSON.stringify(fbBundle.stats?.skipped?.rootDirs));
+  const fbSvc = spawnMcp(fbOut);
+  await fbSvc.ready;
+  const fbOv = await fbSvc.call('overview', {});
+  check(/一级目录的实际体量|Top-level dirs by real size/.test(fbOv) && /vendor\/ 3 (文件|files)/.test(fbOv),
+    '㉕ overview：跳过目录带上体量（vendor/ 3 文件）', (fbOv.split('\n').find((l) => /体量|real size/.test(l)) || '').trim().slice(0, 90));
+  const fbL1 = await fbSvc.call('list', {});
+  const fbL2 = await fbSvc.call('list', {});
+  check(/演示模块：干这个的/.test(fbL1),
+    '㉕ list：文件行带上文件头注释的“半句话”', (fbL1.split('\n').find((l) => /a\.js/.test(l)) || '').trim().slice(0, 90));
+  check(/(快照|snapshot)/.test(fbL1) && !/(快照|snapshot)/.test(fbL2),
+    '㉕ 快照戳只在（本会话）首次非 overview 结果上（第二次没有）', `1st:${/(快照|snapshot)/.test(fbL1)} 2nd:${/(快照|snapshot)/.test(fbL2)}`);
+  const fbFileRes = await fbSvc.call('file', { path: 'a.js' });
+  check(/说明：演示模块|Doc: 演示模块/.test(fbFileRes),
+    '㉕ file：带上文件头注释摘要（“说明：”行）', (fbFileRes.split('\n')[1] || '').trim().slice(0, 70));
+  const fbR1 = await fbSvc.call('refs', { name: 'alpha' });
+  const fbR2 = await fbSvc.call('refs', { name: 'alpha' });
+  check(/边尾的标签|tag after each edge/.test(fbR1) && !/边尾的标签|tag after each edge/.test(fbR2),
+    '㉕ refs 图例只出现一次（之后不再重复）', `1st:${/边尾的标签|tag after each edge/.test(fbR1)} 2nd:${/边尾的标签|tag after each edge/.test(fbR2)}`);
+  const fbI1 = await fbSvc.call('impact', { name: 'alpha', depth: 1 });
+  const fbI2 = await fbSvc.call('impact', { name: 'alpha', depth: 1 });
+  check(/要注意的|Worth knowing/.test(fbI1) && !/要注意的|Worth knowing/.test(fbI2) && /口径同本会话首次|same caveats as the first/.test(fbI2),
+    '㉕ impact 完整说明只出现一次，之后压成一行口径', `1st:${/要注意的|Worth knowing/.test(fbI1)} 2nd:${/口径同本会话首次|same caveats as the first/.test(fbI2)}`);
+  fbSvc.proc.kill('SIGKILL');
 }
 
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);

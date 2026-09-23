@@ -287,7 +287,9 @@ Five details:
 - **The tool output follows the UI language**: the copied config carries `CODEATLAS_LANG`, so answers come back in
   the same language as your interface (the env var wins; delete it and the engine speaks Chinese);
 - The bundle is a snapshot and can go stale. Before every call the server checks mtime and **switches to a
-  freshly scanned bundle automatically**; it will not answer from yesterday's data. When the bundle *did* change
+  freshly scanned bundle automatically**; it will not answer from yesterday's data. The short snapshot stamp is printed
+  on the **first** non-overview result of a session (and again after the map reloads) — later results skip it to save
+  tokens. When the bundle *did* change
   between your calls (watch mode / a re-scan), the first result afterwards carries a `🔁 the map was updated …`
   line — the AI is told to re-query instead of reusing earlier answers;
 - **If the files in the map changed on disk, `overview` says so**:

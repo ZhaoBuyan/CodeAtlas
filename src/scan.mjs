@@ -165,6 +165,41 @@ function loadIgnoreRules(roots, { gitignore } = {}) {
   };
 }
 
+/**
+ * 一级被跳过目录的“体量”（有上限地数文件；.git 不数）—— AI 实测反馈（2026-09-23）：只报“跳了哪几类”
+ * 不够，使用者会把“图里 72 个文件”当成“仓库就 72 个文件”。数出来，让两个数同框。
+ * 只数一级（rel 没斜杠）；嵌套的仍按名字聚合（ignoredDirs）。上限定 10 万，防极端目录。
+ */
+function noteRootDirSkip(skipped, name, abs, rel) {
+  if (rel.includes('/') || name.startsWith('.git')) return;
+  const cnt = countFilesBounded(abs);
+  const prev = skipped.rootDirs.get(name);
+  if (prev) { prev.files += cnt.files; prev.capped = prev.capped || cnt.capped; }
+  else skipped.rootDirs.set(name, cnt);
+}
+
+const dirCountMemo = new Map();   // abs -> { mtime, files, capped }：watch 一个进程跑很多趟，别每趟重数一遍（47k 文件约 2s）
+function countFilesBounded(dir, cap = 100000) {
+  let mt = 0;
+  try { mt = fs.statSync(dir).mtimeMs; } catch { return { files: 0, capped: false }; }
+  const memo = dirCountMemo.get(dir);
+  if (memo && memo.mtime === mt) return { files: memo.files, capped: memo.capped };
+  let n = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    let es;
+    try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of es) {
+      if (e.isDirectory()) { if (!e.name.startsWith('.git')) stack.push(path.join(d, e.name)); }
+      else n++;
+      if (n >= cap) { dirCountMemo.set(dir, { mtime: mt, files: n, capped: true }); return { files: n, capped: true }; }
+    }
+  }
+  dirCountMemo.set(dir, { mtime: mt, files: n, capped: false });
+  return { files: n, capped: false };
+}
+
 function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }) {
   const exts = new Map();
   for (const lang of languages) for (const e of lang.exts) exts.set(e, lang);
@@ -179,7 +214,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   // ignoredDirs：被默认跳过表命中的目录名 → 次数。它进 bundle、进扫描报告，
   // 让“图里少了东西”这件事可见（monorepo 的 packages/ 当年就是这么被发现的）。
   const skipped = { ignored: 0, ignoredDirs: new Map(), tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map(),
-    projectDirs: new Map(), projectFiles: 0 };
+    projectDirs: new Map(), projectFiles: 0, rootDirs: new Map() };
 
   for (let rootIdx = 0; rootIdx < roots.length; rootIdx++) {
     const root = roots[rootIdx];
@@ -202,12 +237,17 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
         const abs = path.join(dir, e.name);
         const rel = path.relative(root, abs).split(path.sep).join('/');
         if (e.isDirectory()) {
-          if (ignoreDirs.has(e.name) || e.name.startsWith('.git')) { skipped.ignored++; skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1); continue; }
+          if (ignoreDirs.has(e.name) || e.name.startsWith('.git')) {
+            skipped.ignored++; skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1);
+            noteRootDirSkip(skipped, e.name, abs, rel);
+            continue;
+          }
           // 项目自己的规则（atlas.ignore / .gitignore）也走同一本账，好让“图里少了东西”始终可见
           if (ignoreRules && ignoreRules.hit(rootIdx, rel, e.name, true)) {
             skipped.ignored++;
             skipped.ignoredDirs.set(e.name, (skipped.ignoredDirs.get(e.name) || 0) + 1);
             skipped.projectDirs.set(e.name, (skipped.projectDirs.get(e.name) || 0) + 1);
+            noteRootDirSkip(skipped, e.name, abs, rel);
             continue;
           }
           stack.push(abs);
@@ -753,6 +793,26 @@ function docFor(comments, startRow, lines) {
 }
 
 /**
+ * 文件头注释 → 一行摘要（“半句话”）：给 list / file 用。
+ * AI 实测反馈：定向阶段最缺的是“这文件是干什么的”，而注释里恰好写着 —— 图的性价比在这里倒挂。
+ * 认法：根节点下、第一个**非注释节点之前**的第一段注释（shebang 跳过）；取它第一行有内容的文字。
+ */
+function headerDocOf(tree) {
+  let text = null;
+  for (const c of tree.rootNode.namedChildren) {
+    if (c.type === 'hash_bang_line') continue;
+    if (c.type.includes('comment')) { if (!text) text = c.text; continue; }
+    break;
+  }
+  if (!text) return null;
+  const line = text.split('\n')
+    .map((l) => l.replace(/^[\s/*#<!%-]+/, '').replace(/[\s*/%>-]+$/, ''))
+    .find((l) => l.length > 2 && !/^[-=*]{3,}$/.test(l));
+  if (!line) return null;
+  return line.replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+/**
  * 提取一个文件的全部事实。
  * @returns {{types: object[], imports: string[], refs: object[], namespaces: string[], commentRows: number, decisions: number}}
  */
@@ -1018,7 +1078,7 @@ function extractFile(source, tree, lang) {
   // 计数表 → 引用列表（顺序 = 首次出现顺序，跟改之前一致）
   for (const r of refCount.values()) refs.push(r);
   for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
-  return { types, imports, reexports, partOf, refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -1517,6 +1577,7 @@ async function extractFiles(files) {
     };
     if (facts.reexports.length) part.file.reexports = facts.reexports;
     if (facts.partOf) part.file.partOf = facts.partOf;
+    if (facts.fileDoc) part.file.doc = facts.fileDoc;
     if (isTestPath(f.rel)) part.file.isTest = true;
     part.ns = facts.namespaces;
     parts.push(part);
@@ -2268,6 +2329,8 @@ export async function scan(opts) {
     skipped: {
       ignored: skipped.ignored || 0,
     ignoredDirs: Object.fromEntries(skipped.ignoredDirs || []),
+      // 一级被跳过目录的体量（数文件；.git 不数）：让“图里 72 个文件”和“仓库其实 5 万个文件”同框出现
+      rootDirs: Object.fromEntries(skipped.rootDirs || []),
       // 项目自己的规则（atlas.ignore / .gitignore）命中多少：进 bundle，报告和 MCP 都能看见
       projectDirs: Object.fromEntries(skipped.projectDirs || []),
       projectFiles: skipped.projectFiles || 0,
