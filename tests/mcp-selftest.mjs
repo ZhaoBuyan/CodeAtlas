@@ -1320,12 +1320,26 @@ tf.proc.kill('SIGKILL');
 // ② overview 页脚的工具清单从 TOOLS 动态生成（原来手写 5 个，漏了 impact / map / list）；
 // ③ map 页脚分清“内容已全部输出（预算未触顶）”与“撞预算截断”。
 {
-  const fBig = await call('file', { path: 'src/mcp.mjs' });
-  const tline = fBig.split('\n').find((l) => /^(类型|Types) \d+/.test(l)) || '';
-  const nSelf = Number((tline.match(/^(?:类型|Types) (\d+)/) || [])[1] || 0);
-  const nEntries = (tline.match(/\[[a-z]+\]/g) || []).length;   // 每个条目都带 [kind]
-  check(nSelf > 20 && nEntries === nSelf,
-    '㉓ file()：类型清单自报数量 == 行内条目数（不静默截断）', `自报 ${nSelf} · 行内 ${nEntries}`);
+  // ⚠ 被测文件必须**从当前 bundle 里挑**，不能写死 `src/mcp.mjs`：自检默认跑 dist（本仓库自己的图），
+  //    但 CI 是拿 `tests/fixtures` 现扫一份再跑（fixture 里没有 src/），写死的话这条会以
+  //    “没有匹配的文件 → 自报 0” 假红。实测 2026-09-23：CI 从第 32 次起就一直卡在这条；
+  //    而本会话一路 `mcp-selftest.mjs`（默认 dist）全绿 —— 这正是"本地绿、CI 红"藏了一整轮的原因。
+  //    门槛 12 是 CI 那份 fixture bundle 里最大文件的类型数（csharp/Sample.cs），不能再高。
+  const bigFile = (bundle.files || [])
+    .filter((f) => (f.types || []).length >= 12)
+    .sort((a, b) => (b.types || []).length - (a.types || []).length)[0];
+  if (!bigFile) {
+    check(false, '㉓ file()：类型清单自报数量 == 行内条目数（不静默截断）',
+      '当前 bundle 里没有类型数 ≥12 的文件 —— 这条门失去了意义，请让 CI 扫的 fixture 含一个多类型文件');
+  } else {
+    const fBig = await call('file', { path: bigFile.path });
+    const tline = fBig.split('\n').find((l) => /^(类型|Types) \d+/.test(l)) || '';
+    const nSelf = Number((tline.match(/^(?:类型|Types) (\d+)/) || [])[1] || 0);
+    const nEntries = (tline.match(/\[[a-z]+\]/g) || []).length;   // 每个条目都带 [kind]
+    check(nSelf === (bigFile.types || []).length && nEntries === nSelf,
+      '㉓ file()：类型清单自报数量 == 行内条目数（不静默截断）',
+      `${bigFile.path}：自报 ${nSelf} · 行内 ${nEntries} · 图里 ${(bigFile.types || []).length}`);
+  }
 
   const digLine = ((await call('overview', {})).split('\n').find((l) => /深入用|Dig deeper/.test(l)) || '');
   const missing = ['search', 'symbol', 'refs', 'subgraph', 'map', 'impact', 'file', 'list'].filter((x) => !digLine.includes(x));
