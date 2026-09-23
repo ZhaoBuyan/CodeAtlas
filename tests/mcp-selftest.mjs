@@ -1353,6 +1353,43 @@ tf.proc.kill('SIGKILL');
   fbSvc.proc.kill('SIGKILL');
 }
 
+// ㉖ 2026-09-23（AI 实测反馈第二批）：
+// ① 包名/路径别名只收**图内**清单（以前自己走全树、读每个文件，且不遵守跳过规则 —— 图外 176 个包名泄进图内）；
+// ② 子进程起不来时说清“引擎跑不起来”，不逐门刷“退出码 null”。
+{
+  const pkTmp = path.join(os.tmpdir(), `codeatlas-pkgscope-${process.pid}`);
+  const { out: pkOut } = scanProject(pkTmp, {
+    'package.json': '{ "name": "in-graph-app" }\n',
+    'tsconfig.json': '{ "compilerOptions": { "baseUrl": "./src", "paths": { "~/*": ["*"] } } }\n',
+    'src/a.js': 'export const a = 1;\n',
+    'vendor/package.json': '{ "name": "vendor-pkg" }\n',
+    'vendor/tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["*"] } } }\n',
+  });
+  const pkBundle = readBundle(pkOut);
+  check(pkBundle.source.packages.some((p) => p.name === 'in-graph-app') && !pkBundle.source.packages.some((p) => p.name === 'vendor-pkg'),
+    '㉖ 包名发现遵守跳过规则（被排除目录里的 package.json 不进图）', JSON.stringify(pkBundle.source.packages));
+  check((pkBundle.source.aliases || []).some((x) => x.dir === 'src') && !(pkBundle.source.aliases || []).some((x) => x.prefix === '@/' || (x.dir || '').startsWith('vendor')),
+    '㉖ 路径别名同理：只收图内 tsconfig（vendor/ 的不算）', JSON.stringify(pkBundle.source.aliases));
+
+  // ② 子进程起不来：一句说清 + bundle 标 spawn（NODE_BIN 指向不存在的文件来模拟）
+  const bnTmp = path.join(os.tmpdir(), `codeatlas-spawnfail-${process.pid}`);
+  fs.rmSync(bnTmp, { recursive: true, force: true });
+  const bnRoot = path.join(bnTmp, 'proj');
+  fs.mkdirSync(bnRoot, { recursive: true });
+  fs.writeFileSync(path.join(bnRoot, 'a.js'), 'export function alpha() { return 1; }\n');
+  let bnOutText = '';
+  try {
+    bnOutText = String(execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'scan', bnRoot, '--out', path.join(bnTmp, 'out')], {
+      stdio: 'pipe', encoding: 'utf8', env: { ...process.env, NODE_BIN: path.join(bnTmp, 'no-such-node.exe') },
+    }));
+  } catch (e) { bnOutText = String(e.stdout || '') + String(e.stderr || ''); }
+  check(/起不了解析子进程|Cannot spawn the parse child/.test(bnOutText) && (bnOutText.match(/没解析成功|failed to parse/g) || []).length === 0 && /引擎跑不起来|Engine cannot run/.test(bnOutText),
+    '㉖ 子进程起不来：一句话说清“引擎跑不起来”（不逐门刷“退出码 null”）', (bnOutText.split('\n').find((l) => /引擎跑不起来|Engine cannot run/.test(l)) || '').trim().slice(0, 80));
+  const bnBundle = readBundle(path.join(bnTmp, 'out'));
+  check((bnBundle.source.failedLanguages || []).every((x) => x.spawn) && !/null/.test(JSON.stringify(bnBundle.source.failedLanguages || [])),
+    '㉖ bundle 里失败原因标成“子进程起不来”（不是“退出码 null”）', JSON.stringify((bnBundle.source.failedLanguages || [])[0] || null));
+}
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;

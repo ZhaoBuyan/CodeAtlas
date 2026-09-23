@@ -132,7 +132,13 @@ function printScanReport(b, out) {
   if (b.source.failures.length) console.log(t(`  解析失败  ${b.source.failures.length} 个文件`, `  Parse failed ${b.source.failures.length} files`));
   if (b.source.failedLanguages && b.source.failedLanguages.length) {
     const fl = b.source.failedLanguages.map((x) => x.lang).join(t('、', ', '));
-    console.log(t(`  ⚠ 语言未解析  ${fl}（这一门这次没进地图：${b.source.failedLanguages[0].reason.slice(0, 60)}）`, `  ⚠ Language failed: ${fl} (this language did not make it into the map: ${b.source.failedLanguages[0].reason.slice(0, 60)})`));
+    // 全部是“子进程起不来”：一句话说清是**引擎跑不起来**，不是代码解析不了（AI 实测反馈：以前只有退出码 1 和一堆空行）
+    if (b.source.failedLanguages.every((x) => x.spawn)) {
+      console.log(t(`  ⚠ 引擎跑不起来  ${b.source.failedLanguages.length} 门语言全部没解析（${String(b.source.failedLanguages[0].reason).slice(0, 80)}）—— **不是你的代码问题**；检查 Node / 权限 / 沙箱环境后重试`,
+        `  ⚠ Engine cannot run  all ${b.source.failedLanguages.length} languages failed (${String(b.source.failedLanguages[0].reason).slice(0, 80)}) — **not your code's fault**; check Node / permissions / sandbox and retry`));
+    } else {
+      console.log(t(`  ⚠ 语言未解析  ${fl}（这一门这次没进地图：${b.source.failedLanguages[0].reason.slice(0, 60)}）`, `  ⚠ Language failed: ${fl} (this language did not make it into the map: ${b.source.failedLanguages[0].reason.slice(0, 60)})`));
+    }
   }
   console.log(`\n${t('  输出      ', '  Output      ')}${out}  ${bytes(fs.statSync(out).size)}\n`);
 

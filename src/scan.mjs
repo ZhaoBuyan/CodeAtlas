@@ -59,6 +59,11 @@ const IGNORE_FILES = new Set([
   '.pnp.cjs', '.pnp.js', '.pnp.data.json',
 ]);
 
+/** 清单文件（包名 / 路径别名发现用）：**只在 collectFiles 里记路径、之后统一读**。
+ * 2026-09-23（AI 实测反馈）：以前 discoverPackages 自己走全树、还把遇到的**每个文件**读进内存
+ * （图外 4 万多个样本文件也读），而且不遵守跳过规则 —— 图外的 176 个包名会泄进图内。*/
+const MANIFEST_NAMES = new Set(['package.json', 'Cargo.toml', 'go.mod', 'pubspec.yaml', 'Package.swift', 'tsconfig.json', 'jsconfig.json']);
+
 /** 机器生成的锁文件 / 快照 / sourcemap：按后缀 */
 const IGNORE_FILE_EXT_RE = /(\.lock|\.g\.dart|\.snap|\.js\.map|\.css\.map)$/i;
 
@@ -211,6 +216,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   for (const d of excludes || []) ignoreDirs.add(d);
 
   const files = [];
+  const manifests = [];   // 图内遇到的清单文件（清单名 → 路径）；包名/别名发现统一从这里读，不再自己走树
   // ignoredDirs：被默认跳过表命中的目录名 → 次数。它进 bundle、进扫描报告，
   // 让“图里少了东西”这件事可见（monorepo 的 packages/ 当年就是这么被发现的）。
   const skipped = { ignored: 0, ignoredDirs: new Map(), tooBig: 0, unknown: 0, unsupported: new Map(), outOfScope: new Map(),
@@ -256,6 +262,8 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
         if (!e.isFile()) continue;
         if (isIgnoredFile(e.name)) { skipped.ignored++; continue; }
         if (ignoreRules && ignoreRules.hit(rootIdx, rel, e.name, false)) { skipped.ignored++; skipped.projectFiles++; continue; }
+        // 清单文件（包名 / 路径别名）：**只记路径**，遵守跳过规则（默认表 / --exclude / atlas.ignore / .gitignore）
+        if (MANIFEST_NAMES.has(e.name)) manifests.push({ abs, rel: path.relative(root, abs).split(path.sep).join('/'), name: e.name });
         const ext = path.extname(e.name).toLowerCase();
         const lang = exts.get(ext);
         if (!lang) {
@@ -310,7 +318,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   skipped.ignorePatterns = ignoreRules ? ignoreRules.count : 0;
   skipped.ignoreFiles = ignoreRules ? ignoreRules.fileCount : 0;
   skipped.ignoreNegations = ignoreRules ? ignoreRules.negations : 0;
-  return { files, skipped };
+  return { files, skipped, manifests };
 }
 
 // ---------------------------------------------------------------------------
@@ -1732,13 +1740,15 @@ function elixirIsDecision(node) {
 }
 
 /**
- * 仓库自身的包（清单文件 → 名字 + 包目录）。扫描期与读期共用（匹配规则在 modules.mjs）：
+ * 仓库自身的包（清单列表 → 名字 + 包目录）。扫描期与读期共用（匹配规则在 modules.mjs）：
  *   · package.json 的 name —— JS/TS 的“包名自引用”（ant-design 的 demo 写 `import { Button } from 'antd'`）
  *   · Cargo.toml 的 [package] name —— Rust 的跨 crate 引用（`grep_matcher::Matcher`；crate 名把 `-` 写成 `_`）
  *   · go.mod 的 module —— Go 的模块路径（`github.com/gin-gonic/gin/render`）
- * 只做一层浅发现（跳过 node_modules / dist 这些 IGNORE_DIRS）；文件读不动 / 解析不出来就跳过，不报错。
+ * 2026-09-23（AI 实测反馈）：清单列表改由 collectFiles 统一收集（它遵守跳过规则）——
+ * 以前这里自己走全树、把遇到的**每个文件**都读进内存（图外 4 万多个样本文件也读），
+ * 而且不遵守跳过规则（图外的 176 个包名会泄进图内，给图内的边错发“有支撑”）。现在只处理**图内**的清单。
  */
-function discoverPackages(roots) {
+function discoverPackages(manifests) {
   const out = [];
   const seen = new Set();
   const push = (name, dir) => {
@@ -1749,43 +1759,28 @@ function discoverPackages(roots) {
     seen.add(key);
     out.push({ name: n, dir });
   };
-  for (const root of roots) {
-    const stack = [root];
-    while (stack.length) {
-      const dir = stack.pop();
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-      for (const e of entries) {
-        const abs = path.join(dir, e.name);
-        if (e.isDirectory()) {
-          if (IGNORE_DIRS.has(e.name) || e.name.startsWith('.git')) continue;
-          stack.push(abs);
-          continue;
-        }
-        const rel = path.relative(root, dir).split(path.sep).join('/');
-        const pkgDir = rel === '.' ? '' : rel;
-        let txt = '';
-        try { txt = fs.readFileSync(abs, 'utf8'); } catch { continue; }
-        if (e.name === 'package.json') {
-          try { push(JSON.parse(txt).name, pkgDir); } catch { /* 解析不了就跳过 */ }
-        } else if (e.name === 'Cargo.toml') {
-          const sec = txt.match(/\[package\]([\s\S]*?)(?:\r?\n\[|$)/);
-          const m = sec && sec[1].match(/\bname\s*=\s*"([^"]+)"/);
-          // Rust 代码里 crate 名把 `-` 写成 `_`（Cargo.toml 写 grep-matcher，代码里是 grep_matcher）
-          push(m ? m[1].replace(/-/g, '_') : '', pkgDir);
-        } else if (e.name === 'go.mod') {
-          const m = txt.match(/^\s*module\s+(\S+)/m);
-          push(m ? m[1] : '', pkgDir);
-        } else if (e.name === 'pubspec.yaml') {
-          // Dart：包名写在 pubspec.yaml 的第一层（name: riverpod）—— import 里写作 package:riverpod/…
-          const m = txt.match(/^name:\s*([^\s#]+)/m);
-          push(m ? m[1] : '', pkgDir);
-        } else if (e.name === 'Package.swift') {
-          // Swift：模块名通常与包名同名（`import Alamofire`）—— SwiftPM 的清单也是 Swift 代码，粗暴取第一个 name
-          const m = txt.match(/\bname\s*:\s*"([^"]+)"/);
-          push(m ? m[1] : '', pkgDir);
-        }
-      }
+  for (const m of manifests) {
+    const pkgDir = path.posix.dirname(m.rel) === '.' ? '' : path.posix.dirname(m.rel);
+    let txt = '';
+    try { txt = fs.readFileSync(m.abs, 'utf8'); } catch { continue; }
+    if (m.name === 'package.json') {
+      try { push(JSON.parse(txt).name, pkgDir); } catch { /* 解析不了就跳过 */ }
+    } else if (m.name === 'Cargo.toml') {
+      const sec = txt.match(/\[package\]([\s\S]*?)(?:\r?\n\[|$)/);
+      const mm = sec && sec[1].match(/\bname\s*=\s*"([^"]+)"/);
+      // Rust 代码里 crate 名把 `-` 写成 `_`（Cargo.toml 写 grep-matcher，代码里是 grep_matcher）
+      push(mm ? mm[1].replace(/-/g, '_') : '', pkgDir);
+    } else if (m.name === 'go.mod') {
+      const mm = txt.match(/^\s*module\s+(\S+)/m);
+      push(mm ? mm[1] : '', pkgDir);
+    } else if (m.name === 'pubspec.yaml') {
+      // Dart：包名写在 pubspec.yaml 的第一层（name: riverpod）—— import 里写作 package:riverpod/…
+      const mm = txt.match(/^name:\s*([^\s#]+)/m);
+      push(mm ? mm[1] : '', pkgDir);
+    } else if (m.name === 'Package.swift') {
+      // Swift：模块名通常与包名同名（`import Alamofire`）—— SwiftPM 的清单也是 Swift 代码，粗暴取第一个 name
+      const mm = txt.match(/\bname\s*:\s*"([^"]+)"/);
+      push(mm ? mm[1] : '', pkgDir);
     }
   }
   return out;
@@ -1796,52 +1791,39 @@ function discoverPackages(roots) {
  * `@/components/VX` 这类 import 得按 tsconfig 的映射换成仓库内路径才比得上 —— 实测 vuetify：
  * 5,908 条跨文件引用只有 38% 有支撑，剩下的大多是 `@/…` / `@vuetify/…` 别名对不上。
  * 只收**解析得动**的 tsconfig（JSON 里带注释也认，去注释再 parse；真解析不了就跳过，不猜）。
+ * 2026-09-23：清单同样来自 collectFiles（遵守跳过规则）—— 图外样本库的 tsconfig 不再泄进图内。
  */
-function discoverPathAliases(roots) {
+function discoverPathAliases(manifests) {
   const out = [];
   const seen = new Set();
-  for (const root of roots) {
-    const stack = [root];
-    while (stack.length) {
-      const dir = stack.pop();
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-      for (const e of entries) {
-        const abs = path.join(dir, e.name);
-        if (e.isDirectory()) {
-          if (IGNORE_DIRS.has(e.name) || e.name.startsWith('.git')) continue;
-          stack.push(abs);
-          continue;
-        }
-        if (e.name !== 'tsconfig.json' && e.name !== 'jsconfig.json') continue;
-        let txt = '';
-        try { txt = fs.readFileSync(abs, 'utf8'); } catch { continue; }
-        // JSONC：去块注释 / 行注释 / 尾逗号再 parse（tsconfig 实际就是 JSONC）
-        const cleaned = txt
-          .replace(/\/\*[\s\S]*?\*\//g, '')
-          .replace(/(^|[^:"'\\])\/\/[^\n]*/g, '$1')
-          .replace(/,(\s*[}\]])/g, '$1');
-        let j;
-        try { j = JSON.parse(cleaned); } catch { continue; }
-        const co = j.compilerOptions || {};
-        const base = String(co.baseUrl || '.').replace(/\\/g, '/');
-        const dirRel = path.relative(root, dir).split(path.sep).join('/');
-        // 压掉 '.' / './' / 连续斜杠（tsconfig 里 baseUrl 常写成 './' / '../'）
-        const joinRel = (p2) => [dirRel, base, p2].join('/').split('/').filter((s) => s && s !== '.').join('/');
-        for (const [k, v] of Object.entries(co.paths || {})) {
-          if (!k.endsWith('*') || !Array.isArray(v)) continue;
-          for (const target of v) {
-            if (typeof target !== 'string' || !target.endsWith('*')) continue;
-            const prefix = k.slice(0, -1);
-            let dir2 = joinRel(target.slice(0, -1));
-            if (dir2.endsWith('/')) dir2 = dir2.slice(0, -1);
-            if (!prefix || !dir2) continue;
-            const key = `${prefix}|${dir2}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push({ prefix, dir: dir2 });
-          }
-        }
+  for (const m of manifests) {
+    if (m.name !== 'tsconfig.json' && m.name !== 'jsconfig.json') continue;
+    let txt = '';
+    try { txt = fs.readFileSync(m.abs, 'utf8'); } catch { continue; }
+    // JSONC：去块注释 / 行注释 / 尾逗号再 parse（tsconfig 实际就是 JSONC）
+    const cleaned = txt
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:"'\\])\/\/[^\n]*/g, '$1')
+      .replace(/,(\s*[}\]])/g, '$1');
+    let j;
+    try { j = JSON.parse(cleaned); } catch { continue; }
+    const co = j.compilerOptions || {};
+    const base = String(co.baseUrl || '.').replace(/\\/g, '/');
+    const dirRel = path.posix.dirname(m.rel) === '.' ? '' : path.posix.dirname(m.rel);
+    // 压掉 '.' / './' / 连续斜杠（tsconfig 里 baseUrl 常写成 './' / '../'）
+    const joinRel = (p2) => [dirRel, base, p2].join('/').split('/').filter((s) => s && s !== '.').join('/');
+    for (const [k, v] of Object.entries(co.paths || {})) {
+      if (!k.endsWith('*') || !Array.isArray(v)) continue;
+      for (const target of v) {
+        if (typeof target !== 'string' || !target.endsWith('*')) continue;
+        const prefix = k.slice(0, -1);
+        let dir2 = joinRel(target.slice(0, -1));
+        if (dir2.endsWith('/')) dir2 = dir2.slice(0, -1);
+        if (!prefix || !dir2) continue;
+        const key = `${prefix}|${dir2}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ prefix, dir: dir2 });
       }
     }
   }
@@ -1865,11 +1847,12 @@ export async function scan(opts) {
   const excludes = [...(opts.excludes || []), ...(facetsDoc?.config?.exclude || [])];
   // 项目自己的跳过规则：atlas.ignore（存在才生效）+ 可选的 .gitignore（--gitignore 才读）
   const ignoreRules = loadIgnoreRules(roots, { gitignore: opts.gitignore });
-  const { files, skipped } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
+  const { files, skipped, manifests } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
   // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
-  const packages = discoverPackages(roots);
+  // （清单来自 collectFiles —— 遵守跳过规则，图外的包不再泄进图内）
+  const packages = discoverPackages(manifests);
   // ③b TS/JS 的路径别名（tsconfig/jsconfig 的 paths）—— 同一套 ctx 一起传下去
-  const aliases = discoverPathAliases(roots);
+  const aliases = discoverPathAliases(manifests);
 
   const langById = new Map(languages.map((l) => [l.id, l]));
   const byLang = new Map();
@@ -1918,6 +1901,7 @@ export async function scan(opts) {
     }));
     const NODE = process.env.NODE_BIN || process.execPath;   // 一般就是 node.exe；特殊情况可用 NODE_BIN 指定
     let n = 0;
+    let spawnErrorShown = false;   // 子进程起不来只报一次（AI 实测反馈：30 门语言各刷一行“退出码 null”没法看）
     for (const langId of langsWithFiles) {
       const emit = path.join(tmp, `part-${n++}.json`);
       const r = spawnSync(NODE, [
@@ -1937,8 +1921,19 @@ export async function scan(opts) {
       }
       if (!ok) {
         const tail = String(r.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
-        console.log(t(`  ⚠ ${langId} 没解析成功（子进程退出码 ${r.status}）—— 这门语言这次不进地图。${tail ? `子进程最后一句：${tail.slice(0, 200)}` : ''}`, `  ⚠ ${langId} failed to parse (child exit code ${r.status}) — this language is not in the map this time. ${tail ? `Last line from the child: ${tail.slice(0, 200)}` : ''}`));
-        failedLanguages.push({ lang: langId, files: (byLang.get(langId) || []).length, reason: tail || `子进程退出码 ${r.status}` });
+        if (r.error) {
+          // 子进程**起不来**（EPERM / ENOENT 这类）：一次说清“引擎跑不起来”，不是你的代码问题（AI 实测反馈）
+          const code = String(r.error.code || r.error.message || 'spawn 失败');
+          if (!spawnErrorShown) {
+            spawnErrorShown = true;
+            console.log(t(`  ⚠ 起不了解析子进程（${code}）—— 引擎在当前环境跑不了解析（不是你的代码问题）；后面的语言不再逐门重复`,
+              `  ⚠ Cannot spawn the parse child process (${code}) — the engine cannot run here (not your code's fault); no per-language repeats`));
+          }
+          failedLanguages.push({ lang: langId, files: (byLang.get(langId) || []).length, reason: `子进程起不来（${code}）`, spawn: true });
+        } else {
+          console.log(t(`  ⚠ ${langId} 没解析成功（子进程退出码 ${r.status}）—— 这门语言这次不进地图。${tail ? `子进程最后一句：${tail.slice(0, 200)}` : ''}`, `  ⚠ ${langId} failed to parse (child exit code ${r.status}) — this language is not in the map this time. ${tail ? `Last line from the child: ${tail.slice(0, 200)}` : ''}`));
+          failedLanguages.push({ lang: langId, files: (byLang.get(langId) || []).length, reason: tail || `子进程退出码 ${r.status}` });
+        }
       }
       // 注意：子进程是 SIGKILL 硬退的（绕开退出阶段的 libuv 断言），所以**成功时退出码也是 1**。
       // 不要用“退出码非 0”去判定失败，也不要据此打日志（否则每门语言都会刷一行）——成败只看 emit。
