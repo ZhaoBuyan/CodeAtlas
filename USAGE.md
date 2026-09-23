@@ -135,6 +135,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | **Chatbox** | Settings → MCP / extensions → add server (paste the `mcpServers` snippet) |
 | **Claude Desktop** | the `mcpServers` field in `%APPDATA%\Claude\claude_desktop_config.json` |
 | **Cursor** | Settings → MCP → Add new MCP server (or `~/.cursor/mcp.json`) |
+| **dsh (DeepSeek Harness)** | not `mcpServers` — run `node src/cli.mjs mcp --print-config --client dsh` and merge the printed Cordis patch YAML into `$DSH_HOME/cordis.patch.yml` (unverified here — dsh not installed on this machine) |
 | **Windsurf / Cline / others** | find the "MCP servers" setting and paste the `mcpServers` snippet |
 
 **Restart the client** afterwards; you should see a `code-atlas` server with 9 tools.

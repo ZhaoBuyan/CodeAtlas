@@ -1146,6 +1146,25 @@ if (mOwner) {
 }
 tf.proc.kill('SIGKILL');
 
+// ⑳ 2026-09-23：dsh（DeepSeek Harness）接入 —— `mcp --print-config --client dsh` 吐 Cordis patch YAML。
+// 字段名照 dsh 官方示例（serverName / transport / command / args / cwd）；⚠ 本机没装 dsh，
+// 这道门只钉住配置结构（端到端验证另算，见工作文档）。
+{
+  const dshOutDir = path.join(os.tmpdir(), `codeatlas-dsh-${process.pid}`);
+  const dshYaml = execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'mcp', '--print-config', '--client', 'dsh', '--out', dshOutDir], { encoding: 'utf8' });
+  const cliAbs = path.join(ROOT, 'src', 'cli.mjs');
+  check(/^- insert:/m.test(dshYaml) && /name: '@deepseek-ai\/dsh-mcp-client'/.test(dshYaml)
+    && /serverName: codeatlas/.test(dshYaml) && /transport: stdio/.test(dshYaml)
+    && dshYaml.includes(cliAbs) && dshYaml.includes(dshOutDir) && /- --out/.test(dshYaml),
+    '⑳ dsh 接入配置：`mcp --print-config --client dsh` 吐 Cordis patch YAML（关键字段齐全）',
+    (dshYaml.split('\n').find((l) => /command:/.test(l)) || '').trim().slice(0, 70));
+  // 默认（不带 --client）仍然是 mcpServers JSON —— 老客户端不受影响
+  const defOut = execFileSync(NODE, [path.join(ROOT, 'src', 'cli.mjs'), 'mcp', '--print-config', '--out', dshOutDir], { encoding: 'utf8' });
+  check(defOut.includes('"mcpServers"') && defOut.includes('"code-atlas"'),
+    '⑳ 不带 --client 时仍是 mcpServers JSON（Chatbox / Claude Desktop 老路径不变）',
+    (defOut.split('\n').find((l) => /mcpServers/.test(l)) || '').trim().slice(0, 60));
+}
+
 console.log(`\n${failed.length ? `✗ ${failed.length} 项未通过：${failed.join(', ')}` : '✓ 全部通过'}（bundle: ${outDir}）`);
 child.kill('SIGKILL');
 process.exitCode = failed.length ? 1 : 0;

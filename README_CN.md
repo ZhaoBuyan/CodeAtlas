@@ -232,6 +232,11 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 }
 ```
 
+> **dsh（DeepSeek Harness）用户**：不用手改 JSON —— `node src/cli.mjs mcp --print-config --client dsh`
+> 会直接吐一段现成的 Cordis patch YAML（字段照官方 `@deepseek-ai/dsh-mcp-client` 示例，路径同样是绝对路径），
+> 并入 `$DSH_HOME/cordis.patch.yml`（或 `profiles/<名字>/cordis.patch.yml`）即可。
+> ⚠ 本机没装 dsh，这条路**未经端到端验证**。
+
 三个细节：
 
 - 输出是**紧凑文本**而不是 JSON —— 同样的问题 token 更少，AI 也更好读；

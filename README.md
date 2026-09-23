@@ -273,6 +273,11 @@ pointing at the resolved `node.exe`, `env` set to the current UI language):
 }
 ```
 
+> **dsh (DeepSeek Harness) users**: no hand-written JSON — `node src/cli.mjs mcp --print-config --client dsh`
+> prints a ready-to-merge Cordis patch YAML (fields follow the official `@deepseek-ai/dsh-mcp-client` examples,
+> absolute paths included); merge it into `$DSH_HOME/cordis.patch.yml` (or `profiles/<name>/cordis.patch.yml`).
+> ⚠ dsh is not installed on this machine — this path is **not verified end-to-end**.
+
 Four details:
 
 - Output is **compact text, not JSON** — fewer tokens for the same question, and easier for a model to read;
