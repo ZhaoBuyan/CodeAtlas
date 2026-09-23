@@ -2,6 +2,35 @@
 
 > 只写**用户能看到的变化**。技术细节见提交记录。
 
+## 1.7.0（2026-09-23）
+
+> v1.6.0 之后的第二批：**两处新东西**（dsh 接入 · 监控指示）+ Dart 的 part/part-of 库修复 ——
+> 带了新功能，按语义化版本纪律走 **minor**：1.6.0 → 1.7.0。
+> 口径同 1.6.0：**跨文件边**为分母；**import 支撑**与**引擎口径**（MCP 里那条边实际显示的标签）分开报。
+>
+> 实测：riverpod **72% → 74%**（引擎口径 **72% → 80%**）· bloc **74% → 75%**（**75% → 77%**）；
+> **31 个样本的坏 import 全部归零**（最后 3 条是 bloc 的 mason 模板占位符，已过滤）。
+>
+> ⚠ 更正 1.6.0 说明里的一处笔误：“Dart 的重命名转出（`export … show X as Y`）没做” —— 实测核实
+> **Dart 没有这种语法**（语法包直接报错；31 个样本 5,927 条 import/export 语句里 0 条；提案
+> dart-lang/language#4751 已被关闭）。不是“没做”，是“不存在”；当时真正缺的是 **part/part-of 库**，本版已修。
+
+- **修复：Dart 的 part/part-of 库** —— part 文件**不能写 import**（语言语义）：库文件的 imports 对全库可见，
+  同一个库里的文件互相引用连 import 都不需要。以前这两类引用全落“仅同名”；现在库的 import 算 import 支撑
+  （riverpod +154 条）、同库互引算“有支撑”标签（riverpod +501 条）。实测 riverpod **72% → 74% /
+  引擎口径 72% → 80%**、bloc **74% → 75% / 75% → 77%**。
+- **修复：Dart 的 mason 模板占位符不再当 import 采** —— `import '{{name.snakeCase()}}_page.dart'` 这类占位符
+  不是真 URI（bloc 上 3 条坏 import 就是它）→ **31 个样本坏 import 全部归零**。
+- **新增：dsh（DeepSeek Harness）接入** —— `node src/cli.mjs mcp --print-config --client dsh` 直接吐一段可并入的
+  Cordis patch YAML（字段照官方 `@deepseek-ai/dsh-mcp-client` 示例核过；在 DSH Desktop 上端到端验过：
+  改写入 profile patch 后热加载生效，工具以 `mcp__codeatlas__*` 注册）。
+- **新增：监控模式下的文件变化指示** —— `scan --watch` 每趟把「第几趟 / 重解析几个文件 / 改了哪些」写进
+  `bundle.source.watch`；MCP 检测到图更新时在**下一个工具结果**尾部提示「🔁 图已更新，请重查」（只提示一次）；
+  `overview` 显示“监控中 —— 重查就能拿到最新数据”。
+- **优化（来自第三方对标实测）** —— `map()` 在没配分组规则（facets）的项目上**显式警告**并给 `draft-facets`
+  指引（以前静默退化）；`overview` / `map` 的热榜条目带 **id**（短名也能直接 `symbol` / `refs`）；
+  `map` 页脚说清“内容已全部输出”还是“撞预算截断”；`overview` 页脚的工具清单从工具表动态生成。
+
 ## 1.6.0（2026-09-23）
 
 > 三轮实测（共 31 个开源项目）+ 一个**新功能**：Dart 支持（第 29 门语言）→ 按语义化版本走 **minor**：1.5.0 → 1.6.0。
