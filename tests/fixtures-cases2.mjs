@@ -290,4 +290,25 @@ export const EXTRA_CASES = [
     membersMin: 10,
     errorsMax: 0,
   },
+  {
+    // Dart 的 part/part-of 库结构（2026-09-23）：riverpod 实测里未支撑边的大头 ——
+    // part 文件**不能写 import**，库的 imports 对全库可见（libImports）；同库文件互引连 import 都不需要（lib）。
+    dir: 'dart-parts',
+    lang: 'dart',
+    files: 3,
+    types: 3,
+    names: ['Root', 'Widget', 'Pane'],
+    kinds: { class: 3 },
+    importsMin: 1,
+    importsInclude: ['src/widget.dart'],
+    importsAtomic: true,
+    docs: 3,
+    membersMin: 4,
+    partLibs: {
+      'lib/root.dart': { lib: 'lib/root.dart' },
+      'lib/src/pane.dart': { lib: 'lib/root.dart', partOf: '../root.dart', libImports: ['src/widget.dart'] },
+    },
+    edgeWeights: [['Pane', 'Root', 'ref', 1], ['Pane', 'Widget', 'ref', 1]],
+    errorsMax: 0,
+  },
 ];

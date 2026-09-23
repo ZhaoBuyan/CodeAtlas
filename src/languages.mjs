@@ -488,13 +488,32 @@ const dartImportText = (node) => {
     for (const c of n.namedChildren) w(c);
   };
   w(node);
-  return uri ? uri.text.replace(/^['"]|['"]$/g, '') : '';
+  if (!uri) return '';
+  const text = uri.text.replace(/^['"]|['"]$/g, '');
+  // mason 砖块模板（bloc 的 bricks/ 里到处是）里的 `{{name.snakeCase()}}` 是占位符、不是真 URI ——
+  // 采进来只会变成坏 import（实测 bloc 上 3 条正是它们），模板文件本来就不是有效 Dart。
+  return /\{\{|\}\}/.test(text) ? '' : text;
 };
 
 /** Dart 的 `export 'package:Y/…'` 要单独认：父进程据此建包级重导出图（多跳 barrel） */
 const dartImportKind = (node) => {
   if (node.type !== 'import_or_export') return null;
   return /^\s*export\b/.test(node.text) ? 'export' : 'import';
+};
+
+/**
+ * `part of '../framework.dart';` / `part of 'package:x/y.dart';` → 取库文件的 uri。
+ * 父进程据此把 part 文件归到库：part 文件**不能写 import**，库的 imports 对全库可见；
+ * 同一个库里的文件互相引用连 import 都不需要（实测 riverpod：67 个 part 文件、10 个库组，未支撑边的大头）。
+ * 旧式 `part of lib.name;`（按库名）也收着 —— 返回名字，父进程按名字分组。
+ */
+const dartPartOfOf = (node) => {
+  if (node.type !== 'part_of_directive') return null;
+  const uri = node.namedChildren.find((c) => c.type === 'uri');
+  const raw = uri
+    ? uri.text.replace(/^['"]|['"]$/g, '')
+    : node.text.replace(/^\s*part\s+of\s*/, '').replace(/;\s*$/, '').trim();
+  return raw || null;
 };
 
 // ---------- Bash ----------
@@ -750,6 +769,7 @@ export const LANGUAGES = {
     imports: { import_or_export: 1 },
     importKindOf: dartImportKind,
     importTextOf: dartImportText,
+    partOfOf: dartPartOfOf,
     baseFields: ['superclass'],
     baseNodes: [],
     decisions: ['if_statement', 'switch_statement', 'for_statement', 'while_statement', 'do_statement', 'try_statement', 'catch_clause'],

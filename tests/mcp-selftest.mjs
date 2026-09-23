@@ -1026,6 +1026,43 @@ check(/\[(有支撑|backed)\]/.test(rThing2) && !/\[(仅同名|same name only)\]
   '⑯ Dart：跨包多跳 barrel 的引用算“有支撑”',
   (rThing2.split('\n').find((l) => /Thing/.test(l)) || '').trim().slice(0, 70));
 dartBarrelSvc.proc.kill('SIGKILL');
+// 再补三遒（2026-09-23，riverpod / bloc 实测挖出）：part 库结构 + mason 模板占位符
+const dartPartTmp = path.join(os.tmpdir(), `codeatlas-dartpart-${process.pid}`);
+const { out: dartPartOut } = scanProject(dartPartTmp, {
+  'pubspec.yaml': 'name: demo_app\n',
+  'lib/root.dart': "import 'src/widget.dart';\n\npart 'src/pane.dart';\n\nclass Root { Widget? w; }\n",
+  'lib/src/widget.dart': 'class Widget { int id = 1; }\n',
+  'lib/src/pane.dart': "part of '../root.dart';\n\nclass Pane { Root? r; Widget? w; }\n",
+}, 'dart');
+const dartPartB = readBundle(dartPartOut);
+const paneF = dartPartB.files.find((f) => /pane\.dart$/.test(f.path));
+check(Boolean(paneF) && paneF.lib === 'lib/root.dart' && paneF.partOf === '../root.dart'
+  && Array.isArray(paneF.libImports) && paneF.libImports.includes('src/widget.dart'),
+  '⑯ Dart：part 文件挂上库（lib / libImports）',
+  JSON.stringify({ lib: paneF?.lib, partOf: paneF?.partOf, libImports: paneF?.libImports }));
+const dartPartSvc = spawnMcp(dartPartOut);
+await dartPartSvc.ready;
+const rPaneRoot = await dartPartSvc.call('refs', { name: 'Root', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rPaneRoot) && !/\[(仅同名|same name only)\]/.test(rPaneRoot),
+  '⑯ Dart：同库（part 组）里的引用算“有支撑”',
+  (rPaneRoot.split('\n').find((l) => /Root/.test(l)) || '').trim().slice(0, 70));
+const rPaneWidget = await dartPartSvc.call('refs', { name: 'Widget', direction: 'in' });
+check(/\[(有支撑|backed)\]/.test(rPaneWidget) && !/\[(仅同名|same name only)\]/.test(rPaneWidget),
+  '⑯ Dart：库的 import 撑得住 part 文件里的引用（part 不能写 import）',
+  (rPaneWidget.split('\n').find((l) => /Widget/.test(l)) || '').trim().slice(0, 70));
+dartPartSvc.proc.kill('SIGKILL');
+// 废砖块模板（bloc 的 bricks/ 实测 3 条坏 import）：`{{name.snakeCase()}}_page.dart` 这种占位符不采
+const dartTmplTmp = path.join(os.tmpdir(), `codeatlas-darttmpl-${process.pid}`);
+const { out: dartTmplOut } = scanProject(dartTmplTmp, {
+  'lib/gen.dart': "import '{{name.snakeCase()}}_page.dart';\nimport 'dart:math';\n\nclass Gen { num x = pi; }\n",
+}, 'dart');
+const dartTmplB = readBundle(dartTmplOut);
+const genF = dartTmplB.files.find((f) => /gen\.dart$/.test(f.path));
+const allImports = dartTmplB.files.flatMap((f) => f.imports || []);
+check(Boolean(genF) && JSON.stringify(genF.imports) === JSON.stringify(['dart:math'])
+  && !allImports.some((i) => /[{}"']/.test(i)),
+  '⑯ Dart：mustache 模板占位符的 import 不采（无坏 import）',
+  JSON.stringify(allImports));
 
 // ---------------------------------------------------------------------------
 // ⑰ 2026-09-23（第三轮遗留小项）：Bash 的 source 依赖边 + 命令名引用

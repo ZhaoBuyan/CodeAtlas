@@ -400,6 +400,17 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
         `包 ${name} → ${dir}（实际 ${got.join(' · ') || '无'}）`);
     }
   }
+  // Dart 的 part 库结构（2026-09-23）：part 文件记 partOf；父进程补 lib / libImports
+  //（riverpod 样本上未支撑边的大头 —— part 不能写 import、同库互引不需要 import）
+  if (c.partLibs) {
+    for (const [file, want] of Object.entries(c.partLibs)) {
+      const f = b.files.find((x) => x.path === file);
+      const ok = Boolean(f) && f.lib === want.lib
+        && (want.partOf === undefined || f.partOf === want.partOf)
+        && (want.libImports === undefined || JSON.stringify(f.libImports || null) === JSON.stringify(want.libImports));
+      push(ok, `${file} 的库字段（期望 ${JSON.stringify(want)}，实际 ${JSON.stringify(f ? { lib: f.lib, partOf: f.partOf, libImports: f.libImports } : null)}）`);
+    }
+  }
   // 自选跳过：atlas.ignore（存在才生效）+ 可选 .gitignore（--gitignore 才读）
   if (c.skipRules) {
     const files = b.files.map((f) => f.path);

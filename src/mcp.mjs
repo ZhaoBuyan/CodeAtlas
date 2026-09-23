@@ -55,7 +55,7 @@ const INSTRUCTIONS = [
   '  unmatched and ambiguous references are reported explicitly in overview and impact;',
   '- `refs` tags every edge with its evidence strength: `same file` (both sides in one file — solid) > `backed` (the',
   '  referring file imports a module of that name, or imports the target\'s namespace / package, or both sides sit in the',
-  '  same namespace / package, or the target file sits inside an imported package, or a parent namespace in C# / VB — strong evidence, not proof) > `same name only` (this',
+  '  same namespace / package (or one Dart part library — part files cannot import; the library\'s imports are visible to them), or the target file sits inside an imported package, or a parent namespace in C# / VB — strong evidence, not proof) > `same name only` (this',
   '  bucket holds both coincidences and real references we failed to recognize — a parent namespace needs no `using`, and a',
   '  qualified name like `A.B.C` is not covered either — so check the source when in doubt). Solitary `same name only` edges are',
   '  why a raw reference count can be misleading, so the `overview`',
@@ -239,6 +239,8 @@ function fmt(n) {
  * 有个函数 145 条入边里 141 条来自别的文件里同名对象的方法调用，跟它根本无关。
  * 读侧分三档（不动引擎数据）：同文件最硬；引用方文件的 imports 能指到被引用方（模块名 / 命名空间 / 包）
  * = 有支撑；剩下只共享一个名字的归“仅同名”，噪声主要在这一档。
+ * Dart 补两条（2026-09-23，riverpod / bloc 实测）：part 文件继承库的 imports（libImports）、
+ * 同一个库（part 组）内互相引用不需要 import（lib 相同）—— 两者都归“有支撑”。
  * ⚠ 复测报告 §3：以前只比“被引用文件的文件名主干”，于是**命名空间语言（C#/Java/Kotlin）全军塔成“仅同名”**
  * （一个 C# 项目 53 条边里“有支撑”0 条，连 `using MuSync.Models;` 都认不出来），overview 热点榜跟着失真。
  * 现在改走 modules.mjs 的 `importMatchesTarget`（模块名 + 命名空间 + 包路径 + Rust 段后缀 + 仓库内包名自引用）。
@@ -260,6 +262,8 @@ function evidenceOf(idx, e) {
         : null;
     }
     for (const raw of f.imports || []) if (importMatchesTarget(raw, target, idx._pkgCtx)) return 'import';
+    // Dart 的 part 文件：库文件的 import 对它可见（part 文件自己不能写 import，这是语言语义）
+    for (const raw of f.libImports || []) if (importMatchesTarget(raw, target, idx._pkgCtx)) return 'import';
     // C/C++ 的 include 闭包（≤2 跳）：A include 的 B 又 include 了 C → A 也能撑住 C 里的引用
     //（实测 redis / fmt / ocaml：类型全在被“间接 include”的内部头文件里）
     if (idx._closure === undefined) {
@@ -268,6 +272,11 @@ function evidenceOf(idx, e) {
     }
     const clo = idx._closure.get(src.file);
     if (clo && clo.has(dst.file)) return 'import';
+    // Dart：同一个库（part 组）里的文件同作用域，互相引用不需要 import（实测 riverpod 501 条）
+    if (f.lib) {
+      const dfile = idx.files.get(dst.file);
+      if (dfile && dfile.lib && dfile.lib === f.lib) return 'import';
+    }
   }
   // C# / VB：子命名空间**不用 using 也能引用父命名空间里的类型**（语言语义如此）。实测一个 C# 项目里有 7 条
   // 真引用因此被留在“仅同名”档，AI 照标签会把它们丢掉。只对 C# 家族做（Java/Kotlin 不适用）。
@@ -873,7 +882,7 @@ function toolRefs(idx, a) {
   const rMiss = excludeMissNote(ex, idx.b);
   if (rMiss) out.push(rMiss);
   const legend = sawAnyEdge
-    ? T('（边尾的标签：同文件 / **有支撑**（引用方 import 的模块 / 命名空间 / 包能指到目标（Python 的 `from X import Y` 只记得到 X，所以包级也算）、C# / VB 父命名空间）/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (the referrer imports the target module / namespace / package — a package-level import counts, and a C# / VB parent namespace too) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
+    ? T('（边尾的标签：同文件 / **有支撑**（引用方 import 的模块 / 命名空间 / 包能指到目标（Python 的 `from X import Y` 只记得到 X，所以包级也算）、C# / VB 父命名空间、Dart 的 part 同库（part 文件继承库的 import））/ 仅同名 —— “仅同名”里既有名字巧合，**也可能有没认出来的真引用**（父命名空间、限定名写法），拿不准就翻源码核对）\n', '(tag after each edge: same file / backed (the referrer imports the target module / namespace / package — a package-level import counts, a C# / VB parent namespace too, and for Dart part files both the library\'s imports and same-library siblings) / same name only — that last bucket holds both coincidences and **real references we failed to recognize** (parent namespaces, qualified names), so check the source when in doubt)\n')
     : '';
   return `${t.fqn} [${t.kind}]\n${legend}${out.join('\n')}`;
 }

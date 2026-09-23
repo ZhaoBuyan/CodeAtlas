@@ -765,6 +765,8 @@ function extractFile(source, tree, lang) {
   const comments = [];
   // Dart 的 export 转出的**包名**（父进程据此建包级重导出图，多跳 barrel）
   const reexports = [];
+  // Dart 的 `part of` 目标（库文件 uri；父进程据此建 part 库组）
+  let partOf = null;
   // 引用**次数**（2026-09-20）：每一个 (owner, 名字) 出现过几次就记几次。
   // 之前这里是两个 Set，只记"出现过没有" → 边的权重恒为 1（"A 引用了 B 3 次" 这个信息被去重丢了）。
   // 用 Map：既当计数器，又天然保持"首次出现顺序"（跟原来 push 的顺序一模一样）。
@@ -867,6 +869,12 @@ function extractFile(source, tree, lang) {
       }
       sweepComments(node);
       return;
+    }
+
+    // Dart 的 `part of 'x.dart';`（库结构）：一个文件只会有一条，记下就够
+    if (lang.partOfOf) {
+      const po = lang.partOfOf(node);
+      if (po) { partOf = po; return; }
     }
 
     if (lang.namespaces[type]) {
@@ -1010,7 +1018,7 @@ function extractFile(source, tree, lang) {
   // 计数表 → 引用列表（顺序 = 首次出现顺序，跟改之前一致）
   for (const r of refCount.values()) refs.push(r);
   for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
-  return { types, imports, reexports, refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, imports, reexports, partOf, refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,6 +1516,7 @@ async function extractFiles(files) {
       types: typeIds,
     };
     if (facts.reexports.length) part.file.reexports = facts.reexports;
+    if (facts.partOf) part.file.partOf = facts.partOf;
     if (isTestPath(f.rel)) part.file.isTest = true;
     part.ns = facts.namespaces;
     parts.push(part);
@@ -1944,6 +1953,46 @@ export async function scan(opts) {
           for (const z of direct.get(y) || []) stack.push(z);
         }
         if (seen.size) x.exports = [...seen];
+      }
+    }
+  }
+  // Dart 的 part 库组（实测 riverpod：67 个 part 文件、10 个库组，未支撑边的大头）：
+  //   · part 文件**不能写 import**（语言语义）—— 库文件的 imports 对全库可见 → 挂到 part 的 `libImports`
+  //     （读期当 import 支撑算）；
+  //   · 同一个库里的文件彼此同作用域，互相引用连 import 都不需要 → 都记上 `lib`（读期按“同库”算支撑）。
+  {
+    const dartParts = [];
+    fileRecs.forEach((fr, i) => { if (fr && typeof fr.partOf === 'string' && fr.partOf) dartParts.push(i); });
+    if (dartParts.length) {
+      const pkgByName = new Map();
+      for (const p of packages) if (p && p.name) pkgByName.set(p.name, p);
+      const indexOfPath = new Map();
+      fileRecs.forEach((fr, i) => { if (fr) indexOfPath.set(fr.path, i); });
+      const groups = new Map();
+      for (const i of dartParts) {
+        const fr = fileRecs[i];
+        const raw = fr.partOf;
+        let key;
+        if (raw.startsWith('package:')) {
+          const [pkgName, ...sub] = raw.slice(8).split('/');
+          const p = pkgByName.get(pkgName);
+          key = p && p.dir ? `${p.dir}/lib/${sub.join('/')}` : `pkg:${raw}`;
+        } else if (raw.includes('/') || raw.endsWith('.dart')) {
+          key = path.posix.normalize(path.posix.join(path.posix.dirname(fr.path), raw));
+        } else {
+          key = `name:${raw}`;   // 旧式 `part of lib.name;`：按库名分组（根文件认不出来的话就只有 part 们互认）
+        }
+        let g = groups.get(key);
+        if (!g) { g = { parts: [] }; groups.set(key, g); }
+        g.parts.push(i);
+      }
+      for (const [key, g] of groups) {
+        const rootIdx = indexOfPath.has(key) ? indexOfPath.get(key) : -1;
+        const members = [...g.parts];
+        if (rootIdx >= 0 && !members.includes(rootIdx)) members.push(rootIdx);
+        for (const m of members) fileRecs[m].lib = key;
+        const rootImports = rootIdx >= 0 ? (fileRecs[rootIdx].imports || []) : null;
+        if (rootImports && rootImports.length) for (const m of g.parts) fileRecs[m].libImports = [...rootImports];
       }
     }
   }
