@@ -690,6 +690,10 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.java'],
     wasm: 'java/tree-sitter-java.wasm',
+    // JVM 同族：Java / Kotlin / Scala 编到同一个类路径，混合工程里互相按名字引用是**真的**
+    // （Kotlin 官方支持与 Java 互操作）。实测不认这条会丢：akka `java↔scala` 6,517 条、
+    // kotlin 工程 `kotlin↔java` 487/233 条。
+    family: 'jvm',
     namespaces: { package_declaration: 1 },
     namespaceScope: 'file',
     types: {
@@ -747,6 +751,7 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.kt', '.kts'],
     wasm: 'kotlin/tree-sitter-kotlin.wasm',
+    family: 'jvm',      // 与 Java / Scala 同族（见 java profile 的说明）
     namespaces: { package_header: 1 },
     namespaceScope: 'file',
     types: {
@@ -1287,6 +1292,7 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.scala', '.sc'],
     wasm: 'scala/tree-sitter-scala.wasm',
+    family: 'jvm',      // 与 Java / Kotlin 同族（见 java profile 的说明）
     namespaces: { package_clause: 1 },
     namespaceScope: 'file',
     types: { class_definition: 'class', object_definition: 'object', trait_definition: 'trait', enum_definition: 'enum' },

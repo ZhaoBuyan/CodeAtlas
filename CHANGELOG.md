@@ -74,9 +74,16 @@
   嗅探成两者之一）。实测代价：ant-design 一个项目就丢 **3,086 条**跨文件边
   （`tsx→ts` 2,701、`ts→tsx` 669、`tsx→js` 42 …）、vuetify 丢 2,522 条、abseil 丢 `cpp→c` 106 条。
   现在改按 profile 声明的**语言族**（`family`）判：族内解析、跨族不解析，没声明的语言自成一族。
-  实测：ant-design 与 vuetify **逐语言对完全恢复到基线（差 0）**、abseil 的 `c↔cpp` 回来；
-  而该挡的噪声一条没放回来 —— `cpp→bash` 18、`python→cpp` 5、`js/ts→graphql` 10、
-  `rescript↔ts` 4、`c→ocaml` 866 条仍然不接。
+  族一共三个（都是拿 66 样本实测出来的）：`js`（javascript / typescript / tsx / vue）、
+  `c`（c / cpp）、`jvm`（java / kotlin / scala —— 编到同一个类路径，Kotlin 官方支持与 Java
+  互操作；漏了它会丢 akka 的 `java↔scala` 6,517 条、`kotlin↔java` 487/233 条）。
+  实测：ant-design 与 vuetify **逐语言对完全恢复到基线（差 0）**、junit5 与 okhttp **差 0**、
+  abseil 的 `c↔cpp` 回来；而该挡的噪声一条没放回来 —— `csharp→ts/cpp/java/js` 5,808 条、
+  `rust↔ts` 1,356、`go→js` 927、`elixir→js/bash` 190、`php→js` 200、`c↔java/js` 478、
+  `java/scala→bash` 618、`js/ts→graphql` 10、`c→ocaml` 866 条仍然不接。
+  **补了三道门**（这一整类回归原来没有任何测试能抓到）：`tests/fixtures/family-js|family-c|family-jvm/`
+  —— 同一次扫描里放进两种语言，断言族内那条边必须存在。门自己也验过：把判族临时退回"按语言 id"，
+  三道门立刻红。
 - **修复：六门语言的 profile 里写着"语法包根本没有的节点名"** —— profile 是手写的节点名表，
   抄错一个、或语法包改名，那条声明就**永远不会命中**：不报错、不变红，只是那个功能**静默失效**。
   新加的审计（`npm run probe:profile`）第一次跑就查出 **13 个**，其中**真丢功能**的是这几处：

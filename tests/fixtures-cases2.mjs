@@ -377,4 +377,15 @@ export const EXTRA_CASES = [
     edgeWeights: [['ShapeHolder', 'Shape', 'ref', 1]],
     errorsMax: 0,
   },
+  {
+    dir: 'family-jvm',
+    lang: 'java,kotlin',
+    types: 2,
+    names: ['Widget', 'Panel'],
+    kinds: { class: 2 },
+    // Kotlin 侧引用 Java 侧定义的类 —— 同一个 JVM 类路径，混合工程里这是真依赖
+    // （实测不认这条：akka 丢 `java↔scala` 6,517 条、kotlin 工程丢 `kotlin↔java` 487/233 条）
+    edgeWeights: [['Panel', 'Widget', 'ref', 1]],
+    errorsMax: 0,
+  },
 ];
