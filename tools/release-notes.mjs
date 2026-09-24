@@ -18,6 +18,13 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+/**
+ * 仓库 slug，只用于正文末尾那行 Full Changelog 对比链接。
+ * `package.json` 的 name 是 `code-atlas`（npm 包名），和 GitHub 上的 `ZhaoBuyan/CodeAtlas` 不是一回事，
+ * 所以不从那推导；要换仓库/换组织就改这一处（或用 CODEATLAS_REPO_SLUG 覆盖）。
+ */
+const REPO_SLUG = process.env.CODEATLAS_REPO_SLUG || 'ZhaoBuyan/CodeAtlas';
+
 const raw = process.argv[2];
 if (!raw) {
   console.error('用法：node tools/release-notes.mjs <版本，如 1.7.0 或 v1.7.0> [输出文件]');
@@ -50,7 +57,21 @@ const section = lines.slice(start + 1, end);
 while (section.length && section[0].trim() === '') section.shift();
 while (section.length && section[section.length - 1].trim() === '') section.pop();
 
-const body = [`# CodeAtlas v${version}`, '', ...section].join('\n').trim() + '\n';
+// GitHub 用 `generate_release_notes: true` 时会自动在末尾加一行对比链接
+// （"**Full Changelog**: …/compare/v1.5.0...v1.6.0"）。改成 body_path 之后那行就没了 ——
+// v1.7.0 因此成了唯一没有它的版本。这里自己补上，口径与 GitHub 一致。
+// 前一个版本直接从 CHANGELOG 的小节顺序读（比调 git describe 稳：CI 里不用 fetch tag）。
+let prev = null;
+for (let i = start + 1; i < lines.length; i++) {
+  const m = /^##\s+v?([0-9][0-9.]*)/.exec(lines[i]);
+  if (m) { prev = m[1]; break; }
+}
+const fullChangelog = prev
+  ? `**Full Changelog**: https://github.com/${REPO_SLUG}/compare/v${prev}...v${version}`
+  : '';
+if (!prev) console.error('⚠ CHANGELOG 里找不到更早的版本号 —— 这次不生成 Full Changelog 行');
+
+const body = [`# CodeAtlas v${version}`, '', ...section, ...(fullChangelog ? ['', fullChangelog] : [])].join('\n').trim() + '\n';
 
 if (outFile) {
   fs.writeFileSync(outFile, body);

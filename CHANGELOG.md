@@ -10,18 +10,19 @@
 >
 > **样本库扩到 66 个真项目**（31 → 66，共 128,554 文件 / 1.44 GB）—— 本版相当一部分修复是它挖出来的。
 > 全量实测：跨文件边平均 import 口径 **61%**、引擎口径 **96%**、独立手算 **60%**（对平）；坏 import **5 条**
-> （仅 rust-analyzer 自己夹具里故意写坏的语法）。
+> （来自一个解析器项目自己测试夹具里故意写坏的语法）。
 >
 > 三个值得单独说的修复：
-> ① **C# 里参数名叫 `async` 会让整个文件从图上消失** —— efcore 解析异常 **44,730 → 1,622**、
+> ① **C# 里参数名叫 `async` 会让整个文件从图上消失** —— 在一个大型 C# 项目上实测，解析异常 **44,730 → 1,622**、
 >    「有异常且抽不到任何类型」的文件 **509 → 0**、依赖边 **+2,663**；
 > ② **边记证据档**（`edges[].tier`）—— 以前"这条边凭什么接上的"用完即弃、读时还得重跑一遍启发式；
 >    现在写进数据。实测一个真项目：126 条标着"有 import 支撑"的边里，**只有 12 条当初真的靠 import 接上**；
 > ③ **档案少算归零** —— 全量 66 样本里 `name`（最弱档）从 6,160 降到 5,745、`import` 相应 +415，
 >    而**边数与端点一个没动**。
 >
-> 实测（Dart 那一批）：riverpod **72% → 74%**（引擎口径 **72% → 80%**）· bloc **74% → 75%**（**75% → 77%**）；
-> **31 个样本的坏 import 全部归零**（最后 3 条是 bloc 的 mason 模板占位符，已过滤）。
+> 实测（Dart 那一批）：两个中大型 Dart 项目上，有支撑分别 **72% → 74%**（引擎口径 **72% → 80%**）
+> 与 **74% → 75%**（**75% → 77%**）；
+> **31 个样本的坏 import 全部归零**（最后 3 条是模板占位符，已过滤）。
 >
 > ⚠ 更正 1.6.0 说明里的一处笔误：“Dart 的重命名转出（`export … show X as Y`）没做” —— 实测核实
 > **Dart 没有这种语法**（语法包直接报错；31 个样本 5,927 条 import/export 语句里 0 条；提案
@@ -29,12 +30,12 @@
 
 - **修复：Dart 的 part/part-of 库** —— part 文件**不能写 import**（语言语义）：库文件的 imports 对全库可见，
   同一个库里的文件互相引用连 import 都不需要。以前这两类引用全落“仅同名”；现在库的 import 算 import 支撑
-  （riverpod +154 条）、同库互引算“有支撑”标签（riverpod +501 条）。实测 riverpod **72% → 74% /
-  引擎口径 72% → 80%**、bloc **74% → 75% / 75% → 77%**。
+  （一个中大型 Dart 项目 +154 条）、同库互引算“有支撑”标签（同项目 +501 条）。实测该项目 **72% → 74% /
+  引擎口径 72% → 80%**，另一个 Dart 项目 **74% → 75% / 75% → 77%**。
 - **修复：Dart 的 mason 模板占位符不再当 import 采** —— `import '{{name.snakeCase()}}_page.dart'` 这类占位符
-  不是真 URI（bloc 上 3 条坏 import 就是它）→ **31 个样本坏 import 全部归零**。
+  不是真 URI（一个 Dart 项目上 3 条坏 import 就是它）→ **31 个样本坏 import 全部归零**。
 - **新增：dsh（DeepSeek Harness）接入** —— `node src/cli.mjs mcp --print-config --client dsh` 直接吐一段可并入的
-  Cordis patch YAML（字段照官方 `@deepseek-ai/dsh-mcp-client` 示例核过；在 DSH Desktop 上端到端验过：
+  Cordis patch YAML（字段照官方 `@deepseek-ai/dsh-mcp-client` 示例核过；在本机 dsh 上端到端验过：
   改写入 profile patch 后热加载生效，工具以 `mcp__codeatlas__*` 注册）。
 - **新增：监控模式下的文件变化指示** —— `scan --watch` 每趟把「第几趟 / 重解析几个文件 / 改了哪些」写进
   `bundle.source.watch`；MCP 检测到图更新时在**下一个工具结果**尾部提示「🔁 图已更新，请重查」（只提示一次）；
@@ -82,24 +83,25 @@
   消歧这一步挑不出“唯一的那一个”，于是退回同命名空间 / 同根包近似挑候选；挑出来的那个虽然**确实有**
   import 依据，早期实现只回传了 `{id}`、没把依据带出来，`tierOf` 只好按“名字档”记。
   典型触发：`import a.b.X.Something` 经前缀规则同时指得到 `a.b.X`（父类型）与 `a.b.X.Something`。
-  实测 **oss3-akka**：`jdocs.ddata.protobuf.TwoPhaseSetSerializer → jdocs.ddata.TwoPhaseSet`（w=9）等
-  **7 条**边由 `name` 升为 `import`（档位合计 24,977 → 24,984 · `name` 939 → 932，**边数与端点一个没动**）。
+  实测某个 Scala 项目：`jdocs.ddata.protobuf.TwoPhaseSetSerializer → jdocs.ddata.TwoPhaseSet`（w=9）等
+  **7 条**边由 `name` 升为 `import`（该项目档位合计 24,977 → 24,984 · `name` 939 → 932，**边数与端点一个没动**）。
   挑候选的优先级**不变**（宁可缺边不接错）。
 - **修复（C#：文件因为一个参数名叫 `async` 而整个从图上消失）** —— `async` 在 C# 里可以当标识符
   （`bool async` 是合法参数名），但语法包一律把它当修饰符关键字 → **整个文件塌进一个 ERROR 节点**：
-  抽到 **0 个类 / 0 个方法**，连 import 也几乎丢光。实测 `EFCore.Specification.Tests/LoadTestBase.cs`
-  （5,609 行）只因为第 171 行 `… Load_collection(…, bool async)` 就变成 0 个类（真实 32 个类 / 129 个方法）。
-  影响面：**efcore 454 个文件、aspnetcore 51 个、newtonsoft 1 个** —— 这些文件此前在图上基本是隐形的。
+  抽到 **0 个类 / 0 个方法**，连 import 也几乎丢光。实测某个大型 C# 项目的
+  `…/Specification.Tests/LoadTestBase.cs`（5,609 行）只因为第 171 行 `… Load_collection(…, bool async)`
+  就变成 0 个类（真实 32 个类 / 129 个方法）。
+  影响面：**该项目 454 个文件**（另有 51 个、1 个的两个项目）—— 这些文件此前在图上基本是隐形的。
   修法是**错误驱动兜底**：文件原样解析出 ERROR 时，才把"当标识符用的 `async`"改名重解析一次，
   **只在 ERROR 数量真的下降时才采纳**；判据（后面跟不跟标识符字符）经实测能同时做到"能修"且
   "不误伤真修饰符"（`async Task` / `async void` / `async` 单独一行后接返回类型一律不动）。
-  实测 efcore：解析异常 **44,733 → 1,619**、"有异常且抽不到任何类型"的文件 **510 → 0**；
-  efcore 的 Specification.Tests 一个目录就**多恢复 4,063 个方法**（2,851 → 6,914）。
+  实测该项目：解析异常 **44,733 → 1,619**、"有异常且抽不到任何类型"的文件 **510 → 0**；
+  仅它的 Specification.Tests 一个目录就**多恢复 4,063 个方法**（2,851 → 6,914）。
   同一批还系统排掉了 27 个 C# 上下文关键字（await/var/dynamic/nameof/record/init/partial/yield/… ），
   **只有 `async` 会塌整棵树**；`nint`/`nuint` 只造成局部 ERROR，不值得为它冒改名的风险，未处理。
 - **修复（清理路径上的静默失效删除）** —— 新增 `src/fsx.mjs`（`rmrf` / `rmFile`）：先试 `fs.rmSync`，
   **删完复查一次**，还在就退到手写 `unlinkSync` + 自底向上 `rmdirSync`。
-  起因：DSH Desktop 自带的 node（**v24.9.0**）里 `fs.rmSync` **不抛错、返回后文件/目录原封不动**
+  起因：某些 Node 构建自带的 `fs.rmSync`（实测 v24.9.0）**不抛错、返回后文件/目录原封不动**
   （删文件 / 空目录 / 非空目录全失效；系统 node v24.18.0 正常，`unlinkSync` / `fs.promises.rm` 也正常）。
   静默失效的删除留在清理路径上，等于给"旧产物被当新结果"留后门，所以扫描器的三处清理
   （解析子进程的 emit / 临时目录 / 原子替换的 tmpOut）改走复查版。
