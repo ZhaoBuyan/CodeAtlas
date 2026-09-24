@@ -2473,6 +2473,53 @@ export async function scan(opts) {
     return false;
   };
 
+  /**
+   * **同一个编译单元的 `.ml` / `.mli` 两个节点，在解析时算同一个符号。**
+   *
+   * OCaml 里 `foo.ml` 与 `foo.mli` 是**同一个编译单元** `Foo` 的两面（实现 / 接口），
+   * 但引擎是按文件各发一份节点的 —— 实测某真项目 **1,558 个 fqn 同时出现在同名的 .ml 与 .mli 里**
+   * （3,116 个节点、134 条 ref 边指向它们）。于是 `Hashtbl.statistics` 会同时命中
+   * `stdlib/hashtbl.ml` 与 `stdlib/hashtbl.mli` 两个候选，"归属锚点"挑不出唯一（两者的
+   * parent 都是 null）—— 按"宁缺勿错"**只能放弃**，那几条边就是这么丢的。
+   *
+   * 这里把它们**在候选池里合成一个**。判定很紧：同目录 + 同主干 + 扩展名集合恰好是 {.ml, .mli}
+   * 且只有两个节点。所以"同名文件散在不同目录"（`asmcomp` 下 5 个 arch 目录各有 arch.ml，
+   * 共 10 个节点，那是**不同的**编译单元）不会被误合，同一文件里的重复定义也不会。
+   * 选中哪一个：① 引用方自己文件里的（同文件这一档最强）→ ② `.ml`（实现，有成员与行号）。
+   *
+   * ⚠ 这一层只改**解析**，不改图：图上仍是两个节点，`file('foo.mli')` 照样能列出它声明的类型。
+   *   真正"合并成一个节点"是另一个更大的改动 —— 那会让 `.mli` 文件的类型清单变空（读侧得先想清楚
+   *   怎么表达"接口与实现是同一个符号"），先记在这里。
+   */
+  const sameUnitStem = (t) => {
+    const p = fileRecs[t.file]?.path;
+    if (!p) return null;
+    const ext = p.slice(p.lastIndexOf('.'));
+    if (ext !== '.ml' && ext !== '.mli') return null;
+    return p.slice(0, -ext.length);
+  };
+  const collapseUnits = (ids, fromFileId) => {
+    if (!ids || ids.length < 2) return ids;
+    const groups = new Map();
+    const out = [];
+    for (const id of ids) {
+      const t = allTypes[id];
+      const k = t ? sameUnitStem(t) : null;
+      if (!k) { out.push(id); continue; }
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(id);
+    }
+    for (const g of groups.values()) {
+      const exts = new Set(g.map((id) => String(fileRecs[allTypes[id].file]?.path || '').split('.').pop()));
+      if (g.length !== 2 || exts.size !== 2 || !exts.has('ml') || !exts.has('mli')) { out.push(...g); continue; }
+      const own = fromFileId == null ? null : g.find((id) => allTypes[id].file === fromFileId);
+      if (own != null) { out.push(own); continue; }
+      const impl = g.find((id) => String(fileRecs[allTypes[id].file]?.path || '').endsWith('.ml'));
+      out.push(impl != null ? impl : g[0]);
+    }
+    return out;
+  };
+
   const unresolved = { ambiguous: 0, unknown: 0 };
   const resolveName = (name, fromTypeId) => {
     // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的，
@@ -2492,7 +2539,7 @@ export async function scan(opts) {
       const leaf = name.slice(name.lastIndexOf('.') + 1);
       const from = allTypes[fromTypeId];
       const fromLang = fileRecs[from?.file]?.lang;
-      const pool = (bySimpleName.get(leaf) || []).filter((id) => {
+      const rawPool = (bySimpleName.get(leaf) || []).filter((id) => {
         // ⚠ **只在同语言内解析限定名**。跨语言的"限定名"没有意义（C 里不会出现 `List.map`），
         // 而名字会撞：C 文件里的函数 `accu` 与 OCaml 的 `Remote_value.accu`、各语言都有的
         // `init`/`length` 之类 —— 实测某真 OCaml 项目上有 866 条 `c -> ocaml` 的边，
@@ -2500,6 +2547,8 @@ export async function scan(opts) {
         const t = allTypes[id];
         return t && fileRecs[t.file]?.lang === fromLang;
       });
+      // `.ml`/`.mli` 是同一个编译单元的两面 → 候选池里先合成一个（见 collapseUnits 的说明）
+      const pool = collapseUnits(rawPool, from?.file);
       // 候选按证据强弱分三档，**这三档的先后不能换**（顺序是实测 oss3-ocaml 定下来的）：
       //   ① **同文件**：`module X` 在 OCaml 里常常是文件里的局部模块，本文件里写的 `X.t`
       //      指的就是它 —— 局部模块在作用域里是**确定的**，比任何跨文件推断都硬。
@@ -2570,10 +2619,10 @@ export async function scan(opts) {
     // 有 **866 条 `c -> ocaml` 边**全是这么撞出来的（`runtime/interp.c -> Remote_value.accu`）。
     // 真跨语言依赖（FFI / 反编译产物）不靠名字匹配表达，过滤掉只会让图更准。
     const fromLang = fileRecs[allTypes[fromTypeId]?.file]?.lang;
-    const hit = (bySimpleName.get(name) || []).filter((id) => {
+    const hit = collapseUnits((bySimpleName.get(name) || []).filter((id) => {
       const t = allTypes[id];
       return t && fileRecs[t.file]?.lang === fromLang;
-    });
+    }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
     if (!hit || !hit.length) { unresolved.unknown++; return null; }
     if (hit.length === 1) {
