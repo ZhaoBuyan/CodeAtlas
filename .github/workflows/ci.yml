@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    name: 测试（语言回归 27 门 + MCP 自检）
+    name: 测试（语言 fixtures 回归 + MCP 自检）
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
       - name: 装依赖
         run: npm ci
 
-      - name: 语言 fixtures 回归（27 门，每门独立进程）
+      - name: 语言 fixtures 回归（38 个用例，每个独立进程）
         run: node tests/run-fixtures.mjs
 
       - name: 先扫一份 bundle（MCP 自检要用）

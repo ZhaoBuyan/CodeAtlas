@@ -163,7 +163,7 @@ runtime (about 30 MB).
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
-- The payload ships wasm only for the **29 code languages + 5 file-level formats** we support
+- The payload ships wasm only for the **29 code languages + 6 file-level formats** we support
   and nothing else (the unused grammars in the npm package stay out).
 - Third-party components and licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
   (a copy also ships in the extracted engine directory).
@@ -571,7 +571,7 @@ so the whole file does not vanish from the map; their members (functions/variabl
 ### What to watch out for when scanning
 
 - **Pick the right languages for a clean result**: the default `auto` scans all code languages and **skips**
-  file-level formats like `JSON/YAML/TOML/CSS/HTML` (name them explicitly as `--lang auto,json` to include
+  file-level formats like `JSON/YAML/TOML/CSS/HTML/Markdown` (name them explicitly as `--lang auto,json` to include
   them). Ticking only the languages your project actually uses is markedly faster and keeps foreign languages
   from dependency directories out of the map (there is a checkbox panel in the launcher, stored globally in
   `Langs`).
@@ -619,7 +619,7 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
 - [x] Grouping layer: system rules (facets config) + directory / namespace / flat
 - [x] MCP server (search symbols / find references / export subgraphs) for AI
-- [x] Language coverage: 29 code languages + 5 file-level formats
+- [x] Language coverage: 29 code languages + 6 file-level formats (including **Markdown heading structure**)
 - [x] Dependency graph view (force-directed) + package-level dependency matrix
 - [x] Pick languages to scan in the launcher (UI + `--lang`)
 - [x] Search improvements: type names + member names (web and MCP) · per-language filtering in the map

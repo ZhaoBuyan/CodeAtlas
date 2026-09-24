@@ -1448,7 +1448,60 @@ export const LANGUAGES = {
     decisions: [],
     decisionOps: [],
   },
+
+  /**
+   * Markdown：**把标题层级变成可查的节点**。
+   *
+   * 为什么值得单开一门：AI 实测反馈里说得很直白 —— 定向阶段最常问的是"README 里哪一节讲这个"，
+   * 而 `.md` 不进图时只能**整份读**（那个 README 645 行），它把这条列为"最大的现成增量"。
+   * 进了图之后，"读文档"变成"查文档"：`search('发布')` 直接给到 `README_CN.md` 里的那一节 + 行号。
+   *
+   * 结构（实测 tree-sitter-markdown）：`section` 是**嵌套**的 —— 每个 section 的
+   * `atx_heading` 是它的标题，子 section 是更低一级的标题。所以直接把 `section` 当"类型"、
+   * 标题文本当名字，层级天然就对了（h1 → h2 → h3）。
+   *
+   * ⚠ `optIn`：和 json/yaml/toml/css/html 一样**默认不扫** —— 不然一堆文档会把代码地图淹了。
+   *   要扫就 `--lang auto,markdown`（或启动器里勾上）。
+   * ⚠ 不抽链接当引用：`[x](url)` 指向的是网址或别的文档，不是代码依赖，硬接会造噪声。
+   */
+  markdown: {
+    id: 'markdown',
+    label: 'Markdown',
+    status: 'ok',
+    optIn: true,
+    exts: ['.md', '.markdown'],
+    wasm: 'markdown/tree-sitter-markdown.wasm',
+    namespaces: {},
+    types: { section: 'section' },
+    members: {},
+    imports: {},
+    nameOf: markdownSectionName,
+    baseFields: [],
+    baseNodes: [],
+    decisions: [],
+    decisionOps: [],
+  },
 };
+
+/**
+ * Markdown 的 `section` 取名：取它自己那个 `atx_heading` 的文本当名字。
+ * 剥掉反引号与强调符（`` `CodeAtlas.exe` `` → `CodeAtlas.exe`）—— 名字要能被人和 agent 直接读、
+ * 也要能当 search 的关键词。
+ */
+export function markdownSectionName(node) {
+  const head = (node.namedChildren || []).find((c) => c.type === 'atx_heading');
+  // 没有 `atx_heading` 的 section 是**解析产物**（最典型：文件开头的 YAML frontmatter `---…---`
+  // 会被包成一个无标题 section）—— 不是"文档的一节"，不造节点。
+  if (!head) return null;
+  const inline = (head.namedChildren || []).find((c) => c.type === 'inline');
+  const raw = String(inline ? inline.text : head.text);
+  const clean = raw
+    .replace(/^#+\s*/, '')
+    .replace(/[*_`~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean || null;
+}
 
 /** 后缀 -> 语言 profile */
 export function languageForExt(ext) {
@@ -1457,7 +1510,6 @@ export function languageForExt(ext) {
   }
   return null;
 }
-
 /** 命令里 --lang 的值解析：auto / 逗号列表 / 全部 */
 export function resolveLanguages(spec) {
   const all = Object.values(LANGUAGES);

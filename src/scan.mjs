@@ -947,6 +947,13 @@ function extractFile(source, tree, lang, fileRel) {
    * （`module X` 的 fqn 是 `X` 而不是 `X.X`），而它的成员才享受带前缀的待遇。
    */
   function addTypeNode(node, lang, kind, nsOverride, extra) {
+    // 名字取不到就**不造节点**（返回 null，由 emitType 决定要不要继续往下走）。
+    // 以前这里兜底成 `'(anonymous)'`：对 C# / Java 那种"匿名类型也是实体"的语言是对的，
+    // 但对 Markdown 不行 —— 文件开头的 YAML frontmatter 会被包成一个无标题 `section`，
+    // 兜底会在图上凭空多出一个名叫 "(anonymous)" 的节。所以：**只有语言自己声明了
+    // 匿名兜底（`anonymousName`）才造**，其余一律当"不是个节点"。
+    const nm = nameOf(node, lang);
+    if (!nm && !lang.anonymousName) return null;
     const bases = [];
     for (const field of lang.baseFields || []) {
       const b = node.childForFieldName(field);
@@ -966,7 +973,7 @@ function extractFile(source, tree, lang, fileRel) {
     }
     const rec = {
       index: types.length,
-      name: nameOf(node, lang) || '(anonymous)',
+      name: nm || '(anonymous)',
       kind: (lang.typeKindFn && lang.typeKindFn(node)) || kind,
       ns: nsOverride !== undefined ? nsOverride : (nsStack.join('.') || fileNamespace),
       line: node.startPosition.row + 1,
@@ -1028,12 +1035,14 @@ function extractFile(source, tree, lang, fileRel) {
       const b = node.childForFieldName(field);
       if (b) baseChildren.add(b.id);
     }
-    typeStack.push(rec);
+    // `rec` 为空 = 取不到名字（`nameOf` 返回空）→ 不造节点，但**仍要往下走**：
+    // Markdown 的匿名 section（YAML frontmatter）就包着后面所有有名 section，跳过整棵子树会把它们丢光。
+    if (rec) typeStack.push(rec);
     for (const c of node.namedChildren) {
       if (baseChildren.has(c.id)) continue;
       walk(c);
     }
-    typeStack.pop();
+    if (rec) typeStack.pop();
   }
 
   function walk(node) {
@@ -1097,12 +1106,12 @@ function extractFile(source, tree, lang, fileRel) {
             const b = node.childForFieldName(field);
             if (b) baseChildren.add(b.id);
           }
-          typeStack.push(rec);
+          if (rec) typeStack.push(rec);       // rec 可能是 null（取不到名字 → 不造节点），仍要往下走
           for (const c of node.namedChildren) {
             if (baseChildren.has(c.id)) continue;
             walk(c);
           }
-          typeStack.pop();
+          if (rec) typeStack.pop();
         } else {
           for (const c of node.namedChildren) walk(c);
         }

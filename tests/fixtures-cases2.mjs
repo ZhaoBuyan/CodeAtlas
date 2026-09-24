@@ -334,4 +334,22 @@ export const EXTRA_CASES = [
     edgeWeights: [['Pane', 'Root', 'ref', 1], ['Pane', 'Widget', 'ref', 1]],
     errorsMax: 0,
   },
+  {
+    // Markdown 进图（2026-09-24）：把**标题层级**变成可查的节。
+    // AI 实测把这条列为"最大的现成增量" —— `.md` 不进图时只能整份读，进了图就能按节查。
+    // 这个夹具 pin 四件事：
+    //   ① 每个 `#`/`##`/`###` 各是一节，名字是**标题文本**（h1 不含 `#`）
+    //   ② 名字里的格式化标记要剥掉（`` `CodeAtlas.exe` `` → `CodeAtlas.exe`）
+    //   ③ **无标题的 section 不造节点**（YAML frontmatter 会被包成一个空 section）
+    //   ④ 代码块 / 链接里的东西**不算引用**（硬接就是噪声）
+    dir: 'markdown',
+    lang: 'markdown',
+    types: 5,                                  // 5 个标题 = 5 节
+    names: ['文档样例', '第一节', '第一节的子节', '第二节', '含格式化标记的一节'],
+    kinds: { section: 5 },
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    errorsMax: 0,
+  },
 ];

@@ -142,7 +142,7 @@ npm run publish:lite   # 只出精简版
   不是当前版本的旧解包目录会在**每次启动**时自动清掉（只留**当前在用的 + 最近用过的那个**），免得换个版本就多留一百多 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本 / **包内容指纹**不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 29 门代码语言 + 5 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
+- 打包只带**我们支持的 29 门代码语言 + 6 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - **反编译在完全版里无需安装**：扫 `.dll` / `.exe` 用链接进启动器的反编译器（ILSpy 引擎）；扫 `.jar` 用自带的裁剪版 Java 运行时 + cfr.jar —— 都不需要先装 ilspycmd / sfextract / Java。精简版不带 Java 运行时（它本来就要求 .NET 9 + Node），扫 `.jar` 仍需自己装 Java。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -275,7 +275,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（29 门，各自独立进程）
+npm test                                          # 语言 fixtures 回归（38 个用例，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
 node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
@@ -420,6 +420,8 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 
 **文件级格式（默认不开，要看就显式指定）**：`JSON` `.json` · `YAML` `.yaml .yml` · `TOML` `.toml` · `CSS` `.css` · `HTML` `.html .htm` —— 这些没有"类型"可言，只会以文件为单位出现在图上（合成 module 节点）：
 
+**文档（`Markdown` `.md` `.markdown`，同样默认不开）**：把**标题层级**变成可查的节点 —— 每个 `##`/`###` 标题是一节（带行号），`.md` 进了图之后"读文档"就变成"查文档"：`search("发布")` 直接给到 README / CHANGELOG 里的那一节，不必整份读。
+
 ```bash
 node src/cli.mjs scan ./repo --lang auto,json,yaml   # 代码语言 + JSON/YAML
 node src/cli.mjs scan ./repo --lang json,yaml        # 只看配置文件
@@ -472,7 +474,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ### 扫描时要注意什么
 
-- **语言选对，结果才干净**：默认 `auto` = 所有代码语言都扫、`JSON/YAML/TOML/CSS/HTML` 这类文件级格式**不扫**（要看就显式写 `--lang auto,json`）。
+- **语言选对，结果才干净**：默认 `auto` = 所有代码语言都扫、`JSON/YAML/TOML/CSS/HTML/Markdown` 这类文件级格式**不扫**（要看就显式写 `--lang auto,json`）。
   只勾项目真正用的语言明显更快，也不会把依赖目录里别的语言混进图里（启动器里有勾选框，写进全局的 `Langs`）。
 - **文件编码按 UTF-8 读**：不是 UTF-8 的文件会被**认出来并标出来** —— 扫描报告、MCP 的 `overview`、网页顶部的 chip
   都会告诉你受影响的有几个文件（`totals.nonUtf8Files`）。这种文件即使语法树解析成功，注释 / 字符串也会是乱码
@@ -503,7 +505,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：29 门代码语言 + 5 种文件级格式
+- [x] 语言覆盖：29 门代码语言 + 6 种文件级格式（含 **Markdown 的标题层级**）
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤
