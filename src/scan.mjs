@@ -1013,17 +1013,25 @@ function extractFile(source, tree, lang, fileRel) {
    * （见 pruneOnDemandTypes）。这样图几乎不涨，且没有一个垃圾节点。
    *
    * 只在**命名空间里**的值才发：顶层值没有模块前缀可引用（`Env.normalize` 这种才是跨文件依赖）。
+   *
+   * ⚠ 这里**只造节点、压栈，不递归子树**，返回压栈的那个 rec（可能是 null）。
+   * 调用方（member 分支）随后会走一遍子树 —— 那正是"这个值内部的引用归属它"想要的。
+   * 曾经这里调的是 `emitType(node, …)`，而 `emitType` 自己会递归走子树，于是调用方又走一遍：
+   * **每个 `value_definition` 的整棵子树被走两遍**（实测：同一文件内重复 fqn 6,321 个节点、
+   * 图里 29% 的 OCaml 节点是重复的；`let` 里的引用权重也翻倍）。别再改回去。
    */
   function emitOnDemandValue(node) {
-    if (!lang.onDemandTypes) return;
+    if (!lang.onDemandTypes) return null;
     const kind = lang.onDemandTypes[node.type];
-    if (!kind) return;
-    if (!nsStack.length) return;                       // 顶层值不可能被 `Module.x` 指到
+    if (!kind) return null;
+    if (!nsStack.length) return null;                  // 顶层值不可能被 `Module.x` 指到
     const name = nameOf(node, lang);
-    if (!name || !/^[a-z_][A-Za-z0-9_']*$/.test(name)) return;   // 顺手挡掉模式解构等垃圾名
+    if (!name || !/^[a-z_][A-Za-z0-9_']*$/.test(name)) return null;   // 顺手挡掉模式解构等垃圾名
     // `hasModulePrefix`：这个节点**可能**被 `Module.x` 这种限定名指到（它自己就在模块里）。
     // 父进程据此判"要不要为它保留节点"—— 是个结构事实，不用去猜哪个前缀算模块。
-    emitType(node, lang, kind, { onDemand: true, hasModulePrefix: true });
+    const rec = addTypeNode(node, lang, kind, undefined, { onDemand: true, hasModulePrefix: true });
+    if (rec) typeStack.push(rec);
+    return rec;
   }
 
   /** 造类型记录 + 压栈 + 递归收成员（普通的类型声明走这条） */
@@ -1146,11 +1154,14 @@ function extractFile(source, tree, lang, fileRel) {
       const name = nameOf(node, lang);
       const mdoc = languageDoc(lang, node, comments, lines);
       bumpMember(memberKind, name, node, mdoc);
-      // 同一个节点如果也是"按需候选"（OCaml 的 value_definition / value_specification），
-      // 额外发一个**可被限定名引用命中的节点**；父进程会砍掉没被引用的那些。
-      // 位置在 bumpMember 之后：成员计数与成员列表的行为完全不变。
-      emitOnDemandValue(node);
+      // 同一个节点如果也是"按需候选"（OCaml 的 value_definition），额外发一个**可被限定名引用
+      // 命中的节点**；父进程会砍掉没被引用的那些。位置在 bumpMember 之后：成员计数与成员列表的
+      // 行为完全不变。
+      // ⚠ `emitOnDemandValue` **不递归**，子树由下面这一趟走 —— 它压的栈正是"值内部的引用归属
+      //   这个值"需要的。以前这里跟着一个会递归的 `emitType`，于是子树被走了两遍。
+      const onDemandRec = emitOnDemandValue(node);
       for (const c of node.namedChildren) walk(c);
+      if (onDemandRec) typeStack.pop();
       return;
     }
 
@@ -1852,6 +1863,42 @@ function pruneOnDemandTypes(merged) {
   let next = 0;
   for (let i = 0; i < all.length; i++) if (keep[i]) map[i] = next++;
 
+  // ③ 被剪掉的节点**身上的引用与调用位置不能跟着丢**。
+  //    它们多半是"函数体内部的依赖"（`let map f l = … fold_left …` 里的 `fold_left`）——
+  //    丢掉等于把这门语言的函数级依赖挖掉一大块；调用位置丢了，`refs("成员名")` 就会少答
+  //    一批 `文件:行`。做法：归属**上移到最近一个活着的祖先**（通常是所在模块 / 文件模块）：
+  //    粒度变粗，但依赖与位置都留住了。
+  //    ⚠ 这里以前是 `.filter((r) => keep[r.owner])`（引用直接丢），而 `allUses` 连 id 都
+  //      没重映射（剪掉 N 个节点后，所有 owner 一律偏 N，位置挂到别的类型身上）。
+  //      当时看不出来，是因为 `emitOnDemandValue` 会递归走一遍子树、member 分支再走一遍，
+  //      **第二遍的归属正好落在没被剪的外层节点上**，等于一直在替这两个 bug 兜底。
+  //      修掉重复走树之后，`ocaml-cross` 那道门立刻变红，才把它们露出来。
+  //    顶层值没有祖先（`let go` 在文件顶层时 `parent` 还是 null —— 那个"文件模块"节点是
+  //    **事后**合成的，发节点时还不存在），这时落到**同一文件的那个合成 module 节点**上：
+  //    它的判别特征很干净 —— `fqn` 就等于文件的相对路径（见上面合成处 `fqn: f.rel`），
+  //    而 OCaml 顶层 `let` 的 fqn 是 `Use.go` 这种，不会撞。
+  const fileModuleIdx = new Map();
+  for (let i = 0; i < all.length; i++) {
+    if (!keep[i]) continue;
+    const t = all[i];
+    const p = merged.fileRecs?.[t.file]?.path;
+    if (p && t.fqn === p) fileModuleIdx.set(t.file, i);
+  }
+  const upTo = (i) => {
+    let p = all[i] ? all[i].parent : null, guard = 0;
+    while (p != null && !keep[p] && guard++ <= all.length) p = all[p] ? all[p].parent : null;
+    if (p != null && keep[p]) return p;
+    const t = all[i];
+    const fm = t ? fileModuleIdx.get(t.file) : null;
+    return fm == null ? null : fm;
+  };
+  const remapOwner = (o) => {
+    if (o == null) return null;
+    if (keep[o]) return map[o];
+    const up = upTo(o);
+    return up == null ? null : map[up];
+  };
+
   const newTypes = [];
   for (let i = 0; i < all.length; i++) {
     if (!keep[i]) continue;
@@ -1863,8 +1910,11 @@ function pruneOnDemandTypes(merged) {
   }
   merged.allTypes = newTypes;
   merged.allRefs = (merged.allRefs || [])
-    .filter((r) => keep[r.owner])
-    .map((r) => ({ ...r, owner: map[r.owner] }));
+    .map((r) => { const o = remapOwner(r.owner); return o == null ? null : { ...r, owner: o }; })
+    .filter(Boolean);
+  merged.allUses = (merged.allUses || [])
+    .map((u) => { const o = remapOwner(u.owner); return o == null ? null : { ...u, owner: o }; })
+    .filter(Boolean);
   for (const f of merged.fileRecs || []) {
     if (f.types) f.types = f.types.filter((i) => keep[i]).map((i) => map[i]);
   }

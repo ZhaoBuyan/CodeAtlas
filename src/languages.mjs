@@ -904,8 +904,8 @@ export const LANGUAGES = {
   //
   // 语法树里没有 `identifier` / `type_identifier`（提取器的默认引用节点），所以 refTypes 得另指：
   // `value_path`（值引用）+ `type_constructor_path`（类型引用），再挂 `refFilter` 只收"带模块前缀"的路径。
-  // 结果：某真 OCaml 项目（3,514 文件）跨文件 ref 边 15,839 条、**跨语言边 0 条**；
-  // `List.map` 全图 1 个节点、424 条边**全部**指向 `stdlib/list.ml`。
+  // 结果：某真 OCaml 项目（3,514 文件）跨文件 ref 边 13,805 条、**跨语言边 0 条**；
+  // `List.map` 全图 1 个节点、384 条边**全部**指向 `stdlib/list.ml`。
   //
   // 试过并**放弃**的路（都因为造出错误边；数字是实测，留在这里免得下次白试一遍）：
   //   ① 只按节点类型加 refTypes、不挂 refFilter →
@@ -920,19 +920,20 @@ export const LANGUAGES = {
   // 真正解决它的是 scan.mjs 的 `resolveName` **三档优先级**（① 同文件 → ② 全名 → ③ 后缀）
   // 加上 `fileModuleNamespace`（`foo.ml` 的顶层定义挂在模块 `Foo` 下）。原因与实测见那两处注释。
   //
-  // **已知残留**（是缺陷，不是取舍）：真源码 → testsuite 的接错边 36 → **16** 条，共 5 族，
+  // **已知残留**（是缺陷，不是取舍）：真源码 → testsuite 的接错边 36 → **16** 条，共 6 个目标，
   // 全都属于"引用的前缀根本不是编译单元"：
-  //   · `Ord.t` → `Functors.Ord.t`、`W.t` → `Opt_variants.W.t`、`M.iter` → `Pr7636.M.iter`
+  //   · `Ord.t` → `Functors.Ord.t`（10 条）、`W.t` → `Opt_variants.W.t`、`M.iter` → `Pr7636.M.iter`
   //     —— 前缀是**函子参数 / 局部模块名**，全图没有以它开头的编译单元，后缀档于是把它粘到
   //        "尾巴相同"的候选上（`Ord` 模块全图只有 1 个且是嵌套的，唯一性也救不了）
-  //   · `D.t` / `Printer.t` —— 测试文件 `d.mli` / `printer.ml` **恰好**是编译单元名 `D` / `Printer`，
+  //   · `D.t` / `Printer.t` / `Names.obj` —— 测试文件恰好叫 `d.mli` / `printer.ml` / `names.ml`，
   //     属于根名撞车
   //   这两类都**不是名字匹配能解决的**，要真正的作用域 / 模块别名分析。
   // 另一个更大的坑（**未动**）：`.ml` 与 `.mli` 是**同一个编译单元**，图上却是两个节点 ——
-  //   实测 1,686 个 fqn 同时出现在同名的 .ml 与 .mli 里（共 3,338 个重复 fqn、9,961 个节点，
-  //   占 ocaml 类型的 45%），143 条 ref 边指向这种重复节点。于是 `Hashtbl.statistics`、`Mutex.t`
-  //   这类引用会因为"两个候选的 parent 都是 null"而**放弃**（在宁缺勿错下是对的行为，但本可以接对）。
-  //   另外同名的 `arch.ml` 分布在 5 个 arch 目录 → 10 个 `Arch.*` 节点共用同一个 fqn（fqn 不含目录）。
+  //   实测 1,558 个 fqn 同时出现在同名的 .ml 与 .mli 里（共 3,116 个节点），134 条 ref 边指向它们。
+  //   于是 `Hashtbl.statistics`、`Mutex.t` 这类引用会因为"两个候选的 parent 都是 null"而**放弃**
+  //   （在宁缺勿错下是对的行为，但本可以接对）。
+  //   另外同名的 `arch.ml` 分布在 5 个 arch 目录 → 10 个 `Arch.*` 节点共用同一个 fqn（fqn 不含目录），
+  //   这类 125 个 fqn / 611 个节点**更不能合**（它们是不同的编译单元）。
   ocaml: {
     id: 'ocaml',
     label: 'OCaml',
@@ -958,9 +959,17 @@ export const LANGUAGES = {
     // 但不给它们**全量**发节点：实测会多 53,074 个节点（图 3.6 倍）、其中 90% 没有任何边指向它、
     // 还混着 8.5% 的模式解构垃圾名（`(n', b)`、`()`）。所以走**按需候选**：
     // 标 onDemand + hasModulePrefix，父进程只保留真被限定名指到的（见 pruneOnDemandTypes）。
+    //
+    // ⚠ 这里**只有 `value_definition`（`.ml` 的 `let`）**，曾经还写着 `value_specification`
+    //   （`.mli` 的 `val`）—— 那是**死条目**：`emitOnDemandValue` 只在"成员分支"里被调用，
+    //   而 `value_specification` 不在上面的 `members` 里，永远走不到（实测：一个只有 `a.mli`
+    //   （`val f`）的目录扫出来图上根本没有 `A.f` 节点，引用 `A.f` 直接 unresolved）。
+    //   删掉而不是补上，是因为补上会**更糟**：`.ml` 与 `.mli` 会各发一个同 fqn 的节点
+    //   （同一个编译单元两个节点，见 languages.mjs 顶部那段"已知残留"），解析器就更挑不出唯一，
+    //   反而会把已经接对的 `List.map` 那批边丢掉。要真做，得先按"同名 `.ml` 不在本次图里"
+    //   设条件 —— 那才是有价值的窄修，先记在这里。
     onDemandTypes: {
       value_definition: 'value',
-      value_specification: 'value',
     },
     // `foo.ml` 本身就是一个模块 `Foo`：它的**顶层定义就是 Foo 的成员**。
     // 不认这条，`stdlib/list.ml` 顶层的 `let map` 会登记成裸名 `map`，而别的文件写 `List.map`
