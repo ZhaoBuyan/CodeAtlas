@@ -325,7 +325,7 @@ Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the rea
 ## Debugging tools
 
 ```bash
-npm test                                          # language fixtures regression (28 languages, one process each)
+npm test                                          # language fixtures regression (38 cases, one process each)
 npm run probe                                     # print the node names tree-sitter actually produces per language
 node tests/probe-file.mjs <file> [--lang csharp]   # single-file probe: where the ERRORs are, which declarations are recognized
 node tests/probe-abi.mjs                           # grammar smoke test (load + parse every wasm from both sources)
@@ -482,7 +482,7 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | Shell | `.sh` `.bash` `.zsh` | ✅ fixtures + measured (nvm) (no types → module node; `source`/`.` become imports, command names become refs) |
 | Zig | `.zig` | ✅ fixtures (const X = struct/enum) |
 | Solidity | `.sol` | ✅ fixtures (contract/interface + inheritance) |
-| OCaml | `.ml` `.mli` | ✅ fixtures (module/type; top-level lets get a synthetic module node) |
+| OCaml | `.ml` `.mli` | ✅ fixtures + measured (a 3,514-file project: modules act as namespaces, `List.map`-style qualified refs land on `stdlib/list.ml`, and a value only becomes a node when some qualified ref points at it) |
 | ReScript | `.res` | ✅ fixtures (module / type / variant) |
 | Ruby | `.rb` `.rake` `.gemspec` | ✅ fixtures (class/module; `module` acts as a namespace; `attr_*` become properties; `require`/`include` become edges) |
 | HCL / Terraform | `.tf` `.tfvars` `.hcl` `.nomad` | ✅ fixtures (nodes are blocks: resource / data / module / variable / output / locals; members are attributes; references become edges) |
