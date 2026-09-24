@@ -2333,6 +2333,21 @@ export async function scan(opts) {
    * 两者都不带，才落到 unique / name。
    * 返回 `{ id, ... }`；对不上时返回 null。
    * 外层还会按"两端是不是同一个文件"把 tier 升到 same —— 解析路径与边的性质是两件事。
+   *
+   * ## 限定名（含 `.`）的专门规则
+   * 只做**精确匹配**（`fqn` 或 `name` 等于限定名 / 以其 `.限定名` 结尾），匹配不到就放弃 ——
+   * **绝不退化成"按叶子名撞"**。理由：引用名里约一半是带点的（实测某真 OCaml 项目 25,345 / 49,660），
+   * 而叶子名的候选池动辄几千个（`t` 有 3,406 个）→ 退化会接出 `typing/ctype.ml → List.map@测试文件`
+   * 这类错误边，还会把它们记进 `unique` 档（把"猜"标成"有依据"）。实测这一类有 2,893 条。
+   * 多候选时再按：① 引用方自己文件里的（OCaml 的局部 `module X`）② 归属锚点（候选的父模块名
+   * 等于限定名的最后一段前缀）。都不满足 → 放弃。
+   *
+   * ⚠ **已知限制（未能解决，如实记）**：跨文件的 `List.map` / `Array.exists` / `Buffer.t` 这类
+   * **stdlib 引用**仍可能接错。根因是建模缺口 —— 我们只把**显式** `module List = struct … end` 里的
+   * 成员登记成 `List.map`，**从没把"文件模块的成员按文件名登记"**（`stdlib/list.ml` 里的 `map`
+   * 是裸名 `map`）。于是 `List.map` 唯一能精确命中的是某个测试文件里的局部 `module List`。
+   * 实测：783 条跨文件边的目标落在 testsuite/（引用方都在真源码里）。
+   * 要真解决得让**文件模块也当命名空间**（`list.ml` 的成员登记成 `List.*`）—— 那是另一个地基。
    */
   /**
    * **import 依据**：引用方文件里有没有哪条 import 指得到这个候选？
@@ -2374,11 +2389,19 @@ export async function scan(opts) {
 
   const unresolved = { ambiguous: 0, unknown: 0 };
   const resolveName = (name, fromTypeId) => {
-    // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的
-    // （取 `.` 后最后一段），所以不先按限定名匹配的话，`X.t` 会退化成"任意一个叫 t 的类型"——
-    // ocaml 实测：图里有 121 个叫 X 的类型，91 条边全接到其中任意一个（错误边）。
-    // 匹配方式：候选的 `fqn` **或** `name` 等于限定名，或以其 `.限定名` 结尾（后者兼容"模块前缀更完整"的登记方式）。
-    // 放在最前面是纯增路径：只对含 `.` 的引用生效，匹配不到就照旧走下面的流程，不改任何既有分支。
+    // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的，
+    // 所以必须按完整限定名精确匹配 —— 匹配不上就**放弃**，绝不能退化成"按叶子名撞"。
+    //
+    // 为什么必须放弃（实测，某真 OCaml 项目）：引用名里 **25,345 / 49,660 种是带点的**，
+    // 而退化会去 `bySimpleName.get(叶子)` 里挑 —— 那个池子动辄几千个同名（实测 `t` 有 3,406 个候选）。
+    // 于是 `typing/ctype.ml → List.map` 会被接到 `testsuite/…/let_syntax.ml` 里任意一个 `map`，
+    // `test.ml → Array.exists` 接到 `stdlib/float.ml` —— 全是**错误边**，而且它们还落在
+    // `unique` 档（"名字全图唯一"），等于**把猜的当成有依据的**。这正是项目"宁缺勿错"要避免的。
+    // 实测这一类有 2,893 条（占 ocaml 入边的 55%）。
+    //
+    // 匹配方式：候选的 `fqn` **或** `name` 等于限定名，或以其 `.限定名` 结尾
+    // （后者兼容"模块前缀更完整"的登记方式）。同候选多个时优先**引用方自己文件里的**
+    // —— `module X` 在 OCaml 里是局部模块，`X.t` 指的就是它。
     if (name.includes('.')) {
       const leaf = name.slice(name.lastIndexOf('.') + 1);
       const pool = bySimpleName.get(leaf) || [];
@@ -2394,10 +2417,36 @@ export async function scan(opts) {
       if (exact.length === 1) {
         const id = exact[0];
         // `uniq: true`：限定名**精确匹配**上了，不是"从多个同名的里近似挑一个"，
-        // 所以它不该落最弱的 `name` 档（那一档的含义是"有多个候选、靠近似挑的"）。
-        // 精确匹配本来也说明这个名字没歧义 → 记 `unique`。tier 只影响标签，不影响选边。
+        // 所以它不该落最弱的 `name` 档。tier 只影响标签，不影响选边。
         return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
       }
+      if (exact.length > 1) {
+        // 精确匹配到多个（同名模块在多处定义 —— OCaml 里 `module List = …` 可以随便起）→ 按优先级挑：
+        //   ① **引用方自己文件里的**
+        //   ② **归属锚点**：`X.y` 里的 y 必然属于某个名叫 X 的**模块**（parent 链）。
+        //      OCaml 里 `List.map` 的 `map` 就挂在某个 `List` 模块下面 —— 用这条把"成员属于谁"问清楚，
+        //      比按文件主干猜可靠（实测主干法命中不了：图里 19 个叫 List 的模块，没有一个定义在 list.ml）
+        //   ③ 都不满足 → 放弃（宁缺勿错）
+        const own = allTypes[fromTypeId]?.file;
+        const same = exact.filter((id) => allTypes[id]?.file === own);
+        if (same.length === 1) return { id: same[0], uniq: true, import: hasImportBacking(fromTypeId, same[0]) };
+        const modName = name.slice(0, name.lastIndexOf('.')).split('.').pop();
+        const owner = (id) => {
+          const t = allTypes[id];
+          return t && t.parent != null ? allTypes[t.parent] : null;
+        };
+        const byOwner = exact.filter((id) => {
+          const o = owner(id);
+          return o && o.kind === 'module' && (o.name === modName || (o.fqn || '').split('.').pop() === modName);
+        });
+        if (byOwner.length === 1) {
+          const id = byOwner[0];
+          return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
+        }
+      }
+      // 到这儿就是"限定名对不上 / 挑不出可信的" —— 计入 unknown 并放弃（宁可缺边，不要接错）
+      unresolved.unknown++;
+      return null;
     }
     const hit = bySimpleName.get(name);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
