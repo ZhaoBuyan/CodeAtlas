@@ -941,6 +941,74 @@ function extractFile(source, tree, lang) {
   // 个别语言要在配置里加（PHP 的类型引用是 name、Ruby 的类引用是 constant）
   const refTypes = new Set(['identifier', 'type_identifier', ...(lang.refTypes || [])]);
 
+  /**
+   * 给一个节点造类型记录（不入栈、不递归）。
+   * `nsOverride` 用于"既是作用域又是节点"的模块：**模块自己**的限定名不该带上它自己
+   * （`module X` 的 fqn 是 `X` 而不是 `X.X`），而它的成员才享受带前缀的待遇。
+   */
+  function addTypeNode(node, lang, kind, nsOverride) {
+    const bases = [];
+    for (const field of lang.baseFields || []) {
+      const b = node.childForFieldName(field);
+      if (b) collectBaseNames(b, bases);
+    }
+    if (lang.baseNodes?.length) {
+      const findBaseNodes = (n) => {
+        for (const c of n.namedChildren) {
+          if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases);
+          else if (!lang.types[c.type]) findBaseNodes(c);
+        }
+      };
+      for (const c of node.namedChildren) {
+        if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases);
+        else if (!lang.types[c.type] && !lang.members[c.type]) findBaseNodes(c);
+      }
+    }
+    const rec = {
+      index: types.length,
+      name: nameOf(node, lang) || '(anonymous)',
+      kind: (lang.typeKindFn && lang.typeKindFn(node)) || kind,
+      ns: nsOverride !== undefined ? nsOverride : (nsStack.join('.') || fileNamespace),
+      line: node.startPosition.row + 1,
+      endLine: node.endPosition.row + 1,
+      startRow: node.startPosition.row,
+      endRow: node.endPosition.row,
+      bases,
+      doc: languageDoc(lang, node, comments, lines),
+      members: {},
+      memberList: [],
+      complexity: 1,
+      parent: currentType() ? currentType().index : null,
+    };
+    // 类型本身也留一份签名：JS/TS 的顶层函数、C#/Java 的 record 主构造函数都算"类型"，
+    // 它们的参数表不在任何成员上（不给的话 symbol 里就完全看不到它收什么参数）。
+    // 只看直接子节点：接口体里的方法参数不是这个类型自己的参数。
+    const tsig = declSignature(lang, node, 1, true);
+    if (tsig) {
+      if (tsig.p) rec.p = tsig.p;
+      if (tsig.r) rec.r = tsig.r;
+    }
+    types.push(rec);
+    return rec;
+  }
+
+  /** 造类型记录 + 压栈 + 递归收成员（普通的类型声明走这条） */
+  function emitType(node, lang, kind) {
+    const rec = addTypeNode(node, lang, kind);
+    // 基类子树不再当引用重复统计
+    const baseChildren = new Set();
+    for (const field of lang.baseFields || []) {
+      const b = node.childForFieldName(field);
+      if (b) baseChildren.add(b.id);
+    }
+    typeStack.push(rec);
+    for (const c of node.namedChildren) {
+      if (baseChildren.has(c.id)) continue;
+      walk(c);
+    }
+    typeStack.pop();
+  }
+
   function walk(node) {
     const type = node.type;
 
@@ -986,7 +1054,31 @@ function extractFile(source, tree, lang) {
           return;
         }
         nsStack.push(name);
-        for (const c of node.namedChildren) walk(c);
+        // ⚠ 命名空间节点**自己**通常不成节点（Java/Kotlin 的 package 语句、C# 的 namespace 块都不是类型）。
+        // 但 OCaml 的 `module` 是**实体**：既开作用域又是个可被引用的模块。少了它，图上就没有
+        // "模块"这个节点了（实测 fixture：类型数 4→3、`Shape` 整个消失）。
+        // `namespaceIsType` 标出这类语言；不标的一律保持原行为。
+        //
+        // 名字的算法要注意：**模块自己**的限定名不该带上它自己（`module X` 的 fqn 是 `X` 而不是 `X.X`），
+        // 所以造节点时先把它从栈里摘掉，成员才享受"带模块前缀"的待遇。
+        if (lang.namespaceIsType) {
+          // 模块**自己**的限定名不带它自己：`module X` 的 fqn 是 `X`，成员才是 `X.t`
+          const outer = nsStack.slice(0, -1).join('.') || fileNamespace;
+          const rec = addTypeNode(node, lang, lang.types[type] || 'module', outer);
+          const baseChildren = new Set();
+          for (const field of lang.baseFields || []) {
+            const b = node.childForFieldName(field);
+            if (b) baseChildren.add(b.id);
+          }
+          typeStack.push(rec);
+          for (const c of node.namedChildren) {
+            if (baseChildren.has(c.id)) continue;
+            walk(c);
+          }
+          typeStack.pop();
+        } else {
+          for (const c of node.namedChildren) walk(c);
+        }
         nsStack.pop();
         return;
       }
@@ -997,60 +1089,7 @@ function extractFile(source, tree, lang) {
     const skipParents = lang.typeSkipParent && lang.typeSkipParent[type];
     const parentType = node.parent ? node.parent.type : null;
     if (kind && !(skipParents && parentType && skipParents.includes(parentType)) && (!lang.typeGuards?.[type] || lang.typeGuards[type](node))) {
-      const bases = [];
-      for (const field of lang.baseFields || []) {
-        const b = node.childForFieldName(field);
-        if (b) collectBaseNames(b, bases);
-      }
-      if (lang.baseNodes?.length) {
-        const findBaseNodes = (n) => {
-          for (const c of n.namedChildren) {
-            if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases);
-            else if (!lang.types[c.type]) findBaseNodes(c);
-          }
-        };
-        for (const c of node.namedChildren) {
-          if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases);
-          else if (!lang.types[c.type] && !lang.members[c.type]) findBaseNodes(c);
-        }
-      }
-      const rec = {
-        index: types.length,
-        name: nameOf(node, lang) || '(anonymous)',
-        kind: (lang.typeKindFn && lang.typeKindFn(node)) || kind,
-        ns: nsStack.join('.') || fileNamespace,
-        line: node.startPosition.row + 1,
-        endLine: node.endPosition.row + 1,
-        startRow: node.startPosition.row,
-        endRow: node.endPosition.row,
-        bases,
-        doc: languageDoc(lang, node, comments, lines),
-        members: {},
-        memberList: [],
-        complexity: 1,
-        parent: currentType() ? currentType().index : null,
-      };
-      // 类型本身也留一份签名：JS/TS 的顶层函数、C#/Java 的 record 主构造函数都算"类型"，
-      // 它们的参数表不在任何成员上（不给的话 symbol 里就完全看不到它收什么参数）。
-      // 只看直接子节点：接口体里的方法参数不是这个类型自己的参数。
-      const tsig = declSignature(lang, node, 1, true);
-      if (tsig) {
-        if (tsig.p) rec.p = tsig.p;
-        if (tsig.r) rec.r = tsig.r;
-      }
-      types.push(rec);
-      // 基类子树不再当引用重复统计
-      const baseChildren = new Set();
-      for (const field of lang.baseFields || []) {
-        const b = node.childForFieldName(field);
-        if (b) baseChildren.add(b.id);
-      }
-      typeStack.push(rec);
-      for (const c of node.namedChildren) {
-        if (baseChildren.has(c.id)) continue;
-        walk(c);
-      }
-      typeStack.pop();
+      emitType(node, lang, kind);
       return;
     }
 
@@ -1122,6 +1161,9 @@ function extractFile(source, tree, lang) {
   // 计数表 → 引用列表（顺序 = 首次出现顺序，跟改之前一致）
   for (const r of refCount.values()) refs.push(r);
   for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
+  if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
+    console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
+  }
   return { types, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
@@ -2233,6 +2275,31 @@ export async function scan(opts) {
 
   const unresolved = { ambiguous: 0, unknown: 0 };
   const resolveName = (name, fromTypeId) => {
+    // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的
+    // （取 `.` 后最后一段），所以不先按限定名匹配的话，`X.t` 会退化成"任意一个叫 t 的类型"——
+    // ocaml 实测：图里有 121 个叫 X 的类型，91 条边全接到其中任意一个（错误边）。
+    // 匹配方式：候选的 `fqn` **或** `name` 等于限定名，或以其 `.限定名` 结尾（后者兼容"模块前缀更完整"的登记方式）。
+    // 放在最前面是纯增路径：只对含 `.` 的引用生效，匹配不到就照旧走下面的流程，不改任何既有分支。
+    if (name.includes('.')) {
+      const leaf = name.slice(name.lastIndexOf('.') + 1);
+      const pool = bySimpleName.get(leaf) || [];
+      const exact = pool.filter((id) => {
+        const t = allTypes[id];
+        if (!t) return false;
+        for (const cand of [t.fqn, t.name]) {
+          if (typeof cand !== 'string' || !cand) continue;
+          if (cand === name || cand.endsWith(`.${name}`)) return true;
+        }
+        return false;
+      });
+      if (exact.length === 1) {
+        const id = exact[0];
+        // `uniq: true`：限定名**精确匹配**上了，不是"从多个同名的里近似挑一个"，
+        // 所以它不该落最弱的 `name` 档（那一档的含义是"有多个候选、靠近似挑的"）。
+        // 精确匹配本来也说明这个名字没歧义 → 记 `unique`。tier 只影响标签，不影响选边。
+        return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
+      }
+    }
     const hit = bySimpleName.get(name);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
     if (!hit || !hit.length) { unresolved.unknown++; return null; }

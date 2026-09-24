@@ -925,7 +925,10 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.ml', '.mli'],
     wasm: 'ocaml/tree-sitter-ocaml.wasm',
-    namespaces: {},
+    namespaces: { module_definition: 1 },
+    namespaceIsType: true,   // module 既是作用域又是节点（少了它图上就没有"模块"）
+    refTypes: ['value_path', 'type_constructor_path'],
+    refFilter: (node) => node.namedChildren.some((c) => c.type === 'module_path' || c.type === 'extended_module_path'),
     types: {
       type_definition: 'type',
       module_definition: 'module',

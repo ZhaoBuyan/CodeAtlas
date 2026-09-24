@@ -48,9 +48,11 @@ export const EXTRA_CASES = [
     dir: 'ocaml',
     lang: 'ocaml',
     // 2026-09-17 起顶层 let 也能取名了 → 跟 Go/C/Rust 一样会合成一个 module 节点装上它们
-    types: 4,
-    names: ['color', 'point', 'Shape', 'sample'],
-    kinds: { type: 2, module: 2 },
+    // 2026-09-24 加 Meta（模块里的 type t）与 uses_meta（引用 Meta.t），pin 住三件事：
+    //   ① 模块里的类型登记成**限定名** `Meta.t`；② 模块自己的节点不能丢；③ `Meta.t` 能解析到对的类型
+    types: 7,
+    names: ['color', 'point', 'Shape', 'sample', 'Meta', 'uses_meta', 't'],
+    kinds: { type: 4, module: 3 },
     importsMin: 0,
     docs: 2,
     membersMin: 6,
