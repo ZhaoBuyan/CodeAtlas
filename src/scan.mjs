@@ -20,7 +20,7 @@ import { t } from './i18n.mjs';
 import { preprocess, csharpAsyncIdentifier } from './preprocess.mjs';
 
 export const SCHEMA = 'code-atlas/1';
-export const VERSION = '1.7.0';
+export const VERSION = '1.8.0';
 
 /**
  * 没归到任何系统规则的哨兵值：**中性固定值**，不带任何语言。
