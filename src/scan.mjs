@@ -2450,15 +2450,40 @@ export async function scan(opts) {
         const t = allTypes[id];
         return t && fileRecs[t.file]?.lang === fromLang;
       });
-      const exact = pool.filter((id) => {
+      // 候选按证据强弱分三档，**这三档的先后不能换**（顺序是实测 oss3-ocaml 定下来的）：
+      //   ① **同文件**：`module X` 在 OCaml 里常常是文件里的局部模块，本文件里写的 `X.t`
+      //      指的就是它 —— 局部模块在作用域里是**确定的**，比任何跨文件推断都硬。
+      //   ② **全名命中**：`fqn` 就等于引用名 —— 写 `Int32.t` 命中的就是 `Int32.t`。
+      //   ③ **后缀命中**：`fqn` 以 `.引用名` 结尾 —— 兼容"登记的前缀更完整"（`open Types.Uid`
+      //      之后写短名 `Tbl.t`，而它登记成 `Types.Uid.Tbl.t`）。这档**必要，不能删**，
+      //      但它是三档里最弱的：**别人文件里嵌套的同名模块**也满足它。
+      //
+      // ②③ 不分档就会出事（实测）：`stdlib/random.mli` 里的 `Int32.t`，候选是
+      //   `Int32.t@stdlib/int32.ml` 与 `Int32.t@stdlib/int32.mli`（**两者 parent 都是 null** ——
+      //   fileModuleNamespace 只把文件名写进 fqn、不建父模块节点），
+      //   以及 `Unbox_under_assign.Int32.t@testsuite/…`（只有这个的 parent 是 `Int32` 模块）。
+      // 于是"归属锚点"消歧**只有那个错的能通过校验** —— 锚点规则会反过来系统性偏爱
+      //   "别人文件里嵌套的局部模块"，压过真正的文件模块。实测这类接错的边 36 条。
+      //
+      // ⚠ ① 必须**先于** ②：只按 ②③ 分档、把同文件候选一起踢掉，反而会丢掉对的边
+      //   （实测 12 条：`Inline_and_simplify_aux.Result` 里的 `Env.t` 会从本文件的
+      //   `Inline_and_simplify_aux.Env.t` 跑到 `typing/env.ml`）。
+      const own = allTypes[fromTypeId]?.file;
+      const isRoot = (id) => {
+        const t = allTypes[id];
+        return !!t && (t.fqn === name || t.name === name);
+      };
+      const isSuffix = (id) => {
         const t = allTypes[id];
         if (!t) return false;
         for (const cand of [t.fqn, t.name]) {
-          if (typeof cand !== 'string' || !cand) continue;
-          if (cand === name || cand.endsWith(`.${name}`)) return true;
+          if (typeof cand === 'string' && cand && cand.endsWith(`.${name}`)) return true;
         }
         return false;
-      });
+      };
+      const sameFileHit = pool.filter((id) => allTypes[id]?.file === own && (isRoot(id) || isSuffix(id)));
+      const rootHit = pool.filter(isRoot);
+      const exact = sameFileHit.length ? sameFileHit : rootHit.length ? rootHit : pool.filter(isSuffix);
       if (exact.length === 1) {
         const id = exact[0];
         // `uniq: true`：限定名**精确匹配**上了，不是"从多个同名的里近似挑一个"，
@@ -2466,15 +2491,12 @@ export async function scan(opts) {
         return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
       }
       if (exact.length > 1) {
-        // 精确匹配到多个（同名模块在多处定义 —— OCaml 里 `module List = …` 可以随便起）→ 按优先级挑：
-        //   ① **引用方自己文件里的**
-        //   ② **归属锚点**：`X.y` 里的 y 必然属于某个名叫 X 的**模块**（parent 链）。
-        //      OCaml 里 `List.map` 的 `map` 就挂在某个 `List` 模块下面 —— 用这条把"成员属于谁"问清楚，
-        //      比按文件主干猜可靠（实测主干法命中不了：图里 19 个叫 List 的模块，没有一个定义在 list.ml）
-        //   ③ 都不满足 → 放弃（宁缺勿错）
-        const own = allTypes[fromTypeId]?.file;
-        const same = exact.filter((id) => allTypes[id]?.file === own);
-        if (same.length === 1) return { id: same[0], uniq: true, import: hasImportBacking(fromTypeId, same[0]) };
+        // 走到这儿 = 上面挑中的那一档**内部还有多个**（同名模块在多处定义 —— OCaml 里
+        // `module List = …` 可以随便起）→ 再用"归属锚点"挑一次：
+        //   `X.y` 里的 y 必然属于某个名叫 X 的**模块**（parent 链）。
+        //   OCaml 里 `List.map` 的 `map` 就挂在某个 `List` 模块下面 —— 用这条把"成员属于谁"问清楚，
+        //   比按文件主干猜可靠（实测主干法命中不了：图里 19 个叫 List 的模块，没有一个定义在 list.ml）
+        // 挑不出唯一 → 放弃（宁缺勿错）
         const modName = name.slice(0, name.lastIndexOf('.')).split('.').pop();
         const owner = (id) => {
           const t = allTypes[id];
