@@ -948,6 +948,15 @@ export const LANGUAGES = {
       value_definition: 'value',
       value_specification: 'value',
     },
+    // 下面是**调查记录**（2026-09-24），免得下次白试：
+    // 我一度以为 ocaml 的边里有 ~41% 是 ppx `[%%expect {| … |}]` 引号块被当代码解析产生的"幽灵"，
+    // 还写了个"不往里看"的节点机制（opaqueNodes）想清掉它们。**判断是错的**，机制已撤：
+    //   · 语法包**没有**把引号块内容提升成顶层定义 —— 实测 disambiguation.ml 的 66 个 type/module
+    //     定义里，落在 `[%%expect]` 行范围内的 = **0 个**；内容老实包在 `attribute_payload` 里
+    //   · 那些同名 `X` 是**真代码**（OCaml 测试里 `module X = struct end` 合法且常见，一个文件 16 个）
+    //   · 真实属性（`[@@deprecated …]` / `[@@@warning …]`）也不会被误抽成节点（实测开/关结果一模一样）
+    // 真正待解决的是**限定名的解析歧义**：`X.t` 里的 `X` 属于哪个作用域 —— 同名模块在图上有很多个，
+    // resolveName 里那段"精确匹配"目前会挑中其中一个（"宁缺勿错"在这条上还没完全落地）。
     imports: {},
     baseFields: [],
     baseNodes: [],
