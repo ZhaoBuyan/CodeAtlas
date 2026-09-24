@@ -134,8 +134,15 @@ check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把
     const a = typeOf.get(e.from), b2 = typeOf.get(e.to);
     return !a || !b2 || a.file === b2.file || nameCount.get(b2.name) !== 1;
   });
-  check(uniqueCross.length > 0 && wrongUnique.length === 0, '㉘ tier=unique 的边确实“跨文件且名字全图唯一”',
-    `${uniqueCross.length} 条 · 不符 ${wrongUnique.length}`);
+  // ⚠ 与 ㉓ 的 file() 同一条纪律：**别要求小图里必须出现 `unique` 档**。
+  //   `unique` 的语义是"引用名在候选表里唯一"，而 CI 扫的是 tests/fixtures（3 文件 / 19 条边），
+  //   里面的跨文件引用都靠 import 就解决了，压根到不了"名字恰好唯一"那一档。
+  //   （实测：本仓库自扫有 unique 边，fixtures 图没有 → 同一句断言一条绿一条红。）
+  //   "有 unique 边时必须合格"始终检查；"必须有 unique 边"只在图足够大时才要求。
+  const bigEnough = (tb.edges.length >= 200);
+  check((bigEnough ? uniqueCross.length > 0 : true) && wrongUnique.length === 0,
+    '㉘ tier=unique 的边确实“跨文件且名字全图唯一”',
+    `${uniqueCross.length} 条 · 不符 ${wrongUnique.length}${bigEnough ? '' : '（图小，只校验已存在的 · ' + tb.edges.length + ' 条边）'}`);
   // overview 第一屏要把这个分布报出来（AI 不用自己数）
   const ovTiers = (await call('overview', {})).split('\n').find((l) => /按证据分|Edge evidence/.test(l)) || '';
   check(/同文件|same file/.test(ovTiers) && /仅同名|same name only/.test(ovTiers),

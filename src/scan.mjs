@@ -853,7 +853,7 @@ function countErrorNodes(node) {
  * 提取一个文件的全部事实。
  * @returns {{types: object[], imports: string[], refs: object[], namespaces: string[], commentRows: number, decisions: number}}
  */
-function extractFile(source, tree, lang) {
+function extractFile(source, tree, lang, fileRel) {
   const lines = source.split(/\r?\n/);
   const mask = new Uint8Array(lines.length);
   const types = [];
@@ -1188,8 +1188,35 @@ function extractFile(source, tree, lang) {
     for (const c of node.namedChildren) walk(c);
   }
 
+  /**
+   * **文件模块当命名空间**（`fileModuleNamespace`）。
+   *
+   * 语言背景：OCaml 里 `foo.ml` 本身就是一个模块 `Foo` —— 它的顶层定义**就是** `Foo` 的成员，
+   * 别的文件写 `Foo.map` 指的就是它。但提取器不知道这件事：`stdlib/list.ml` 顶层的
+   * `let map` 会被登记成**裸名** `map`，于是引用 `List.map` 永远对不上（实测 `List.map` 唯一
+   * 能精确命中的，只有某个测试文件里显式写的局部 `module List`）→ 783 条边接到 testsuite。
+   *
+   * 例外：文件顶层**已经**有同名模块时不再加前缀 —— `stdlib/stdlib.ml` 里有 `module List = List`
+   * （重导出别名），那时候 `List` 已经是根层名字，再加文件前缀会变成 `Stdlib.List`，反而错。
+   */
+  const fileModuleNs = () => {
+    if (!lang.fileModuleNamespace) return null;
+    const stem = String(fileRel || '').replace(/\.[^.]+$/, '').split('/').pop();
+    if (!stem || !/^[A-Za-z_][A-Za-z0-9_']*$/.test(stem)) return null;
+    const cap = stem.charAt(0).toUpperCase() + stem.slice(1);
+    // 顶层已存在同名模块（`module List = …`）→ 不加前缀（那是显式的根层名）
+    for (const c of tree.rootNode.namedChildren) {
+      if (c.type !== 'module_definition') continue;
+      const nm = nameOf(c, lang);
+      if (nm && nm.toLowerCase() === stem.toLowerCase()) return null;
+    }
+    return cap;
+  };
+
+  const fns = fileModuleNs();
+  if (fns) nsStack.push(fns);
   walk(tree.rootNode);
-  // 计数表 → 引用列表（顺序 = 首次出现顺序，跟改之前一致）
+  if (fns) nsStack.pop();
   for (const r of refCount.values()) refs.push(r);
   for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
@@ -1581,7 +1608,7 @@ async function extractFiles(files) {
         }
       }
     }
-    const facts = extractFile(source, tree, f.lang);
+    const facts = extractFile(source, tree, f.lang, f.rel);
     tree.delete?.();
 
     const fileId = 0;   // 文件内局部（父进程合并时换成全局 file id）
@@ -2404,7 +2431,16 @@ export async function scan(opts) {
     // —— `module X` 在 OCaml 里是局部模块，`X.t` 指的就是它。
     if (name.includes('.')) {
       const leaf = name.slice(name.lastIndexOf('.') + 1);
-      const pool = bySimpleName.get(leaf) || [];
+      const from = allTypes[fromTypeId];
+      const fromLang = fileRecs[from?.file]?.lang;
+      const pool = (bySimpleName.get(leaf) || []).filter((id) => {
+        // ⚠ **只在同语言内解析限定名**。跨语言的"限定名"没有意义（C 里不会出现 `List.map`），
+        // 而名字会撞：C 文件里的函数 `accu` 与 OCaml 的 `Remote_value.accu`、各语言都有的
+        // `init`/`length` 之类 —— 实测某真 OCaml 项目上有 866 条 `c -> ocaml` 的边，
+        // 全是这么撞出来的（`runtime/interp.c -> Debugcom.Remote_value.accu@debugger/debugcom.ml`）。
+        const t = allTypes[id];
+        return t && fileRecs[t.file]?.lang === fromLang;
+      });
       const exact = pool.filter((id) => {
         const t = allTypes[id];
         if (!t) return false;
@@ -2448,7 +2484,15 @@ export async function scan(opts) {
       unresolved.unknown++;
       return null;
     }
-    const hit = bySimpleName.get(name);
+    // ⚠ 简单名也**只在同语言内**解析。跨语言的名字匹配没有语义基础（C 里不会"引用" OCaml 的
+    // `accu`），而各语言都有 `init` / `length` / `accu` / `type` 这类通用名 —— 实测某真 OCaml 项目上
+    // 有 **866 条 `c -> ocaml` 边**全是这么撞出来的（`runtime/interp.c -> Remote_value.accu`）。
+    // 真跨语言依赖（FFI / 反编译产物）不靠名字匹配表达，过滤掉只会让图更准。
+    const fromLang = fileRecs[allTypes[fromTypeId]?.file]?.lang;
+    const hit = (bySimpleName.get(name) || []).filter((id) => {
+      const t = allTypes[id];
+      return t && fileRecs[t.file]?.lang === fromLang;
+    });
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
     if (!hit || !hit.length) { unresolved.unknown++; return null; }
     if (hit.length === 1) {

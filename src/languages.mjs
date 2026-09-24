@@ -948,6 +948,13 @@ export const LANGUAGES = {
       value_definition: 'value',
       value_specification: 'value',
     },
+    // `foo.ml` 本身就是一个模块 `Foo`：它的**顶层定义就是 Foo 的成员**。
+    // 不认这条，`stdlib/list.ml` 顶层的 `let map` 会登记成裸名 `map`，而别的文件写 `List.map`
+    // 永远对不上 —— 实测 `List.map` 唯一能精确命中的只有某个测试文件里显式写的局部 `module List`，
+    // 于是 783 条跨文件边接到了 testsuite/。
+    // ⚠ 文件顶层**已经**有同名模块时不加前缀（`stdlib/stdlib.ml` 里有 `module List = List`）——
+    //   那时 List 已是根层名字，加前缀会变成 `Stdlib.List`，反而错。这条例外写在 scan.mjs 的 fileModuleNs()。
+    fileModuleNamespace: true,
     // 下面是**调查记录**（2026-09-24），免得下次白试：
     // 我一度以为 ocaml 的边里有 ~41% 是 ppx `[%%expect {| … |}]` 引号块被当代码解析产生的"幽灵"，
     // 还写了个"不往里看"的节点机制（opaqueNodes）想清掉它们。**判断是错的**，机制已撤：
