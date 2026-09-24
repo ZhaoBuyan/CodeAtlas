@@ -1371,6 +1371,16 @@ tf.proc.kill('SIGKILL');
   const newestPath = (bundle.files || []).slice().sort((x, y) => (y.mtime || 0) - (x.mtime || 0))[0]?.path;
   check(!!ageLine && (!newestPath || !ageLine.includes(newestPath)),
     '㉓ overview：年龄行**不泄露具体路径**（只报时间）', newestPath ? `不得含 ${newestPath}` : '(无文件)');
+
+  // ⑤ file(types)：默认列全（AI 实测明确说这是"性价比最高的一类输出"，不能砍默认），
+  //    `types:"count"` 只给计数 + 按 kind 汇总 —— 实测 `file('src/mcp.mjs')` 从 492 token 降到 56。
+  const fAll = await call('file', { path: bigFile ? bigFile.path : 'a.js' });
+  const fCnt = await call('file', { path: bigFile ? bigFile.path : 'a.js', types: 'count' });
+  const typeLineCnt = fCnt.split('\n').find((l) => /^类型 |^Types /.test(l)) || '';
+  check(/^(类型|Types) \d+/.test(typeLineCnt) && !/\[[a-z]+\]/.test(typeLineCnt),
+    '㉓ file(types:"count")：只给计数与分档，不列名字', typeLineCnt.trim().slice(0, 90));
+  check(fAll.length > fCnt.length, '㉓ file(types:"count") 确实更短（省 token 的开关有效）',
+    `all ${fAll.length} 字符 vs count ${fCnt.length} 字符`);
 }
 
 // ㉔ 2026-09-23（dsh 建议）：AI 技能说明书 —— `.dsh/skills/codeatlas/SKILL.md`。

@@ -154,7 +154,7 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `subgraph(name, depth)` | The dependency subgraph around one place |
 | `map(budget)` | Export a **token-budgeted** skeleton (systems → key types → key members); without a grouping config it says so and falls back to a most-referenced list |
 | `impact(name, depth)` | **Blast radius**: who is affected if you change it (multi-hop), plus the test files that would be affected |
-| `file(path)` | The types inside one file |
+| `file(path, types?)` | The types inside one file (`types:"count"` for just the total) |
 
 Each tool lists a bounded number of entries and says "first N of M" when it truncates (`limit` / `members` raise it).
 Every result ends with a snapshot stamp (UTC).

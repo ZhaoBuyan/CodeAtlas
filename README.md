@@ -253,7 +253,7 @@ Tools provided:
 | `symbol(name, neighbors?)` | Everything about one type: description, signature, file:line, member list (**with parameter list and return type**), base types, **reference counts (weighted)**, its system |
 | `refs(name, in/out)` | Who references it / what it references (the blast radius before you change code); every edge carries `×count` and its evidence strength. **Member names and `Type.Member` are accepted too** — you get the owning type and its referrers (an upper bound) **plus the member's call / access sites (`file:line`, matched by name: same-named members elsewhere are mixed in, and declaration lines are excluded)** |
 | `subgraph(name, depth)` | Dependency subgraph ("what does changing this drag along") |
-| `file(path)` | A file's types, imports, line counts (**parse errors are called out when present**) |
+| `file(path, types?)` | A file's types, imports, line counts (**parse errors are called out when present**); `types:"count"` gives just the total plus a per-kind breakdown |
 | `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply; on a project with no grouping config it **says so** and falls back to a most-referenced list |
 | `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus the **test files** that would be affected (recognized by path), plus an explicit list of what is invisible (dynamic calls / reflection) |
 

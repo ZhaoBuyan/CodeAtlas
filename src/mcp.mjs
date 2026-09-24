@@ -214,10 +214,13 @@ const TOOLS = [
   },
   {
     name: 'file',
-    description: 'Look at one file by path fragment: which types it declares, what it imports, how many lines, whether it has parse errors.',
+    description: 'Look at one file by path fragment: which types it declares, what it imports, how many lines, whether it has parse errors. The full type list is the most useful part (function names in order often reveal the file\'s shape) — pass types:"count" when you only need the size / composition and want to save tokens.',
     inputSchema: {
       type: 'object',
-      properties: { path: { type: 'string', description: 'Path fragment, e.g. "Utils/Loc.cs"' } },
+      properties: {
+        path: { type: 'string', description: 'Path fragment, e.g. "Utils/Loc.cs"' },
+        types: { type: 'string', enum: ['all', 'count'], description: 'all (default) lists every type; count gives just the total plus a per-kind breakdown' },
+      },
       required: ['path'],
       additionalProperties: false,
     },
@@ -1046,7 +1049,19 @@ function toolFile(idx, a) {
   ];
   if (f.doc) lines.push(T(`说明：${briefDoc(f.doc, 120)}`, `Doc: ${briefDoc(f.doc, 120)}`));   // 文件头注释的“半句话”（AI 实测：注释的信息密度高于图）
   if (f.errors) lines.push(T(`注意：${f.errors} 处解析异常`, `Note: ${f.errors} parse errors`));
-  lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.fqn && t.fqn !== t.name ? t.fqn : t.name}[${t.kind}]`).join('  '));
+  // `types`：默认（all）**把类型清单列全** —— AI 实测明确说这是"性价比最高的一类输出"
+  // （`scan.mjs` 一行源码没读，75 个函数名排开后主干自己浮现），所以不砍默认行为。
+  // 但那个清单也是单个 `file()` 调用的 token 大头（实测 `file('src/scan.mjs')` 677 token）——
+  // 只想确认"这文件多大 / 有几类东西"时传 `types:"count"`，只给计数 + 按 kind 汇总。
+  const brief = String(a.types || '').toLowerCase() === 'count';
+  if (brief) {
+    const byKind = {};
+    for (const t of types) byKind[t.kind] = (byKind[t.kind] || 0) + 1;
+    const mix = Object.entries(byKind).sort((x, y) => y[1] - x[1]).map(([k, n]) => `${k} ${fmt(n)}`).join(' / ');
+    lines.push(T(`类型 ${fmt(types.length)}${mix ? `（${mix}）` : ''}`, `Types ${fmt(types.length)}${mix ? ` (${mix})` : ''}`));
+  } else {
+    lines.push(T(`类型 ${types.length}：`, `Types ${types.length}: `) + types.map((t) => `${t.fqn && t.fqn !== t.name ? t.fqn : t.name}[${t.kind}]`).join('  '));
+  }
   const imports = f.imports || [];
   lines.push(T(`导入（${imports.length}）：${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` …等 ${imports.length} 条` : ''}`, `Imports (${imports.length}): ${imports.slice(0, 20).join(', ')}${imports.length > 20 ? ` … ${imports.length} in total` : ''}`));
   return lines.join('\n');
