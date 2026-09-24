@@ -352,4 +352,29 @@ export const EXTRA_CASES = [
     membersMin: 0,
     errorsMax: 0,
   },
+  // ↓ 2026-09-24：语言"族"（`family`）的两道门。这一整类回归**原来没有门** ——
+  //   引擎一度按"语言 id 相等"过滤跨语言解析（为灭掉 `c → ocaml` 的撞名边），
+  //   把同一套模块系统里**真的依赖**一起切了：实测 ant-design 丢 3,086 条跨文件边
+  //   （`tsx→ts` 2,701、`ts→tsx` 669 …）、vuetify 丢 2,522 条、abseil 丢 `cpp→c` 106 条。
+  //   两个夹具各钉住一族：族**内**必须接上（下面这两条边），族**外**仍然不接。
+  {
+    dir: 'family-js',
+    lang: 'typescript,tsx',        // 同一次扫描里放进两种语言，才测得到跨语言解析
+    types: 2,
+    names: ['Wheel', 'View'],
+    kinds: { interface: 1, function: 1 },
+    // `.tsx` 里的 `View` 引用 `.ts` 里的 `Wheel` —— 这条边就是被误伤的那一类
+    edgeWeights: [['View', 'Wheel', 'ref', 1]],
+    errorsMax: 0,
+  },
+  {
+    dir: 'family-c',
+    lang: 'c,cpp',
+    types: 3,
+    names: ['Shape', 'ShapeHolder', 'shape'],
+    kinds: { type: 1, class: 1, module: 1 },
+    // C++ 侧的结构体引用 C 侧定义的结构体（`.h` 会被按内容嗅探成 C 或 C++，两者共用头文件）
+    edgeWeights: [['ShapeHolder', 'Shape', 'ref', 1]],
+    errorsMax: 0,
+  },
 ];

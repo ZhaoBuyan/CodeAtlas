@@ -544,7 +544,9 @@ Tuning it: `npm run probe:mem` (grammar memory probe, written line by line to di
 Adding a language = add a profile in `src/languages.mjs` (node types + inheritance fields + complexity branch
 table), drop a sample into `tests/fixtures/<language>/`, write the expectations in
 `tests/run-fixtures.mjs`, then `npm test`. When unsure about node names, run `npm run probe` first
-(it prints the node names tree-sitter actually produces — do not guess).
+(it prints the node names tree-sitter actually produces — do not guess), then **`npm run probe:profile`**:
+a declared name that does not exist in the grammar is not an error, it just silently disables that feature
+(a real audit found 13 of them — see CHANGELOG 1.8.0).
 
 **Files without type declarations** (scripts, top-level functions, Lua modules) get a synthetic `module` node
 so the whole file does not vanish from the map; their members (functions/variables) hang off that module node.

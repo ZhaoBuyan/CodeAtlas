@@ -264,6 +264,11 @@ const jsImportKind = (node) => {
 // TS 与 TSX 的语法节点名完全一致（tsx 只是多了 JSX），共用一份
 const TS_SHAPE = {
   importKindOf: jsImportKind,
+  // 语言"族"：族**内**按名字互相解析（见 scan.mjs 的 langFamily）。JS / TS / TSX / Vue 是同一套
+  // 模块系统里的东西 —— `.vue` 的 script 就是 TS、`.tsx` 只是带 JSX 的 TS，同一个项目里互相引用
+  // 是常态。实测（ant-design，3,012 文件）不认这条会丢 **3,086 条**跨文件边：
+  // `tsx→ts` 2,701、`ts→tsx` 669、`tsx→js` 42 …… 全是真依赖。
+  family: 'js',
   namespaces: { internal_module: 1 },
   types: {
     class_declaration: 'class',
@@ -649,6 +654,7 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.js', '.mjs', '.cjs', '.jsx'],
     wasm: 'javascript/tree-sitter-javascript.wasm',
+    family: 'js',       // 与 TS / TSX / Vue 同族：同一个项目里互相引用是常态（见 TS_SHAPE 的说明）
     namespaces: {},
     types: {
       class_declaration: 'class',
@@ -1169,6 +1175,9 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.c', '.h'],
     wasm: 'c/tree-sitter-c.wasm',
+    // 与 C++ 同族：`.h` 会被按内容嗅探成 C 或 C++（同一个头文件两个语言都能看见），
+    // 实测（abseil / leveldb）不认这条会丢 `cpp→c` 106 条、`c→cpp` 30+3 条真依赖。
+    family: 'c',
     namespaces: {},
     types: { type_definition: 'type', struct_specifier: 'struct', enum_specifier: 'enum', union_specifier: 'union' },
     // typedef struct X {...} X; 会让 struct_specifier 成为 type_definition 的子节点，别重复记
@@ -1187,6 +1196,7 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.cpp', '.cc', '.cxx', '.hpp', '.hxx'],
     wasm: 'cpp/tree-sitter-cpp.wasm',
+    family: 'c',        // 与 C 同族（见 c profile 的说明）
     namespaces: { namespace_definition: 1 },
     types: { class_specifier: 'class', struct_specifier: 'struct', enum_specifier: 'enum', union_specifier: 'union' },
     typeSkipParent: { struct_specifier: ['type_definition', 'class_specifier'], enum_specifier: ['type_definition'], union_specifier: ['type_definition'] },

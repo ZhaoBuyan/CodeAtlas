@@ -2530,6 +2530,25 @@ export async function scan(opts) {
     return out;
   };
 
+  /**
+   * 语言"族"：族**内**按名字互相解析，跨族不解析。
+   *
+   * 为什么是"族"而不是"语言 id 相等"：JS / TS / TSX / Vue 是同一套模块系统（`.vue` 的 script
+   * 就是 TS、`.tsx` 只是带 JSX 的 TS），C 与 C++ 共用头文件（`.h` 还会被按内容嗅探成两者之一）。
+   * 按 id 判会把它们之间的**真依赖**一起切掉 —— 实测 ant-design 一个项目就丢 **3,086 条**
+   * 跨文件边（`tsx→ts` 2,701、`ts→tsx` 669、`tsx→js` 42 …），abseil 丢 `cpp→c` 106 条。
+   * 族由 profile 的 `family` 声明（见 languages.mjs）；没声明的语言**自成一族**，
+   * 所以跨族噪声照样挡住：实测 `cpp→bash` 18、`python→cpp` 5、`js/ts→graphql` 10、
+   * `rescript→ts` 4、`c→ocaml` 866 条这些都仍然不接。
+   */
+  const langFamilyMap = new Map();
+  for (const l of Object.values(LANGUAGES)) langFamilyMap.set(l.id, l.family || l.id);
+  const sameFamily = (a, b) => {
+    // 取不到语言（理论上不该发生）→ **不匹配**，保持老行为（老代码是 `lang === fromLang`，undefined 时谁都不等）
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    return (langFamilyMap.get(a) || a) === (langFamilyMap.get(b) || b);
+  };
+
   const unresolved = { ambiguous: 0, unknown: 0 };
   const resolveName = (name, fromTypeId) => {
     // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的，
@@ -2550,12 +2569,19 @@ export async function scan(opts) {
       const from = allTypes[fromTypeId];
       const fromLang = fileRecs[from?.file]?.lang;
       const rawPool = (bySimpleName.get(leaf) || []).filter((id) => {
-        // ⚠ **只在同语言内解析限定名**。跨语言的"限定名"没有意义（C 里不会出现 `List.map`），
+        // ⚠ **只在同族内解析限定名**。跨族的"限定名"没有意义（C 里不会出现 `List.map`），
         // 而名字会撞：C 文件里的函数 `accu` 与 OCaml 的 `Remote_value.accu`、各语言都有的
         // `init`/`length` 之类 —— 实测某真 OCaml 项目上有 866 条 `c -> ocaml` 的边，
         // 全是这么撞出来的（`runtime/interp.c -> Debugcom.Remote_value.accu@debugger/debugcom.ml`）。
+        //
+        // ⚠ 但**不能按"语言 id 相等"来判** —— 那是 2026-09-24 修的一处误伤：JS / TS / TSX / Vue
+        //   是同一套模块系统（`.vue` 的 script 就是 TS），C 与 C++ 共用头文件。按 id 判会把它们
+        //   之间**真的依赖**一起切掉：实测 ant-design 一个项目就丢 3,086 条
+        //   （`tsx→ts` 2,701、`ts→tsx` 669、`tsx→js` 42 …），abseil 丢 `cpp→c` 106 条。
+        //   所以按 profile 声明的 `family` 判：没声明的语言自成一族，跨族照样不解析
+        //   （`cpp→bash`、`js→graphql`、`rescript→ts` 这些噪声仍然挡住）。
         const t = allTypes[id];
-        return t && fileRecs[t.file]?.lang === fromLang;
+        return t && sameFamily(fileRecs[t.file]?.lang, fromLang);
       });
       // `.ml`/`.mli` 是同一个编译单元的两面 → 候选池里先合成一个（见 collapseUnits 的说明）
       const pool = collapseUnits(rawPool, from?.file);
@@ -2624,14 +2650,15 @@ export async function scan(opts) {
       unresolved.unknown++;
       return null;
     }
-    // ⚠ 简单名也**只在同语言内**解析。跨语言的名字匹配没有语义基础（C 里不会"引用" OCaml 的
+    // ⚠ 简单名也**只在同族内**解析。跨族的名字匹配没有语义基础（C 里不会"引用" OCaml 的
     // `accu`），而各语言都有 `init` / `length` / `accu` / `type` 这类通用名 —— 实测某真 OCaml 项目上
     // 有 **866 条 `c -> ocaml` 边**全是这么撞出来的（`runtime/interp.c -> Remote_value.accu`）。
-    // 真跨语言依赖（FFI / 反编译产物）不靠名字匹配表达，过滤掉只会让图更准。
+    // 真跨族依赖（FFI / 反编译产物）不靠名字匹配表达，过滤掉只会让图更准。
+    // 族内是例外，而且是必须的：`js ↔ ts ↔ tsx ↔ vue`、`c ↔ cpp`（见限定名分支那段说明与实测数字）。
     const fromLang = fileRecs[allTypes[fromTypeId]?.file]?.lang;
     const hit = collapseUnits((bySimpleName.get(name) || []).filter((id) => {
       const t = allTypes[id];
-      return t && fileRecs[t.file]?.lang === fromLang;
+      return t && sameFamily(fileRecs[t.file]?.lang, fromLang);
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
     if (!hit || !hit.length) { unresolved.unknown++; return null; }

@@ -453,7 +453,9 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 加一门语言 = 在 `src/languages.mjs` 加一份 profile（节点类型 + 继承字段 + 复杂度分支表），
 再往 `tests/fixtures/<语言>/` 丢一个样例、在 `tests/run-fixtures.mjs` 写期望值，然后 `npm test`。
-节点名拿不准就先跑 `npm run probe`（打印 tree-sitter 实际解析出的节点名，别猜）。
+节点名拿不准就先跑 `npm run probe`（打印 tree-sitter 实际解析出的节点名，别猜），写完再跑
+**`npm run probe:profile`**：声明了一个语法包里不存在的节点名**不会报错**，它只是让那个功能
+**静默失效**（真审过一次查出 13 处，见 CHANGELOG 1.8.0）。
 
 **没有类型声明的文件**（脚本、顶层函数、Lua 模块）会自动合成一个 `module` 节点，
 免得整份文件在图上消失；它的成员（函数/变量）挂在模块节点下。
