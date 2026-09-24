@@ -277,6 +277,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ```bash
 npm test                                          # 语言 fixtures 回归（38 个用例，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
+npm run probe:profile                             # 审计：语言 profile 里声明的每个节点名都必须真在语法包里
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
 node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
 node tests/probe-grammars.mjs [--release] [--gc]   # 语法包内存探针（多语法包崩在哪儿，逐行落盘）
@@ -416,7 +417,9 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 `Vue` 单文件组件要先解决“解析内嵌 `<script>`”，`Objective-C` 的 `.m` 与 MATLAB 扩名冲突（只能靠开关指定），这两个是刻意先不做。
 `TLA+` 的上游没有可直接用的 wasm，放在 `vendor/wasm/` 自己维护；`SystemRDL` 同理 —— 它是我们用 emscripten
 （clang + wasm-ld，不需要 emcc）自己编的，wasm 也放 `vendor/wasm/`（配方见 `src/languages.mjs`）。
-审计命令：`node tests/probe-abi.mjs`（把每个语法包真加载 + 真解析一遍，分清能用 / 用不了）。
+审计命令：`node tests/probe-abi.mjs`（把每个语法包真加载 + 真解析一遍，分清能用 / 用不了）；
+`npm run probe:profile`（查语言 profile 里声明的每个节点名是不是真在语法包里 —— 抄错一个名字
+或语法包改名，都会让一个功能**静默失效**，换语法包之后跑一次）。
 
 **文件级格式（默认不开，要看就显式指定）**：`JSON` `.json` · `YAML` `.yaml .yml` · `TOML` `.toml` · `CSS` `.css` · `HTML` `.html .htm` —— 这些没有"类型"可言，只会以文件为单位出现在图上（合成 module 节点）：
 

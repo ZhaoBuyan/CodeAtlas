@@ -21,6 +21,7 @@
     "test": "node tests/run-fixtures.mjs && node tests/mcp-selftest.mjs",
     "test:ci": "node tests/run-fixtures.mjs && node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua && node tests/mcp-selftest.mjs tests/.out/ci",
     "probe": "node tests/probe-nodes.mjs",
+    "probe:profile": "node tests/probe-profile-nodes.mjs",
     "probe:abi": "node tests/probe-abi.mjs",
     "probe:mem": "node tests/probe-grammars.mjs",
     "mcp": "node src/cli.mjs mcp",

@@ -1150,7 +1150,12 @@ function extractFile(source, tree, lang, fileRel) {
     }
 
     const memberKind = lang.memberKindOf ? lang.memberKindOf(node) : lang.members[type];
-    if (memberKind) {
+    // `memberGuards`：同一个节点类型里"算不算成员"还要看结构的场合（写法与类型那侧的
+    // `typeGuards` 一致）。Kotlin 的 `class_parameter` 就是标准例子：`val name: String` 是属性，
+    // 而裸参数 `radius: Double` **不是**成员（它只是构造参数，外面访问不到）——
+    // 实测前者有 `binding_pattern_kind` 子节点、后者没有。不设这道闸，`data class Foo(val a: Int)`
+    // 这类会把构造参数全当成字段（凭空造出不存在的成员）。
+    if (memberKind && (!lang.memberGuards?.[type] || lang.memberGuards[type](node))) {
       const name = nameOf(node, lang);
       const mdoc = languageDoc(lang, node, comments, lines);
       bumpMember(memberKind, name, node, mdoc);
@@ -1170,7 +1175,12 @@ function extractFile(source, tree, lang, fileRel) {
       const target = t || fileScope;
       if (lang.isDecision) {
         if (lang.isDecision(node)) target.complexity++;
-      } else if (type === 'binary_expression') {
+      } else if ((lang.decisionOpNodes || ['binary_expression']).includes(type)) {
+        // 带运算符的二元表达式：只算语言声明的那几个运算符（`&&` / `||` / …）。
+        // ⚠ 哪些节点类型属于这一类必须由 profile 说（默认 `binary_expression`，与既有行为一致）。
+        //   曾经这里是**写死**的 `type === 'binary_expression'`，于是 Scala 把节点名改成它真正的
+        //   `infix_expression` 之后，节点落进了下面的"一律计数"分支 —— `+`、`>` 全被算成分支
+        //   （实测 fixture：Circle 复杂度 2 → 5）。判定必须按类型走，不能靠"没命中就全算"。
         const op = node.childForFieldName('operator');
         if (op && (lang.decisionOps || []).includes(op.text)) target.complexity++;
       } else {

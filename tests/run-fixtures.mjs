@@ -258,8 +258,8 @@ const CASES = [
     extends: ['Circle -> Shape'],
     importsMin: 1,
     docs: 1,
-    memberSigs: [['Registry', 'register', '(s: Shape)'], ['Shape', 'area', '(): Double']],
-    membersMin: 4,
+    memberSigs: [['Registry', 'register', '(s: Shape)'], ['Shape', 'area', '(): Double'], ['Shape', 'name', '']],
+    membersMin: 10,   // 构造器（primary/secondary）+ 主构造器里带 val/var 的属性都要算进来
     errorsMax: 0,
     namespace: 'fixture.sample',
   },
@@ -269,7 +269,11 @@ const CASES = [
     types: 1,
     names: ['sample'],
     kinds: { module: 1 },
-    docs: 0,    membersMin: 2,
+    docs: 0,
+    // 两个顶层函数 `M.greet` / `M.count` 必须在 —— 以前 profile 里的节点名是语法包没有的
+    // （`function_definition_statement` / `local_function`），这两个函数一个都没进成员表
+    memberSigs: [['sample', 'M.greet', '(name)'], ['sample', 'M.count', '(limit)']],
+    membersMin: 4,
     errorsMax: 0,
   },
   {

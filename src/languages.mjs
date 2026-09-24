@@ -606,8 +606,9 @@ export const LANGUAGES = {
       class_declaration: 'class',
       interface_declaration: 'interface',
       struct_declaration: 'struct',
+      // `record` 与 `record struct` 都走 `record_declaration`（实测：语法包里**没有**
+      // `record_struct_declaration` 这个节点名，此前那条声明是死配置；`record struct` 照样被这一条收到）
       record_declaration: 'record',
-      record_struct_declaration: 'record',
       enum_declaration: 'enum',
       delegate_declaration: 'delegate',
     },
@@ -630,7 +631,7 @@ export const LANGUAGES = {
     decisions: [
       'if_statement', 'switch_statement', 'for_statement', 'foreach_statement',
       'while_statement', 'do_statement', 'catch_clause', 'conditional_expression',
-      'switch_expression', 'case_switch_label', 'binary_expression',
+      'switch_expression', 'switch_section', 'binary_expression',
     ],
     decisionOps: ['&&', '||', '??'],
   },
@@ -749,8 +750,17 @@ export const LANGUAGES = {
     members: {
       function_declaration: 'function',
       property_declaration: 'property',
-      constructor_declaration: 'ctor',
+      primary_constructor: 'ctor',
+      secondary_constructor: 'ctor',
+      // `class_parameter`：只有带 `val` / `var` 的才是属性（`val name: String`），
+      // 裸参数（`radius: Double`）只是构造参数、外面访问不到 —— 那道闸在 memberGuards 里。
+      // 实测：`abstract class Shape(val name: String)` 的属性 `name` 此前**整个没进成员表**，
+      // 而 `data class Foo(val a: Int)` 这类常见写法会一个成员都没有。
+      class_parameter: 'property',
       enum_entry: 'enumValue',
+    },
+    memberGuards: {
+      class_parameter: (node) => node.namedChildren.some((c) => c.type === 'binding_pattern_kind'),
     },
     imports: { import_header: 1 },
     baseFields: [],
@@ -807,11 +817,14 @@ export const LANGUAGES = {
     // Lua 没有类型系统，落到"函数"一级（文件会合成一个模块节点）
     types: {},
     members: {
-      function_definition_statement: 'function',
+      // ⚠ 2026-09-24 实测修正：这段以前写的是 `function_definition_statement` / `local_function` /
+      //   `local_variable_declaration` —— **这三个名字语法包里根本没有**（多半是旧语法包的名字），
+      //   于是 Lua fixture 里两个函数 `M.greet` / `M.count` **一个都没进成员表**（只剩两个变量）。
+      //   实际产出：`local function f()` 与 `function M.h()` → `function_declaration`；
+      //   `local f = function() end` → `variable_declaration` 里套 `function_definition`（下面两条都在）。
+      function_declaration: 'function',
       function_definition: 'function',
-      local_function: 'function',
       variable_declaration: 'field',
-      local_variable_declaration: 'field',
     },
     imports: {},
     importKindOf: luaImportKind,
@@ -1121,7 +1134,7 @@ export const LANGUAGES = {
     imports: { import_declaration: 1 },
     baseFields: [],
     baseNodes: [],
-    decisions: ['if_statement', 'for_statement', 'expression_switch_statement', 'type_switch_statement', 'select_statement', 'case_clause', 'binary_expression'],
+    decisions: ['if_statement', 'for_statement', 'expression_switch_statement', 'type_switch_statement', 'select_statement', 'expression_case', 'type_case', 'communication_case', 'default_case', 'binary_expression'],
     decisionOps: ['&&', '||'],
   },
 
@@ -1225,10 +1238,11 @@ export const LANGUAGES = {
     wasm: 'swift/tree-sitter-swift.wasm',
     namespaces: {},
     types: {
+      // `class` / `struct` / `enum` / `protocol` / `extension` / `actor` 在语法树里**都是**
+      // `class_declaration`，靠 `typeKindFn` 看第一个关键字区分（见下）。语法包里并没有
+      // `extension_declaration` / `actor_declaration` 这两个节点名 —— 以前那两条是死配置。
       class_declaration: 'class',
       protocol_declaration: 'protocol',
-      extension_declaration: 'extension',
-      actor_declaration: 'class',
     },
     // Swift 语法把 class / struct / enum / protocol / extension 都归成 class_declaration，
     // 靠第一个子 token 的关键字区分
@@ -1249,8 +1263,11 @@ export const LANGUAGES = {
     },
     imports: { import_declaration: 1 },
     baseFields: [],
-    baseNodes: ['inheritance_specifier', 'inheritance_clause', 'type_inheritance_clause'],
-    decisions: ['if_statement', 'guard_statement', 'for_statement', 'while_statement', 'repeat_while_statement', 'switch_statement', 'case_statement', 'catch_block', 'ternary_expression', 'conjunction_expression', 'disjunction_expression'],
+    // 继承列表：实测只有 `inheritance_specifier` 这一个节点名是真的（另两个名字语法包里没有）。
+    baseNodes: ['inheritance_specifier'],
+    // `switch_entry`（不是 `case_statement` —— 那个名字 Swift 语法包里没有，等于每个 case
+    // 都没被计进复杂度）。实测 `case 1: break` 产出的是 `switch_entry`。
+    decisions: ['if_statement', 'guard_statement', 'for_statement', 'while_statement', 'repeat_while_statement', 'switch_statement', 'switch_entry', 'catch_block', 'ternary_expression', 'conjunction_expression', 'disjunction_expression'],
     decisionOps: [],
   },
 
@@ -1271,7 +1288,12 @@ export const LANGUAGES = {
     imports: { import_declaration: 1 },
     baseFields: [],
     baseNodes: ['extends_clause'],
-    decisions: ['if_expression', 'match_expression', 'case_clause', 'for_expression', 'while_expression', 'try_expression', 'binary_expression'],
+    decisions: ['if_expression', 'match_expression', 'case_clause', 'for_expression', 'while_expression', 'try_expression', 'infix_expression'],
+    // `infix_expression`（不是 `binary_expression` —— 那个名字 Scala 语法包没有，等于 `&&`/`||`
+    // 从来没被计过）。实测它有 `operator` 字段，文本就是 `&&` / `||`。
+    // ⚠ 同时要声明 `decisionOpNodes`：不声明的话 `infix_expression` 会落进"一律计数"，
+    //   把 `+`、`>` 也算成分支（实测 Circle 复杂度 2 → 5）。
+    decisionOpNodes: ['infix_expression'],
     decisionOps: ['&&', '||'],
   },
 

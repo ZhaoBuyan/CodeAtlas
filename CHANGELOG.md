@@ -67,6 +67,27 @@
   诚实边界：这一层**只改解析、不改图** —— 图上仍是两个节点（`file('foo.mli')` 照样能列出它声明的
   类型）。真合并成一个节点会让 `.mli` 的类型清单变空，读侧怎么表达"接口与实现是同一个符号"得先
   想清楚，本版不动。
+- **修复：六门语言的 profile 里写着"语法包根本没有的节点名"** —— profile 是手写的节点名表，
+  抄错一个、或语法包改名，那条声明就**永远不会命中**：不报错、不变红，只是那个功能**静默失效**。
+  新加的审计（`npm run probe:profile`）第一次跑就查出 **13 个**，其中**真丢功能**的是这几处：
+  · **Lua 的两个顶层函数一个都没进成员表** —— profile 写的是 `function_definition_statement` /
+    `local_function` / `local_variable_declaration`（三个名字语法包里都没有），而实际产出是
+    `function_declaration`；fixture 里的 `M.greet` / `M.count` 此前完全不在图上；
+  · **Kotlin 构造器全丢**（`constructor_declaration` 是 Java 的名字，Kotlin 是
+    `primary_constructor` / `secondary_constructor`）；顺带补上**主构造器里带 `val` / `var` 的属性**
+    （`class Shape(val name: String)` 的 `name`）—— `data class Foo(val a: Int)` 这种写法此前
+    **一个成员都没有**。裸构造参数（`Circle(radius: Double)`）**不算**字段，这道闸是新加
+    `memberGuards`（与类型那侧的 `typeGuards` 同款式）；
+  · **分支复杂度漏计**：C# 的 `case_switch_label`（真名 `switch_section`）、Go 的 `case_clause`
+    （真名是 `expression_case` / `type_case` / `communication_case` / `default_case` 四个）、
+    Swift 的 `case_statement`（真名 `switch_entry`）—— 每个 case 此前都不进"复杂度≈N"；
+  · **Scala 的 `&&` / `||` 从来没计过**（`binary_expression` 在 Scala 语法包里不存在，真名
+    `infix_expression`）。改这个时又发现一处**引擎侧的硬编码**：运算符过滤写死了
+    `type === 'binary_expression'`，换个节点名就落进"一律计数"，把 `+`、`>` 也当分支
+    （实测 Circle 复杂度 2 → 5）—— 现在由 profile 用 `decisionOpNodes` 声明，默认值保持原行为。
+  另有 5 处是**冗余噪声**（有等效条目兜住，删掉即可）：C# 的 `record_struct_declaration`、
+  Swift 的 `extension_declaration` / `actor_declaration` / `inheritance_clause` /
+  `type_inheritance_clause`。
 - **新增：`file(types:"count")`** —— 默认仍然把类型清单**列全**（AI 实测明确说这是"性价比最高的一类
   输出"：一行源码没读、函数名排开后主干自己浮现，所以不砍默认行为），但那个清单也是单个 `file()`
   调用的 token 大头 —— 只想确认"这文件多大 / 有几类东西"时传 `types:"count"`，只给计数 + 按 kind 汇总。

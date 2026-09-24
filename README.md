@@ -327,6 +327,7 @@ Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the rea
 ```bash
 npm test                                          # language fixtures regression (38 cases, one process each)
 npm run probe                                     # print the node names tree-sitter actually produces per language
+npm run probe:profile                             # audit: every node name declared in a language profile must exist in its grammar
 node tests/probe-file.mjs <file> [--lang csharp]   # single-file probe: where the ERRORs are, which declarations are recognized
 node tests/probe-abi.mjs                           # grammar smoke test (load + parse every wasm from both sources)
 node tests/probe-grammars.mjs [--release] [--gc]   # grammar memory probe (where loading many grammars breaks, line by line)
@@ -499,8 +500,9 @@ MATLAB — those two are deliberately deferred.
 `TLA+` has no usable upstream wasm, so it is maintained in `vendor/wasm/`; the same goes for `SystemRDL` —
 we compile it ourselves with emscripten (clang + wasm-ld, no emcc needed) and keep the wasm in `vendor/wasm/`
 (recipe in `src/languages.mjs`).
-Audit command: `node tests/probe-abi.mjs` (loads and parses every grammar from both sources, telling usable
-from unusable).
+Audit commands: `node tests/probe-abi.mjs` (loads and parses every grammar from both sources, telling usable
+from unusable); `npm run probe:profile` (checks that every node name a language profile declares actually
+exists in its grammar — a mistyped or renamed one silently disables a feature, so run it after a grammar upgrade).
 
 **File-level formats (off by default, opt in explicitly)**: `JSON` `.json` · `YAML` `.yaml .yml` ·
 `TOML` `.toml` · `CSS` `.css` · `HTML` `.html .htm` — they have no "types", so they only appear as files
