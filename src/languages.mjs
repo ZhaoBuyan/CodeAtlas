@@ -900,6 +900,25 @@ export const LANGUAGES = {
     decisionOps: ['&&', '||'],
   },
 
+  // OCaml：**引用采集暂不开**（保持原状），原因写在这里免得下次白试一遍。
+  //
+  // 语法树里没有 `identifier` / `type_identifier`（提取器的默认引用节点），所以现在一条引用都采不到：
+  // 类型抽得到（实测某真项目 17,231 个），但**依赖边为 0** —— 这门语言在图上没有依赖关系。
+  // 这是**已知缺陷，不是已知取舍**。
+  //
+  // 试过两条路，都因为造出错误边而放弃（数字都是实测）：
+  //   ① 只按节点类型加 refTypes →
+  //      · 加 `value_path`：边 1,942→13,006，其中 7,959 条落"名字全图唯一"档；出现
+  //        `scanf.ml → ib`、`bytegen.ml → cont`（都是函数参数）、`unit` 撞 stdlib/unit.ml 单点 345 条。
+  //      · 只加 `type_constructor_path`：被内置类型撞（`main_args.ml → stdlib/unit.ml` 345 条、
+  //        `odoc_messages.mli → stdlib/string.ml` 338 条）。
+  //   ② 加 `refFilter` 只收"带模块前缀"的路径（子节点含 module_path / extended_module_path）——
+  //      这一层过滤本身是对的（假阳性全消失、边 1,942→2,039），**但暴露了下一层问题**：
+  //      限定名解析不了。`type t = X.t` 里的 `X` 是**文件内局部模块**，而引擎只按简单名建表，
+  //      图里有 **121 个**叫 `X` 的类型 → 91 条边全接到任意一个 `X`（宁缺勿错，不能要）。
+  //
+  // 结论：**OCaml 要正确支持，前提是先能做限定名解析（`Module.member`），那是另一个、更大的改动。**
+  // `refFilter` 钩子（scan.mjs）已经加好并验证可用，等限定名解析到位后直接挂上即可。
   ocaml: {
     id: 'ocaml',
     label: 'OCaml',

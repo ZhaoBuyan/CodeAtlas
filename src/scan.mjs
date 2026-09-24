@@ -1100,8 +1100,15 @@ function extractFile(source, tree, lang) {
     }
 
     if (refTypes.has(type)) {
-      addRef(node);
-      noteUse(node);     // ① 同一处标识符：顺手记下“这个名字在这一行是调用还是成员访问”
+      // `refFilter`：按**引用的结构/文本**再筛一道，而不只是按节点类型。
+      // 为什么需要它：有些语言里同一个节点类型既承担"跨文件依赖"又承担"局部作用域引用"，
+      // 只看类型会把后者当依赖。OCaml 就是标准例子 —— 它的 `*_path` 节点在有模块前缀时是
+      // 跨文件引用（`Mach.fundecl`），裸名字时是局部变量/内置类型（`n`、`int`），
+      // 而这两者在语法树上**类型相同、父节点也区分不了**。钩子返回 false 表示"这条不算引用"。
+      if (!lang.refFilter || lang.refFilter(node)) {
+        addRef(node);
+        noteUse(node);     // ① 同一处标识符：顺手记下“这个名字在这一行是调用还是成员访问”
+      }
     } else if (USE_ID_TYPES.has(type)) {
       // 各语言给“成员名”用的节点名不一样（JS/TS 是 property_identifier、Go/Rust 是 field_identifier…）。
       // ⚠ 只记**位置**，不进 refs —— 进 refs 会改边权重，那是另一个决定。
