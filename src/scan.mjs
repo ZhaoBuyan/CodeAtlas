@@ -946,7 +946,7 @@ function extractFile(source, tree, lang) {
    * `nsOverride` 用于"既是作用域又是节点"的模块：**模块自己**的限定名不该带上它自己
    * （`module X` 的 fqn 是 `X` 而不是 `X.X`），而它的成员才享受带前缀的待遇。
    */
-  function addTypeNode(node, lang, kind, nsOverride) {
+  function addTypeNode(node, lang, kind, nsOverride, extra) {
     const bases = [];
     for (const field of lang.baseFields || []) {
       const b = node.childForFieldName(field);
@@ -989,12 +989,39 @@ function extractFile(source, tree, lang) {
       if (tsig.r) rec.r = tsig.r;
     }
     types.push(rec);
+    // `extra`：给"按需候选"带内部标记（`onDemand` / `hasModulePrefix`）。不写进 bundle。
+    if (extra) Object.assign(rec, extra);
     return rec;
   }
 
+  /**
+   * 发出一个**按需候选**节点（OCaml 的 `value_definition` / `value_specification`）。
+   *
+   * 为什么单独一条路：OCaml 的模块里值远多于类型（实测某项目 `.mli` 里 val 14,869 / type 10,247），
+   * 而值**才是函数级跨模块依赖的目标**（`Env.normalize`、`List.iter`）。但**全量**给值发节点会：
+   *   · 图上多 53,074 个节点（3.6 倍）
+   *   · 其中 90% 根本没有任何边指向它（实测只有 5,531 个出现在边里）
+   *   · 还有 8.5% 是模式解构/解析残缺的垃圾名（`(n', b)`、`()`、`(let+)`）
+   * 所以标 `onDemand`，由父进程在**建符号表之前**只保留"被某个限定名引用指到"的那些
+   * （见 pruneOnDemandTypes）。这样图几乎不涨，且没有一个垃圾节点。
+   *
+   * 只在**命名空间里**的值才发：顶层值没有模块前缀可引用（`Env.normalize` 这种才是跨文件依赖）。
+   */
+  function emitOnDemandValue(node) {
+    if (!lang.onDemandTypes) return;
+    const kind = lang.onDemandTypes[node.type];
+    if (!kind) return;
+    if (!nsStack.length) return;                       // 顶层值不可能被 `Module.x` 指到
+    const name = nameOf(node, lang);
+    if (!name || !/^[a-z_][A-Za-z0-9_']*$/.test(name)) return;   // 顺手挡掉模式解构等垃圾名
+    // `hasModulePrefix`：这个节点**可能**被 `Module.x` 这种限定名指到（它自己就在模块里）。
+    // 父进程据此判"要不要为它保留节点"—— 是个结构事实，不用去猜哪个前缀算模块。
+    emitType(node, lang, kind, { onDemand: true, hasModulePrefix: true });
+  }
+
   /** 造类型记录 + 压栈 + 递归收成员（普通的类型声明走这条） */
-  function emitType(node, lang, kind) {
-    const rec = addTypeNode(node, lang, kind);
+  function emitType(node, lang, kind, extra) {
+    const rec = addTypeNode(node, lang, kind, undefined, extra);
     // 基类子树不再当引用重复统计
     const baseChildren = new Set();
     for (const field of lang.baseFields || []) {
@@ -1110,6 +1137,10 @@ function extractFile(source, tree, lang) {
       const name = nameOf(node, lang);
       const mdoc = languageDoc(lang, node, comments, lines);
       bumpMember(memberKind, name, node, mdoc);
+      // 同一个节点如果也是"按需候选"（OCaml 的 value_definition / value_specification），
+      // 额外发一个**可被限定名引用命中的节点**；父进程会砍掉没被引用的那些。
+      // 位置在 bumpMember 之后：成员计数与成员列表的行为完全不变。
+      emitOnDemandValue(node);
       for (const c of node.namedChildren) walk(c);
       return;
     }
@@ -1599,6 +1630,9 @@ async function extractFiles(files) {
         members: t.members,
         memberList: t.memberList,
         complexity: t.complexity,
+        // 按需候选的内部标记必须**原样带过去** —— 漏了这两个键，父进程的 pruneOnDemandTypes
+        // 就认不出候选，裁剪静默失效（实测踩过：`Env.unused` 这种没被引用的值也留在了图上）。
+        ...(t.onDemand ? { onDemand: true, hasModulePrefix: !!t.hasModulePrefix } : null),
         fanIn: 0,
         fanOut: 0,
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
@@ -1738,12 +1772,74 @@ function mergeParts(parts) {
   return out;
 }
 
+/**
+ * 裁剪"按需候选"节点：只保留**真被限定名引用指到**的那些（OCaml 的值/成员）。
+ *
+ * 为什么需要：全量给值发节点会让图涨 3.6 倍，而其中 90% 没有任何边指向它（实测 53,074 个里
+ * 只有 5,531 个出现在边里），还混着 8.5% 的模式解构垃圾名。按需保留后图几乎不涨、且没有垃圾节点。
+ *
+ * ⚠ 这个函数**只有存在候选节点时才会做任何事**（`hadAny` 为假直接原样返回），所以别的语言
+ * （没有 `onDemandTypes`）走的是同一条老路径、行为一模一样。
+ *
+ * 判定"真被指到"用的是**结构事实**：一个名字里带 `.` 的引用，只可能命中带模块前缀的目标
+ * （`hasModulePrefix`）—— 与语言无关，不用去猜"哪个前缀算模块"。
+ */
+function pruneOnDemandTypes(merged) {
+  const all = merged.allTypes || [];
+  let hadAny = false;
+  for (const t of all) if (t.onDemand) { hadAny = true; break; }
+  if (!hadAny) return merged;                      // 没有候选 → 原样返回（零影响）
+
+  // ① 会被限定名指到的名字：`Env.normalize` 这种
+  const reachable = new Set();
+  for (const r of merged.allRefs || []) {
+    if (typeof r.name === 'string' && r.name.includes('.')) reachable.add(r.name);
+  }
+  const isReachable = (t) => {
+    if (!t.hasModulePrefix) return false;
+    for (const n of reachable) {
+      if (n === t.fqn || n.endsWith(`.${t.fqn}`)) return true;
+    }
+    return false;
+  };
+
+  const keep = new Array(all.length).fill(true);
+  let removed = 0;
+  for (let i = 0; i < all.length; i++) {
+    const t = all[i];
+    if (t.onDemand && !isReachable(t)) { keep[i] = false; removed++; }
+  }
+  if (!removed) return merged;
+
+  // ② 重编 id（删了节点就必须搬，否则 refs.owner / file.types / parent 全部错位）
+  const map = new Array(all.length).fill(-1);
+  let next = 0;
+  for (let i = 0; i < all.length; i++) if (keep[i]) map[i] = next++;
+
+  const newTypes = [];
+  for (let i = 0; i < all.length; i++) {
+    if (!keep[i]) continue;
+    const t = all[i];
+    const nt = { ...t, id: map[i] };
+    if (nt.parent != null) nt.parent = map[nt.parent] ?? null;
+    delete nt.onDemand;                            // 内部标记，不写进 bundle
+    newTypes.push(nt);
+  }
+  merged.allTypes = newTypes;
+  merged.allRefs = (merged.allRefs || [])
+    .filter((r) => keep[r.owner])
+    .map((r) => ({ ...r, owner: map[r.owner] }));
+  for (const f of merged.fileRecs || []) {
+    if (f.types) f.types = f.types.filter((i) => keep[i]).map((i) => map[i]);
+  }
+  return merged;
+}
+
 // ---------------------------------------------------------------------------
 // 增量扫描缓存：按文件存上一次的解析结果，没变的文件就不再解析
 // ---------------------------------------------------------------------------
 
 const CACHE_NAME = '.scan-cache.json';
-
 /** 引擎指纹：代码/语言表/预处理改了，缓存就不能再用（不然会拿旧规则的结果） */
 function engineStamp() {
   const files = ['scan.mjs', 'languages.mjs', 'preprocess.mjs'];
@@ -2042,7 +2138,10 @@ export async function scan(opts) {
   // 按 collectFiles 的顺序合并（缓存命中的 + 新解析的）：顺序稳定，只改几个文件时 id 不会乱跳
   const byRel = new Map(reused);
   for (const p of freshParts) for (const pf of p.files || []) byRel.set(pf.rel, pf);
-  const { fileRecs, allTypes, allRefs, allUses, fileNamespaces, failures } = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
+  const merged = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
+  // 按需候选（OCaml 的值）在这里落地：只留"真被限定名指到"的那些，并重编 id。
+  // 没有候选的语言此函数直接原样返回，零影响。
+  const { fileRecs, allTypes, allRefs, allUses, fileNamespaces, failures } = pruneOnDemandTypes(merged);
 
   // C/C++ 的 **include 闭包**（≤2 跳）：A include 了 B、B include 了 C → A 也能撑住 C 里的引用。
   // 实测 redis / fmt / ocaml：tsdn_t 这类类型全在被“间接 include”的内部头文件里（jemalloc_internal_includes.h

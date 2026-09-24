@@ -45,6 +45,27 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    dir: 'ocaml-cross',
+    lang: 'ocaml',
+    // 跨文件**值**引用（2026-09-24）：OCaml 最要紧的一类依赖 —— 函数级跨模块。
+    // 模块里的值默认**不发节点**（全量会让图涨 3.6 倍、还混 8.5% 垃圾名），
+    // 改成"按需候选"：只有真被限定名引用指到的值才留节点。
+    // 这个夹具同时 pin 住两件事：
+    //   ① `Env.normalize` 被 `use.ml` 引用 → 值节点要在、边要跨文件
+    //   ② `Env.unused_local_helper` **没人引用** → 不许在图上留节点（裁剪不能静默失效）
+    files: 2,
+    types: 3,                                   // Env[module] + Env.normalize[value] + use.ml[module]
+    names: ['Env', 'normalize', 'use'],
+    kinds: { module: 2, value: 1 },
+    importsMin: 0,
+    docs: 0,
+    membersMin: 1,
+    // 名字口径：names / edgeWeights 都按 `t.name` 比（合成模块节点的 name 是去扩展名的 `use`，
+    // 它的 fqn 才是 `use.ml`）；限定名的价值在 fqn，这里按简单名指代即可。
+    edgeWeights: [['use', 'normalize', 'ref', 1]],
+    errorsMax: 0,
+  },
+  {
     dir: 'ocaml',
     lang: 'ocaml',
     // 2026-09-17 起顶层 let 也能取名了 → 跟 Go/C/Rust 一样会合成一个 module 节点装上它们

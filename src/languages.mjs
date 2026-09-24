@@ -939,6 +939,15 @@ export const LANGUAGES = {
       constructor_declaration: 'enumValue',
       field_declaration: 'field',
     },
+    // 模块里的**值**要能当限定名引用的目标（`Env.normalize`、`List.iter`）—— 实测某真项目里
+    // 限定名引用中"值"占 1,668 条、"类型"只占 164 条，值才是函数级跨模块依赖的主体。
+    // 但不给它们**全量**发节点：实测会多 53,074 个节点（图 3.6 倍）、其中 90% 没有任何边指向它、
+    // 还混着 8.5% 的模式解构垃圾名（`(n', b)`、`()`）。所以走**按需候选**：
+    // 标 onDemand + hasModulePrefix，父进程只保留真被限定名指到的（见 pruneOnDemandTypes）。
+    onDemandTypes: {
+      value_definition: 'value',
+      value_specification: 'value',
+    },
     imports: {},
     baseFields: [],
     baseNodes: [],
