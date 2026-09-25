@@ -412,4 +412,33 @@ export const EXTRA_CASES = [
     ],
     errorsMax: 0,
   },
+  {
+    // 文件模块里的成员 + 模块别名（2026-09-25 查出**两个真 bug**，都是"图上少边、还不报错"）：
+    //   ① `fileModuleNamespace`（`lib.ml` 就是模块 `Lib`）把文件名并进节点 ns → 本文件里
+    //      `module M = struct let iter … end` 的 `iter` 在图上叫 `Lib.M.iter`。裁剪"按需候选"时
+    //      按"引用名是 fqn 的后缀"比，而别的文件写的是 `M.iter` / `Lib.M.iter` ——
+    //      `Lib.M.iter` 确实以 `.Lib.M.iter` 结尾，但 `M.iter`（去掉文件前缀那个）不是 →
+    //      真节点被当垃圾剪掉，整条真依赖直接丢。
+    //   ② 模块别名 `module B = M`：`B.iter` 指右边那个模块。不认这条，限定名会掉进后缀档撞上
+    //      "别人文件里同名嵌套模块"（实测 `stdlib/string.ml:30 module B = Bytes` 的 `B.create`
+    //      接到了 `testsuite/…/mctest.ml` 的 `Mctest.B.create`）。
+    // 钉住两头：本文件里 `B.iter` 必须接到 `Lib.M.iter`（别名接对）；
+    //          跨文件 `Lib.M.iter` 必须接到（文件模块里的成员要能指到）；
+    //          而 `refer.ml` 里那个同名的 `C.iter` **不许**被当成 `C` 的成员接过去。
+    dir: 'ocaml-nested',
+    lang: 'ocaml',
+    types: 11,                                  // Lib.M / Lib.M.iter / Lib.B / via_alias / Lib.C / Lib.top + 引用的值
+    names: ['M', 'B', 'C', 'iter', 'via_alias', 'via_missing_alias', 'top'],
+    kinds: { module: 6, value: 5 },
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    // 别名解析：`module B = M` → `B.iter` 接到 `Lib.M.iter`（同文件那一档）
+    refEdges: [
+      ['Lib.via_alias', 'Lib.M.iter', true],
+      ['Lib.M.iter', 'Refer.C.iter', false],     // 文件模块里的成员不许被同名嵌套模块抢走
+    ],
+    // 两条 unresolved：`Lib.B.iter`（refer.ml 里没有别名 B）与 `C.iter`（别名右边不在图里）
+    errorsMax: 0,
+  },
 ];

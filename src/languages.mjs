@@ -990,6 +990,29 @@ export const LANGUAGES = {
       collect(binding);
       return out.length ? out : null;
     },
+    /**
+     * **模块别名**：`module B = Bytes` → `{name:'B', target:'Bytes'}`。
+     *
+     * 别名右边**没有定义**，`B.create` 指的是右边那个模块的 create。不认这条，限定名就掉进
+     * 后缀档去撞同名嵌套模块（实测 `stdlib/string.ml:30 module B = Bytes`，第 70 行的
+     * `B.create` 接到了 `testsuite/tests/parallel/mctest.ml` 的 `Mctest.B.create`）。
+     *
+     * 判定要**紧**，下面几种都不算别名：
+     *   · `module M = struct … end`（右边是结构体：这是定义）
+     *   · 函子参数（`module Make (Ord : T)` —— 走上面的 moduleParameterOf）
+     *   · `module Make : functor … -> S` / `module T : sig … end`（右边是约束，不是路径）
+     * 只认"右边是一个模块路径（`module_path` / `extended_module_path`）"这一种。
+     */
+    moduleAliasOf: (node) => {
+      const binding = node.namedChildren.find((c) => c.type === 'module_binding');
+      if (!binding) return null;
+      if (binding.namedChildren.some((c) => c.type === 'module_parameter' || c.type === 'functor_type')) return null;
+      const nm = binding.namedChildren.find((c) => c.type === 'module_name');
+      if (!nm || !nm.text) return null;
+      const rhs = binding.namedChildren.find((c) => c.type === 'module_path' || c.type === 'extended_module_path');
+      if (!rhs || !rhs.text) return null;
+      return { name: nm.text, target: rhs.text };
+    },
     refTypes: ['value_path', 'type_constructor_path'],
     refFilter: (node) => node.namedChildren.some((c) => c.type === 'module_path' || c.type === 'extended_module_path'),
     types: {

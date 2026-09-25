@@ -850,6 +850,19 @@ function countErrorNodes(node) {
 }
 
 /**
+ * 文件名主干 → 文件模块名（OCaml 的 `foo.ml` 就是模块 `Foo`）。
+ *
+ * 单独抽出来是因为**两处**都要用同一套算法：提取侧给节点加前缀（`fileModuleNs`）、
+ * 裁剪侧再把它去掉（`pruneOnDemandTypes` 的 `fileModuleStems`）。两处算法一旦不一致，
+ * 就会出现"加了前缀却去不掉" → 真节点被当垃圾剪掉（实测过一次，见那段注释）。
+ */
+function fileModuleStemOf(fileRel) {
+  const stem = String(fileRel || '').replace(/\.[^.]+$/, '').split('/').pop();
+  if (!stem || !/^[A-Za-z_][A-Za-z0-9_']*$/.test(stem)) return null;
+  return stem.charAt(0).toUpperCase() + stem.slice(1);
+}
+
+/**
  * 提取一个文件的全部事实。
  * @returns {{types: object[], imports: string[], refs: object[], namespaces: string[], commentRows: number, decisions: number}}
  */
@@ -906,6 +919,19 @@ function extractFile(source, tree, lang, fileRel) {
   const abstractScopeStack = [];
   // 每个类型节点带一份"本文件里、在该节点位置可见的抽象前缀"。父进程建边时按名字查（见 resolveName）。
   const abstractScopes = new Map();   // typeIndex -> string[]（去重、保持首次出现顺序）
+  /**
+   * 文件的**模块别名表**：`module B = Bytes` → `{B: 'Bytes'}`。
+   *
+   * 别名不是定义：`B` 本身没有任何成员，`B.create` 指的是**右边那个模块**的 create。不认这条，
+   * 限定名解析就会拿 `B.create` 去撞后缀档（实测 `stdlib/string.ml` 的 `B.create` 接到了
+   * `testsuite/tests/parallel/mctest.ml` 的 `Mctest.B.create` —— 而 `string.ml:30` 写着
+   * `module B = Bytes`）。
+   *
+   * 只处理**文件级**的别名（`module X = <路径>`），限定名解析时只替换**第一段**：
+   * `B.create` → `Bytes.create`；`Function_decls.Function_decl.t` → `Closure_conversion_aux.Function_decls.Function_decl.t`。
+   * 别名右边的模块如果不在本次图里 → 解析照样失败 → 如实放弃（这正是"宁缺勿错"要的）。
+   */
+  const aliases = new Map();
   let fileNamespace = '';
   const typeStack = [];
   let errors = 0;
@@ -1051,8 +1077,7 @@ function extractFile(source, tree, lang, fileRel) {
     return rec;
   }
 
-  /** 造类型记录 + 压栈 + 递归收成员（普通的类型声明走这条） */
-  function emitType(node, lang, kind, extra) {
+  /** 造类型记录 + 压栈 + 递归收成员（普通的类型声明走这条） */  function emitType(node, lang, kind, extra) {
     const rec = addTypeNode(node, lang, kind, undefined, extra);
     // 基类子树不再当引用重复统计
     const baseChildren = new Set();
@@ -1120,6 +1145,12 @@ function extractFile(source, tree, lang, fileRel) {
         // 声明 `moduleParameterOf`；没声明的语言这里整个是 no-op。
         const paramNames = lang.moduleParameterOf ? lang.moduleParameterOf(node) : null;
         if (paramNames) for (const pn of paramNames) abstractScopeStack.push([pn, true]);
+        // OCaml 的**模块别名**：`module B = Bytes` —— 别名本身不是定义，右边指向哪个模块由
+        // 构建系统决定。别的文件（或本文件别处）写 `B.create` 时，正确的解读是 `Bytes.create`；
+        // 不认这条，`B.create` 就会掉进后缀档撞上别人文件里的同名嵌套模块。语言在 profile 里
+        // 声明 `moduleAliasOf`；没声明的语言是 no-op。
+        const aliasOf = lang.moduleAliasOf ? lang.moduleAliasOf(node) : null;
+        if (aliasOf) aliases.set(aliasOf.name, aliasOf.target);
         // ⚠ 命名空间节点**自己**通常不成节点（Java/Kotlin 的 package 语句、C# 的 namespace 块都不是类型）。
         // 但 OCaml 的 `module` 是**实体**：既开作用域又是个可被引用的模块。少了它，图上就没有
         // "模块"这个节点了（实测 fixture：类型数 4→3、`Shape` 整个消失）。
@@ -1255,13 +1286,13 @@ function extractFile(source, tree, lang, fileRel) {
   const fileModuleNs = () => {
     if (!lang.fileModuleNamespace) return null;
     const stem = String(fileRel || '').replace(/\.[^.]+$/, '').split('/').pop();
-    if (!stem || !/^[A-Za-z_][A-Za-z0-9_']*$/.test(stem)) return null;
-    const cap = stem.charAt(0).toUpperCase() + stem.slice(1);
+    const cap = fileModuleStemOf(fileRel);
+    if (!cap) return null;
     // 顶层已存在同名模块（`module List = …`）→ 不加前缀（那是显式的根层名）
     for (const c of tree.rootNode.namedChildren) {
       if (c.type !== 'module_definition') continue;
       const nm = nameOf(c, lang);
-      if (nm && nm.toLowerCase() === stem.toLowerCase()) return null;
+      if (nm && stem && nm.toLowerCase() === stem.toLowerCase()) return null;
     }
     return cap;
   };
@@ -1275,7 +1306,7 @@ function extractFile(source, tree, lang, fileRel) {
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
     console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
   }
-  return { types, abstractScopes, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, abstractScopes, aliases, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -1714,8 +1745,7 @@ async function extractFiles(files) {
         // 就认不出候选，裁剪静默失效（实测踩过：`Env.unused` 这种没被引用的值也留在了图上）。
         ...(t.onDemand ? { onDemand: true, hasModulePrefix: !!t.hasModulePrefix } : null),
         // 抽象前缀（函子参数）：只在这个节点位置**真能**构成抽象时才写，别给每个节点加个空数组
-        ...(facts.abstractScopes?.has(t.index) ? { abstract: facts.abstractScopes.get(t.index) } : null),
-        fanIn: 0,
+        ...(facts.abstractScopes?.has(t.index) ? { abstract: facts.abstractScopes.get(t.index) } : null),        fanIn: 0,
         fanOut: 0,
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
       });
@@ -1796,6 +1826,9 @@ async function extractFiles(files) {
     if (facts.reexports.length) part.file.reexports = facts.reexports;
     if (facts.partOf) part.file.partOf = facts.partOf;
     if (facts.fileDoc) part.file.doc = facts.fileDoc;
+    // 模块别名表（OCaml 的 `module B = Bytes`）：解析限定名时要用（见 aliases 的说明）。
+    // 只在这个文件真有别名时才写，别给每个文件加个空对象。
+    if (facts.aliases?.size) part.file.aliases = Object.fromEntries(facts.aliases);
     if (isTestPath(f.rel)) part.file.isTest = true;
     part.ns = facts.namespaces;
     parts.push(part);
@@ -1877,19 +1910,44 @@ function pruneOnDemandTypes(merged) {
   for (const r of merged.allRefs || []) {
     if (typeof r.name === 'string' && r.name.includes('.')) reachable.add(r.name);
   }
-  const isReachable = (t) => {
+  /**
+   * 候选的"去文件模块前缀"名字 —— 比 fqn 多一个候选形态。
+   *
+   * 为什么需要：`fileModuleNamespace`（OCaml 的 `foo.ml` 本身是模块 `Foo`）会把文件名并进
+   * **每个**节点的 ns —— 于是 `a.ml` 里 `module M` 下的 `let iter`，fqn 是 `A.M.iter`，
+   * 而别处写的引用是 `M.iter`。裁剪时按"引用名是 fqn 的后缀"比 → `M.iter` 不是
+   * `A.M.iter` 的后缀（它是**去掉文件前缀**那个）→ 真节点被当垃圾剪掉。
+   * 实测最小复现：`module M = struct let iter x = x end` + 另一文件 `M.iter 3`
+   * → 0 条边、1 条 unresolved（`工作文档\样本库\probe-ondemand-prune.mjs`）。
+   *
+   * ⚠ 判据是**恰好相等**，不是"后缀"。第一版写成 `n.endsWith('.' + alt)`，结果把
+   * `CSEgen.v`、`Arch.size_addr`… 这类**只在模块内部当裸名用**的值全留下了（实测留了
+   * 18,229 个值节点、其中 9,981 个一条边都没有 = 25% 有入边，基线是 85%）——图涨 1.6 倍
+   * 却没换来对应边数。只有"引用名**正好**是去掉文件模块前缀后的名字"才是真被指到。
+   */
+  const fileModuleStems = new Map();               // typeIndex -> 去掉文件模块前缀后的 fqn
+  for (let i = 0; i < all.length; i++) {
+    const t = all[i];
+    if (!t.hasModulePrefix || !t.fqn) continue;
+    const fr = merged.fileRecs?.[t.file];
+    const stem = fr ? fileModuleStemOf(fr.path) : null;
+    if (!stem) continue;
+    if (t.fqn.startsWith(`${stem}.`)) fileModuleStems.set(i, t.fqn.slice(stem.length + 1));
+  }
+  const isReachable = (t, i) => {
     if (!t.hasModulePrefix) return false;
     for (const n of reachable) {
       if (n === t.fqn || n.endsWith(`.${t.fqn}`)) return true;
     }
-    return false;
+    const alt = fileModuleStems.get(i);
+    return Boolean(alt) && reachable.has(alt);      // 恰好相等（见上面那段 ⚠）
   };
 
   const keep = new Array(all.length).fill(true);
   let removed = 0;
   for (let i = 0; i < all.length; i++) {
     const t = all[i];
-    if (t.onDemand && !isReachable(t)) { keep[i] = false; removed++; }
+    if (t.onDemand && !isReachable(t, i)) { keep[i] = false; removed++; }
   }
   if (!removed) return merged;
 
@@ -2596,6 +2654,14 @@ export async function scan(opts) {
   };
 
   const unresolved = { ambiguous: 0, unknown: 0 };
+  /**
+   * 诊断：`CA_DEBUG_REF=<名字片段>` + `CA_DEBUG_REF_OUT=<文件>` 时，把"这个引用名挑了哪些候选、
+   * 最后选中谁"写进那个文件。**必须分开两个环境变量**：解析子进程也会跑同一个函数，如果拿
+   * "片段"当文件名，子进程收尾时会用空日志把父进程写的文件覆盖掉（实测踩过：文件 0 行）。
+   * 也不能用 console.error —— 子进程的 stderr 被父进程管道收走，正常跑的时候根本看不见。
+   */
+  const debugRefLog = [];
+  const dbgRef = (msg) => { if (process.env.CA_DEBUG_REF) debugRefLog.push(msg); };
   const resolveName = (name, fromTypeId) => {
     // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的，
     // 所以必须按完整限定名精确匹配 —— 匹配不上就**放弃**，绝不能退化成"按叶子名撞"。
@@ -2638,6 +2704,22 @@ export async function scan(opts) {
           return null;
         }
       }
+      /**
+       * **模块别名替换**（OCaml 的 `module B = Bytes`）：把人写的第一段换成右边那个模块路径，
+       * 再照常解析。`B.create` → `Bytes.create`。
+       *
+       * 为什么放在这里而不是提取期：别名表是**整个文件**的（`string.ml` 第 30 行定义、第 70 行用），
+       * 而引用是按出现顺序抽的；在建边时按"引用方文件的别名表"替换一次最省事，也不改 refs 的
+       * 既有形状（权重、owner 都不动）。替换后解析失败 → 如实放弃（别名右边不在本次图里时正是
+       * 我们要的结果：不再黏到别人文件里的同名嵌套模块上）。
+       */
+      const aliasTable = fileRecs[from?.file]?.aliases;
+      const refName = (() => {
+        if (!aliasTable || name.indexOf('.') <= 0) return name;
+        const head = name.slice(0, name.indexOf('.'));
+        const target = aliasTable[head];
+        return target ? `${target}${name.slice(head.length)}` : name;
+      })();
       const fromLang = fileRecs[from?.file]?.lang;
       const rawPool = (bySimpleName.get(leaf) || []).filter((id) => {
         // ⚠ **只在同族内解析限定名**。跨族的"限定名"没有意义（C 里不会出现 `List.map`），
@@ -2675,21 +2757,69 @@ export async function scan(opts) {
       //   （实测 12 条：`Inline_and_simplify_aux.Result` 里的 `Env.t` 会从本文件的
       //   `Inline_and_simplify_aux.Env.t` 跑到 `typing/env.ml`）。
       const own = allTypes[fromTypeId]?.file;
+      /**
+       * 候选的"去文件模块前缀"名字（`A.M.iter` → `M.iter`）。
+       *
+       * `fileModuleNamespace`（OCaml 的 `foo.ml` 就是模块 `Foo`）会把文件名并进每个节点的 ns，
+       * 但**别的文件写引用时不会写这个前缀**（`M.iter` / `List.map`）—— 于是"全名命中"这一档
+       * 看不见文件模块里的成员。实测：全项目文件模块里的顶层函数与嵌套模块成员被整套漏掉
+       * （`M.iter` 只能撞上测试目录里的同名模块）。裁剪侧同一处判断见 pruneOnDemandTypes。
+       *
+       * ⚠ 只在两个地方用，**绝不能当后缀规则用**：
+       *   ① 同文件候选：`stripped === name`（"本文件里就写着这个名字"，最硬的一档）；
+       *   ② 全名命中：`stripped === name` 同样只认恰好相等。
+       * 第一版把它塞进 `isRoot`（`t.name === name` 那一支）与 `isSuffix`，等于让**任何**文件里
+       * 嵌套的同名模块都命中"全名/后缀"两档 —— 实测 `List.map` 因此多出一个候选
+       * `Let_syntax.List.map@testsuite/…`，再被"归属锚点"反选，真源码→测试目录的边从 4 条
+       * 涨到 591 条（`工作文档\样本库\analyze-ref-dbg.mjs` 就是为这次诊断写的）。
+       */
+      const strippedFqnOf = (id) => {
+        const t = allTypes[id];
+        if (!t || !t.fqn) return null;
+        const stem = fileModuleStemOf(fileRecs[t.file]?.path);
+        return stem && t.fqn.startsWith(`${stem}.`) ? t.fqn.slice(stem.length + 1) : null;
+      };
+      /**
+       * ⚠ "去文件模块前缀"这个等价名**只在候选与引用方同一个文件时**才成立。
+       *
+       * 为什么：文件模块名（`foo.ml` → `Foo`）是**隐式**绑定的，本文件里写 `M.iter` 指的就是
+       * 本文件的 `M`；别的文件引用它必须写全 `A.M.iter`。第一版当成跨文件也成立的"等价名"，
+       * 出了一个很隐蔽的错：`testsuite/tests/let-syntax/let_syntax.ml` 的文件模块名**恰好是
+       * `Let_syntax`**，它的 `Let_syntax.List.map` 去掉前缀正好等于 `List.map` —— 真源码里的
+       * `List.map` 于是全被吸到那个测试文件上（实测真源码→测试目录的边 4 → 591）。
+       * 所以这里必须带 `t.file === own`。
+       */
       const isRoot = (id) => {
         const t = allTypes[id];
-        return !!t && (t.fqn === name || t.name === name);
+        if (!t) return false;
+        if (t.fqn === refName || t.name === refName) return true;
+        return t.file === own && strippedFqnOf(id) === refName;
+      };
+      const sameFileNamed = (id) => {
+        const t = allTypes[id];
+        return !!t && t.file === own && strippedFqnOf(id) === refName;
       };
       const isSuffix = (id) => {
         const t = allTypes[id];
         if (!t) return false;
         for (const cand of [t.fqn, t.name]) {
-          if (typeof cand === 'string' && cand && cand.endsWith(`.${name}`)) return true;
+          if (typeof cand === 'string' && cand && cand.endsWith(`.${refName}`)) return true;
         }
         return false;
       };
-      const sameFileHit = pool.filter((id) => allTypes[id]?.file === own && (isRoot(id) || isSuffix(id)));
+      // ① 同文件（按 fqn / 简单名 / 去文件模块前缀名）→ ② 全名命中 → ③ 后缀命中
+      const sameFileHit = pool.filter((id) => allTypes[id]?.file === own && (isRoot(id) || isSuffix(id) || sameFileNamed(id)));
       const rootHit = pool.filter(isRoot);
       const exact = sameFileHit.length ? sameFileHit : rootHit.length ? rootHit : pool.filter(isSuffix);
+      const dbgNames = (ids) => ids.map((id) => {
+        const t = allTypes[id];
+        return `${t.fqn || t.name}@${fileRecs[t.file]?.path}`;
+      }).join(' , ');
+      if (process.env.CA_DEBUG_REF && name.includes(process.env.CA_DEBUG_REF) && debugRefLog.length < 2000) {
+        dbgRef(`ref=${name} from=${allTypes[fromTypeId]?.fqn}@${fileRecs[allTypes[fromTypeId]?.file]?.path}`
+          + ` | pool=${dbgNames(pool)} | sameFile=${dbgNames(sameFileHit)} | root=${dbgNames(rootHit)}`
+          + ` | exact=${dbgNames(exact)}`);
+      }
       if (exact.length === 1) {
         const id = exact[0];
         // `uniq: true`：限定名**精确匹配**上了，不是"从多个同名的里近似挑一个"，
@@ -2703,7 +2833,7 @@ export async function scan(opts) {
         //   OCaml 里 `List.map` 的 `map` 就挂在某个 `List` 模块下面 —— 用这条把"成员属于谁"问清楚，
         //   比按文件主干猜可靠（实测主干法命中不了：图里 19 个叫 List 的模块，没有一个定义在 list.ml）
         // 挑不出唯一 → 放弃（宁缺勿错）
-        const modName = name.slice(0, name.lastIndexOf('.')).split('.').pop();
+        const modName = refName.slice(0, refName.lastIndexOf('.')).split('.').pop();
         const owner = (id) => {
           const t = allTypes[id];
           return t && t.parent != null ? allTypes[t.parent] : null;
@@ -2936,6 +3066,9 @@ export async function scan(opts) {
   // 图已经建完 → 只给解析期用的内部键在这里统一摘掉（`abstract` 就是建边时用的，见
   // stripResolveOnlyKeys）。放在**造 bundle 之前**：`serve` / `mcp` 这些不是走 scanToDisk
   // 写盘的路径也拿的是这个对象，漏了它们 bundle 里就带着内部键。
+  if (process.env.CA_DEBUG_REF_OUT) {
+    try { fs.writeFileSync(process.env.CA_DEBUG_REF_OUT, debugRefLog.join('\n') + '\n'); } catch { /* 诊断用，写不了就算了 */ }
+  }
   stripResolveOnlyKeys({ allTypes });
   const bundle = {
     schema: SCHEMA,
