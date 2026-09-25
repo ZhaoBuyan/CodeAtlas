@@ -1748,16 +1748,58 @@ async function extractFiles(files) {
     const code = loc - blank - comment;
 
     const typeIds = [];
-    for (const t of facts.types) {
+    /**
+     * 同一个文件里**同 kind + 同 fqn 只留一个**节点。
+     *
+     * 为什么需要（实测踩过）：OCaml 的 `external` 声明与同名的 `let` 定义可以**同时**出现在一个
+     * 文件里（`stdlib/array.ml` 就是：`external length : … = "%array_length"` 与后面包装它的
+     * `let length`）。两个都发按需节点 → 同一个 fqn 在这个文件里有两个节点 → 解析时
+     * `Array.length` 的候选有两个都叫这个名字，"全名命中"挑不出唯一 → **510 条引用整批放弃**
+     * （实测：那批 `no-exact` 里 510 条全是 `Array.length`）。同一个文件里的重复定义在语义上
+     * 就是同一个符号（后定义的遮蔽前者），只留一个是对的。
+     *
+     * ⚠ 两条都踩过：
+     *   ① `typeIds` 必须与 `facts.types` **同长同下标** —— 它是给 `typeIds[t.parent]` 查的，
+     *      只 push 保留的那些会让 parent 整体错位（parent 错位 → 抽象前缀传递跟着乱 →
+     *      接错边从 1 条涨到 8 条）；
+     *   ② 被合并掉的那个节点**身上的引用（refs / uses）要归到留下的那个上** —— 引用是按节点记的，
+     *      丢了等于把那段代码里的引用整片抹掉。
+     */
+    const keepIdx = new Map();                 // facts.types 下标 → part.types 下标
+    const seenInFile = new Map();              // dedupKey → 第一次出现的下标
+    for (let i = 0; i < facts.types.length; i++) {
+      const t = facts.types[i];
+      // ⚠ 只对**按需候选**去重（OCaml 的 `let` / `external` / `val`）：普通类型**绝不能**按
+      //   "同 kind + 同 fqn"合并 —— Rust 里 `impl Circle` 可以有好几块、fqn 都叫
+      //   `Circle`（实测：合并后 fixtures 的 rust 门立刻红，类型 6 → 5、`Circle.new` 成员消失）。
+      const dedupKey = t.onDemand ? `${t.kind}|${t.ns ? `${t.ns}.` : ''}${t.name}` : null;
+      const first = dedupKey == null ? null : seenInFile.get(dedupKey);
+      keepIdx.set(i, first != null ? keepIdx.get(first) : part.types.length);
+      typeIds.push(keepIdx.get(i));            // 与 facts.types 同长同下标（见 ⚠ ①）
+      if (first != null) continue;
+      if (dedupKey != null) seenInFile.set(dedupKey, i);
+      part.types.push(null);                   // 占位，下面按原顺序填
+    }
+    const dupOwners = new Map();                // 留下的 id → 被合并掉的那些 facts.types 下标
+    for (const [i, id] of keepIdx) {
+      const t = facts.types[i];
+      if (!t.onDemand) continue;
+      const firstIdx = seenInFile.get(`${t.kind}|${t.ns ? `${t.ns}.` : ''}${t.name}`);
+      if (firstIdx !== i) {
+        if (!dupOwners.has(id)) dupOwners.set(id, []);
+        dupOwners.get(id).push(i);
+      }
+    }
+    for (let i = 0; i < facts.types.length; i++) {
+      const t = facts.types[i];
+      const id = keepIdx.get(i);
       const spanRows = t.endRow - t.startRow + 1;
       let tb = 0, tc = 0;
       for (let r = t.startRow; r <= t.endRow; r++) {
         if ((facts.lines[r] ?? '').trim() === '') tb++;
         else if (facts.mask[r]) tc++;
       }
-      const id = part.types.length;
-      typeIds.push(id);
-      part.types.push({
+      part.types[id] = {
         id,
         name: t.name,
         kind: t.kind,
@@ -1787,10 +1829,11 @@ async function extractFiles(files) {
         // 就认不出候选，裁剪静默失效（实测踩过：`Env.unused` 这种没被引用的值也留在了图上）。
         ...(t.onDemand ? { onDemand: true, hasModulePrefix: !!t.hasModulePrefix } : null),
         // 抽象前缀（函子参数）：只在这个节点位置**真能**构成抽象时才写，别给每个节点加个空数组
-        ...(facts.abstractScopes?.has(t.index) ? { abstract: facts.abstractScopes.get(t.index) } : null),        fanIn: 0,
+        ...(facts.abstractScopes?.has(t.index) ? { abstract: facts.abstractScopes.get(t.index) } : null),
+        fanIn: 0,
         fanOut: 0,
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
-      });
+      };
       for (const r of facts.refs) {
         if (r.owner === t.index) part.refs.push({ t: id, name: r.name, n: r.n });
       }
@@ -2705,7 +2748,8 @@ export async function scan(opts) {
   const dbgUnres = (name, fromTypeId, why, nCand) => {
     if (!process.env.CA_DEBUG_UNRESOLVED) return;
     const t = allTypes[fromTypeId];
-    unresolvedLog.push(`${name}\t${why}\t${nCand}\t${fileRecs[t?.file]?.path || '?'}`);
+    const fr = fileRecs[t?.file];
+    unresolvedLog.push(`${name}\t${why}\t${nCand}\t${fr?.lang || '?'}\t${fr?.path || '?'}`);
   };
   /**
    * 诊断：`CA_DEBUG_REF=<名字片段>` + `CA_DEBUG_REF_OUT=<文件>` 时，把"这个引用名挑了哪些候选、
@@ -2791,6 +2835,14 @@ export async function scan(opts) {
       });
       // `.ml`/`.mli` 是同一个编译单元的两面 → 候选池里先合成一个（见 collapseUnits 的说明）
       const pool = collapseUnits(rawPool, from?.file);
+      if (process.env.CA_DEBUG_COLLAPSE && name === process.env.CA_DEBUG_COLLAPSE) {
+        try {
+          fs.appendFileSync(process.env.CA_DEBUG_COLLAPSE_OUT || 'ca-collapse.log',
+            `[COLLAPSE] ${name} raw=${rawPool.length} pool=${pool.length}\n`
+            + rawPool.map((id) => `    raw ${allTypes[id].fqn}@${fileRecs[allTypes[id].file]?.path} stem=${sameUnitStem(allTypes[id])}\n`).join('')
+            + pool.map((id) => `    pool ${allTypes[id].fqn}@${fileRecs[allTypes[id].file]?.path}\n`).join(''));
+        } catch { /* 诊断用 */ }
+      }
       // 候选按证据强弱分三档，**这三档的先后不能换**（顺序是实测 oss3-ocaml 定下来的）：
       //   ① **同文件**：`module X` 在 OCaml 里常常是文件里的局部模块，本文件里写的 `X.t`
       //      指的就是它 —— 局部模块在作用域里是**确定的**，比任何跨文件推断都硬。
@@ -2863,7 +2915,23 @@ export async function scan(opts) {
       // ① 同文件（按 fqn / 简单名 / 去文件模块前缀名）→ ② 全名命中 → ③ 后缀命中
       const sameFileHit = pool.filter((id) => allTypes[id]?.file === own && (isRoot(id) || isSuffix(id) || sameFileNamed(id)));
       const rootHit = pool.filter(isRoot);
-      const exact = sameFileHit.length ? sameFileHit : rootHit.length ? rootHit : pool.filter(isSuffix);
+      let exact = sameFileHit.length ? sameFileHit : rootHit.length ? rootHit : pool.filter(isSuffix);
+      /**
+       * **同一档里既有测试文件又有非测试文件时，测试文件让位**（2026-09-25）。
+       *
+       * 为什么只在这一步降权：测试目录里什么都可能定义一份同名模块（`module Variance`、
+       * `module List`…），真源码引用标准库时**两边都在同一档**（都满足"全名命中"），
+       * 于是"挑不出唯一 → 放弃"（丢真边）或者被"归属锚点"反选（接错边）。
+       * 而**只在同一档内**降权是最保守的一刀：
+       *   · 档内只有测试候选时**不动**它们（测试目录内部互相引用照样接得上）；
+       *   · 档内有非测试候选时，测试候选不是"唯一解释"，让位；
+       *   · 同文件那一档优先级最高，**测试文件自己引用自己文件里的东西不受影响**。
+       * `isTestPath` 用的是与本项目既有口径完全相同的那套判断（见它的注释）。
+       */
+      if (exact.length > 1) {
+        const nonTest = exact.filter((id) => !isTestPath(fileRecs[allTypes[id].file]?.path));
+        if (nonTest.length) exact = nonTest;
+      }
       const dbgNames = (ids) => ids.map((id) => {
         const t = allTypes[id];
         return `${t.fqn || t.name}@${fileRecs[t.file]?.path}`;

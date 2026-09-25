@@ -470,18 +470,20 @@ export const EXTRA_CASES = [
     // （`external length : 'a array -> int = "%array_length"`，语法树上是独立节点类型 `external`）。
     // profile 里以前没声明它 → 这些函数**一次都没进过图**，引用成批接不上：实测某真项目
     // `Array.length` 511 条、`String.length` 346 条、`Array.make` 253 条全落在 unknown。
-    // 钉两头：external 是节点且指得到；**没人引用**的 external 不许进图（按需裁剪仍有效）。
+    // 另钉"**同一文件里同名 `external` + `let` 只留一个节点**"（`Prims.wrap`）—— 两个都留会让
+    // "全名命中"挑不出唯一，实测那正是 510 条 `Array.length` 被放弃的原因。
+    // 第三头：**没人引用**的 external 不许进图（按需裁剪仍有效）。
     dir: 'ocaml-external',
     lang: 'ocaml',
-    types: 4,                                   // Prims.len / Prims.make + 两个合成 module
-    names: ['len', 'make', 'prims', 'refer'],
+    types: 4,                                   // Prims.len / Prims.wrap + 两个合成 module
+    names: ['len', 'wrap', 'prims', 'refer'],
     kinds: { value: 2, module: 2 },
     importsMin: 0,
     docs: 0,
     membersMin: 0,
     refEdges: [
       ['refer.ml', 'Prims.len', true],
-      ['refer.ml', 'Prims.make', true],
+      ['refer.ml', 'Prims.wrap', true],         // 同名 external + let → 合并成一个节点，引用仍要接上
     ],
     errorsMax: 0,
   },
