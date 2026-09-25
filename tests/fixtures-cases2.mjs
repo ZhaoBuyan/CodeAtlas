@@ -465,4 +465,24 @@ export const EXTRA_CASES = [
     ],
     errorsMax: 0,
   },
+  {
+    // **`external` 声明**（2026-09-25）：OCaml 标准库里一大批最常用的函数是这么声明的
+    // （`external length : 'a array -> int = "%array_length"`，语法树上是独立节点类型 `external`）。
+    // profile 里以前没声明它 → 这些函数**一次都没进过图**，引用成批接不上：实测某真项目
+    // `Array.length` 511 条、`String.length` 346 条、`Array.make` 253 条全落在 unknown。
+    // 钉两头：external 是节点且指得到；**没人引用**的 external 不许进图（按需裁剪仍有效）。
+    dir: 'ocaml-external',
+    lang: 'ocaml',
+    types: 4,                                   // Prims.len / Prims.make + 两个合成 module
+    names: ['len', 'make', 'prims', 'refer'],
+    kinds: { value: 2, module: 2 },
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [
+      ['refer.ml', 'Prims.len', true],
+      ['refer.ml', 'Prims.make', true],
+    ],
+    errorsMax: 0,
+  },
 ];

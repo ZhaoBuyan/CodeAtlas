@@ -1027,6 +1027,12 @@ export const LANGUAGES = {
       // 接口文件在图上隐形）。**发不发节点**由 scan.mjs 的 ifaceOnly 决定：
       // 有同名 `.ml` 时不发（否则同一个 fqn 两个节点），没有时才发。
       value_specification: 'value',
+      // **`external` 声明**（`external length : 'a array -> int = "%array_length"`）——
+      // 语法树上是独立节点类型 `external`（子节点：value_name / function_type / string）。
+      // 标准库里一大批最常用的函数就是这么声明的（`Array.length` / `Array.make` / `Array.get`…），
+      // 不认它们，这些引用**成批**接不上：实测某真项目 `Array.length` 511 条、`String.length` 346 条、
+      // `Array.make` 253 条全落在 unknown。它们和 `let` 一样是模块成员，节点按需发（见 onDemandTypes）。
+      external: 'value',
       constructor_declaration: 'enumValue',
       field_declaration: 'field',
     },
@@ -1048,6 +1054,9 @@ export const LANGUAGES = {
       // （判据在 scan.mjs 的 ifaceOnly）。有实现时发它会让同一个 fqn 出现两个节点，
       // 解析器反而挑不出唯一、把已经接对的边丢掉 —— 见上面那段说明。
       value_specification: 'value',
+      // `external` 声明同样按需发节点（标准库的 `Array.length` / `Array.make` 就是它）。
+      // 它没有"`.ml` / `.mli` 同名重复"的问题（同一个名字不可能既 external 又 let）。
+      external: 'value',
     },
     // `foo.ml` 本身就是一个模块 `Foo`：它的**顶层定义就是 Foo 的成员**。
     // 不认这条，`stdlib/list.ml` 顶层的 `let map` 会登记成裸名 `map`，而别的文件写 `List.map`

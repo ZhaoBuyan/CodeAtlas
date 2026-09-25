@@ -2697,6 +2697,17 @@ export async function scan(opts) {
 
   const unresolved = { ambiguous: 0, unknown: 0 };
   /**
+   * 诊断：`CA_DEBUG_UNRESOLVED=<文件>` 时，把每个**被放弃**的引用记成一行
+   * （名字 / 叶子名候选数 / 原因 / 引用方文件），用来看"哪些名字在成批地接不上"。
+   * 与 `CA_DEBUG_REF` 一样必须落盘（解析子进程的 stderr 被父进程管道收走）。
+   */
+  const unresolvedLog = [];
+  const dbgUnres = (name, fromTypeId, why, nCand) => {
+    if (!process.env.CA_DEBUG_UNRESOLVED) return;
+    const t = allTypes[fromTypeId];
+    unresolvedLog.push(`${name}\t${why}\t${nCand}\t${fileRecs[t?.file]?.path || '?'}`);
+  };
+  /**
    * 诊断：`CA_DEBUG_REF=<名字片段>` + `CA_DEBUG_REF_OUT=<文件>` 时，把"这个引用名挑了哪些候选、
    * 最后选中谁"写进那个文件。**必须分开两个环境变量**：解析子进程也会跑同一个函数，如果拿
    * "片段"当文件名，子进程收尾时会用空日志把父进程写的文件覆盖掉（实测踩过：文件 0 行）。
@@ -2891,6 +2902,7 @@ export async function scan(opts) {
       }
       // 到这儿就是"限定名对不上 / 挑不出可信的" —— 计入 unknown 并放弃（宁可缺边，不要接错）
       unresolved.unknown++;
+      dbgUnres(refName, fromTypeId, pool.length ? 'no-exact' : 'no-candidate', pool.length);
       return null;
     }
     // ⚠ 简单名也**只在同族内**解析。跨族的名字匹配没有语义基础（C 里不会"引用" OCaml 的
@@ -2904,7 +2916,7 @@ export async function scan(opts) {
       return t && sameFamily(fileRecs[t.file]?.lang, fromLang);
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
-    if (!hit || !hit.length) { unresolved.unknown++; return null; }
+    if (!hit || !hit.length) { unresolved.unknown++; dbgUnres(name, fromTypeId, 'simple-no-candidate', 0); return null; }
     if (hit.length === 1) {
       // 唯一候选也得看 import：这个档位差很多（有 import 依据 > 只是没撞名）
       const id = hit[0];
@@ -2932,6 +2944,7 @@ export async function scan(opts) {
     });
     if (sameRoot.length === 1) return { id: sameRoot[0], evidenced: hasImportBacking(fromTypeId, sameRoot[0]) };
     unresolved.ambiguous++;
+    dbgUnres(name, fromTypeId, 'simple-ambiguous', hit.length);
     return null;
   };
 
@@ -3110,6 +3123,9 @@ export async function scan(opts) {
   // 写盘的路径也拿的是这个对象，漏了它们 bundle 里就带着内部键。
   if (process.env.CA_DEBUG_REF_OUT) {
     try { fs.writeFileSync(process.env.CA_DEBUG_REF_OUT, debugRefLog.join('\n') + '\n'); } catch { /* 诊断用，写不了就算了 */ }
+  }
+  if (process.env.CA_DEBUG_UNRESOLVED) {
+    try { fs.writeFileSync(process.env.CA_DEBUG_UNRESOLVED, unresolvedLog.join('\n') + '\n'); } catch { /* 诊断用 */ }
   }
   stripResolveOnlyKeys({ allTypes });
   const bundle = {
