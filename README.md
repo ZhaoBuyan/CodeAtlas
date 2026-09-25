@@ -483,7 +483,7 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | Shell | `.sh` `.bash` `.zsh` | ✅ fixtures + measured (nvm) (no types → module node; `source`/`.` become imports, command names become refs) |
 | Zig | `.zig` | ✅ fixtures (const X = struct/enum) |
 | Solidity | `.sol` | ✅ fixtures (contract/interface + inheritance) |
-| OCaml | `.ml` `.mli` | ✅ fixtures + measured (a 3,514-file project: modules act as namespaces, `List.map`-style qualified refs land on `stdlib/list.ml`, and a value only becomes a node when some qualified ref points at it) |
+| OCaml | `.ml` `.mli` | ✅ fixtures + measured (a 3,514-file project: modules act as namespaces, `List.map`-style qualified refs land on `stdlib/list.ml`, a value only becomes a node when some qualified ref points at it, functor parameters / module aliases resolve by scope, and a `.mli` with no sibling `.ml` still contributes its `val`s) |
 | ReScript | `.res` | ✅ fixtures (module / type / variant) |
 | Ruby | `.rb` `.rake` `.gemspec` | ✅ fixtures (class/module; `module` acts as a namespace; `attr_*` become properties; `require`/`include` become edges) |
 | HCL / Terraform | `.tf` `.tfvars` `.hcl` `.nomad` | ✅ fixtures (nodes are blocks: resource / data / module / variable / output / locals; members are attributes; references become edges) |

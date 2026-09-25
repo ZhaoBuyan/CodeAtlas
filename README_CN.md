@@ -403,7 +403,7 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | Shell | `.sh` `.bash` `.zsh` | ✅ fixtures + 实测（nvm）（无类型 → module 节点；`source` / `.` 变成 import，命令名变成引用） |
 | Zig | `.zig` | ✅ fixtures（const X = struct/enum） |
 | Solidity | `.sol` | ✅ fixtures（contract/interface + 继承） |
-| OCaml | `.ml` `.mli` | ✅ fixtures + 真项目实测（3,514 文件：模块当命名空间，`List.map` 这类限定名引用接到 `stdlib/list.ml`，值只在被限定名指到时才成节点） |
+| OCaml | `.ml` `.mli` | ✅ fixtures + 真项目实测（3,514 文件：模块当命名空间，`List.map` 这类限定名引用接到 `stdlib/list.ml`，值只在被限定名指到时才成节点；函子参数 / 模块别名按作用域解析；只有 `.mli` 没有同名 `.ml` 时接口里的 `val` 也成节点） |
 | ReScript | `.res` | ✅ fixtures（module / type / variant） |
 | Ruby | `.rb` `.rake` `.gemspec` | ✅ fixtures（class/module；`module` 当命名空间；`attr_*` 认成属性；`require`/`include` 连成依赖边） |
 | HCL / Terraform | `.tf` `.tfvars` `.hcl` `.nomad` | ✅ fixtures（节点是 block：resource / data / module / variable / output / locals；成员是 attribute；引用连成依赖边） |
