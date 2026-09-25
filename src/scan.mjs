@@ -2572,6 +2572,21 @@ export async function scan(opts) {
     if (!bySimpleName.has(t.name)) bySimpleName.set(t.name, []);
     bySimpleName.get(t.name).push(t.id);
   }
+  /**
+   * 按**限定名**建的索引（`a.b.C` → id）。
+   *
+   * 用在哪：`resolveName` 的"裸名是某条 import 的尾巴"那条规则要按前缀的**全名**精确找目标
+   * （`import org.junit.jupiter.api.Assertions.assertEquals` 的前缀是那个类的全名）。
+   * 不能走 `bySimpleName.get(叶子)` 再比 —— 那会把 `django.db` 的叶子 `db` 捞成一堆
+   * 同名节点，实测因此给 django 样本一次引入 80 条错边。
+   */
+  const byFqn = new Map();
+  for (const t of allTypes) {
+    const k = t.fqn;
+    if (!k) continue;
+    if (!byFqn.has(k)) byFqn.set(k, []);
+    byFqn.get(k).push(t.id);
+  }
 
   /**
    * 边上的 `tier`：**这条边是凭什么接上的**（写进 bundle，读侧直接读，不再重算一遍）。
@@ -2984,7 +2999,45 @@ export async function scan(opts) {
       return t && sameFamily(fileRecs[t.file]?.lang, fromLang);
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
-    if (!hit || !hit.length) { unresolved.unknown++; dbgUnres(name, fromTypeId, 'simple-no-candidate', 0); return null; }
+    if (!hit || !hit.length) {
+      /**
+       * **裸名是"某条 import 的尾巴"** → 接到那条 import 的**前缀**上（2026-09-25）。
+       *
+       * 场景（实测 junit5 一个样本就有 3,193 条真可接的）：Java 的静态导入
+       * `import static org.junit.jupiter.api.Assertions.assertEquals;` 之后代码里写裸名
+       * `assertEquals(...)`。**成员不是图上的节点**（Java 只发 class/interface/enum/record），
+       * 所以裸名一个候选都找不到 → 这条跨包依赖整批丢（同一个样本 65,666 条被放弃里，
+       * 12,546 条是"某条 import 的尾巴"，其中 3,193 条的前缀在图上有唯一节点）。
+       *
+       * 判据很紧，缺一不可：
+       *   · 只在**裸名一个候选都没有**时才走这条（有候选时照原来的分档逻辑，不抢）；
+       *   · 引用方文件里必须**真有一条** import 以 `.名字` / `::名字` 结尾（显式依据，不是猜）；
+       *   · 前缀必须**含分隔符**（`a.b.C` / `a::b`）—— 单段前缀只证明"某个顶层名字"，
+       *     是噪声源（实测：`name=db` + `imp=django.db` → 前缀 `django` 命中了
+       *     `django/template/backends/django.py` 那个合成节点，一次引入 80 条错边）；
+       *   · 前缀在图上必须**只有一个节点**（多个 → 放弃，"宁缺勿错"）。
+       * 目标选**前缀**（类 / 模块）而不是成员：成员在图上不存在，而"这个文件依赖那个类"
+       * 正是用户与 AI 要问的那件事。
+       *
+       * ⚠ 查前缀**必须按 fqn 精确比**，不能用"叶子名回表再比" —— `django.db` 的叶子是 `db`，
+       *   回表会把 `django/db.py`（或任何叫 db 的节点）捞出来当答案。
+       */
+      const imps = fileRecs[allTypes[fromTypeId]?.file]?.imports || [];
+      for (const imp of imps) {
+        if (!(imp.endsWith(`.${name}`) || imp.endsWith(`::${name}`))) continue;
+        const prefix = imp.slice(0, imp.length - name.length - 1);
+        if (!prefix || !/[.:]/.test(prefix)) continue;   // 单段前缀不要（见上面那条）
+        const cands = (byFqn.get(prefix) || []).filter((id) => sameFamily(fileRecs[allTypes[id].file]?.lang, fromLang));
+        const one = collapseUnits(cands, allTypes[fromTypeId]?.file);
+        if (one.length === 1) {
+          const id = one[0];
+          return { id, uniq: true, import: true };
+        }
+      }
+      unresolved.unknown++;
+      dbgUnres(name, fromTypeId, 'simple-no-candidate', 0);
+      return null;
+    }
     if (hit.length === 1) {
       // 唯一候选也得看 import：这个档位差很多（有 import 依据 > 只是没撞名）
       const id = hit[0];
