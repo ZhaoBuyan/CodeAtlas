@@ -1022,6 +1022,11 @@ export const LANGUAGES = {
     },
     members: {
       value_definition: 'value',
+      // `.mli` 的 `val` 也要走"成员分支" —— `emitOnDemandValue` 只在那条分支里被调用，
+      // 不上这张表就永远走不到（2026-09-25 之前这里确实没有它，于是整个"只有 .mli"的
+      // 接口文件在图上隐形）。**发不发节点**由 scan.mjs 的 ifaceOnly 决定：
+      // 有同名 `.ml` 时不发（否则同一个 fqn 两个节点），没有时才发。
+      value_specification: 'value',
       constructor_declaration: 'enumValue',
       field_declaration: 'field',
     },
@@ -1032,15 +1037,17 @@ export const LANGUAGES = {
     // 标 onDemand + hasModulePrefix，父进程只保留真被限定名指到的（见 pruneOnDemandTypes）。
     //
     // ⚠ 这里**只有 `value_definition`（`.ml` 的 `let`）**，曾经还写着 `value_specification`
-    //   （`.mli` 的 `val`）—— 那是**死条目**：`emitOnDemandValue` 只在"成员分支"里被调用，
-    //   而 `value_specification` 不在上面的 `members` 里，永远走不到（实测：一个只有 `a.mli`
-    //   （`val f`）的目录扫出来图上根本没有 `A.f` 节点，引用 `A.f` 直接 unresolved）。
-    //   删掉而不是补上，是因为补上会**更糟**：`.ml` 与 `.mli` 会各发一个同 fqn 的节点
-    //   （同一个编译单元两个节点，见 languages.mjs 顶部那段"已知残留"），解析器就更挑不出唯一，
-    //   反而会把已经接对的 `List.map` 那批边丢掉。要真做，得先按"同名 `.ml` 不在本次图里"
-    //   设条件 —— 那才是有价值的窄修，先记在这里。
+    // ⚠ `value_specification`（`.mli` 的 `val`）曾经挂在这里、却**永远走不到** ——
+    //   `emitOnDemandValue` 只在"成员分支"里被调用，而它当时**不在上面的 `members` 表**里
+    //   （实测：只有 `a.mli`（`val f`）的目录扫出来图上根本没有 `A.f` 节点，引用 `A.f` 直接
+    //   unresolved）。2026-09-25 把它补进 `members`，并按"同名 `.ml` 不在本次图里"设了条件 ——
+    //   见 scan.mjs 的 ifaceOnly 与下面 onDemandTypes 那两条注释。
     onDemandTypes: {
       value_definition: 'value',
+      // `.mli` 的 `val`：**只有**在"这个 .mli 没有同名 .ml 在本次扫描里"时才发节点
+      // （判据在 scan.mjs 的 ifaceOnly）。有实现时发它会让同一个 fqn 出现两个节点，
+      // 解析器反而挑不出唯一、把已经接对的边丢掉 —— 见上面那段说明。
+      value_specification: 'value',
     },
     // `foo.ml` 本身就是一个模块 `Foo`：它的**顶层定义就是 Foo 的成员**。
     // 不认这条，`stdlib/list.ml` 顶层的 `let map` 会登记成裸名 `map`，而别的文件写 `List.map`

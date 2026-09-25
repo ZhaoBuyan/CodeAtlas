@@ -863,10 +863,23 @@ function fileModuleStemOf(fileRel) {
 }
 
 /**
+ * 这个 `.mli` 是不是**没有实现**的接口文件？（`foo.mli` 存在、同目录 `foo.ml` 不在本次扫描里）
+ *
+ * 只对 OCaml 有意义。用于决定"要不要给 `val` 发按需节点"：`.ml` 在的时候不发（否则同一个 fqn
+ * 两个节点、解析器挑不出唯一），`.ml` 不在的时候发（否则整个接口文件在图上隐形）。
+ */
+function ifaceOnly(fileRel, scannedRels) {
+  const rel = String(fileRel || '');
+  if (!rel.endsWith('.mli')) return false;
+  if (!scannedRels) return true;                      // 拿不到清单（内部直调）→ 当作"没有实现"
+  return !scannedRels.has(`${rel.slice(0, -4)}.ml`);
+}
+
+/**
  * 提取一个文件的全部事实。
  * @returns {{types: object[], imports: string[], refs: object[], namespaces: string[], commentRows: number, decisions: number}}
  */
-function extractFile(source, tree, lang, fileRel) {
+function extractFile(source, tree, lang, fileRel, scannedRels) {
   const lines = source.split(/\r?\n/);
   const mask = new Uint8Array(lines.length);
   const types = [];
@@ -1067,17 +1080,45 @@ function extractFile(source, tree, lang, fileRel) {
     if (!lang.onDemandTypes) return null;
     const kind = lang.onDemandTypes[node.type];
     if (!kind) return null;
-    if (!nsStack.length) return null;                  // 顶层值不可能被 `Module.x` 指到
+    /**
+     * `.mli` 的 `val` 只在**没有实现**时才发节点（2026-09-25）。
+     *
+     * 背景：`.ml` 与 `.mli` 是同一个编译单元的两面，而值是**按需候选** —— 给 `val` 也发节点，
+     * 同一个 fqn 就会有两个节点（`Env.t` 在 `env.ml` 与 `env.mli` 各一个），解析器反而更挑不出
+     * 唯一，会把已经接对的 `List.map` 那批边丢掉（见 languages.mjs 里那段"删掉而不是补上"）。
+     *
+     * 但**只有 `.mli`、没有同名 `.ml`** 的那种文件（实测 3 个样本里 152 个；典型的
+     * `asmcomp/CSE.mli` —— 实现是同名但在**别的目录** `asmcomp/amd64/CSE.ml`，`collapseUnits`
+     * 只认同目录，所以它既配不上对、自己又不成节点）**整个文件的成员在图上隐形**：
+     * 没有 `CSE.fundecl` 这种节点，`CSE.fundecl` 这种引用只能去撞同名嵌套模块。
+     * 这时给 `val` 发节点是**净收益**（同名冲突本来就不存在）。
+     *
+     * 判据只依赖"本次扫描里有没有那个 `.ml`"，是结构事实。
+     */
+    if (node.type === 'value_specification' && !ifaceOnly(fileRel, scannedRels)) return null;
+    /**
+     * `nsStack` 空 = 没有模块上下文。**两个例外都要认**（2026-09-25）：
+     *   · 文件模块命名空间（`use.ml` → `Use`）：`nsStack` 里本来就压着它，所以空只可能是
+     *     `fileModuleNs()` 返回了 null；
+     *   · `fileModuleNs()` 返回 null 的两种情形：① 顶层已有同名模块（`stdlib/stdlib.ml` 里的
+     *     `module Stdlib = …`）—— 那时顶层值的正确归属就是那个模块，而它的 fqn 恰好等于
+     *     `fileModuleStemOf` 的结果；② 文件名主干不是合法标识符（`let-syntax.ml` 那种连字符）。
+     * 两种都按"文件模块名"兜底，与 `fileModuleNs` 之外的语言无关（其他语言没有 onDemandTypes）。
+     */
+    const nsFallback = fileModuleStemOf(fileRel);
+    if (!nsStack.length && !nsFallback) return null;   // 既无模块上下文、又推不出文件模块名 → 放弃
     const name = nameOf(node, lang);
     if (!name || !/^[a-z_][A-Za-z0-9_']*$/.test(name)) return null;   // 顺手挡掉模式解构等垃圾名
+    const nsOverride = nsStack.length ? undefined : nsFallback;
     // `hasModulePrefix`：这个节点**可能**被 `Module.x` 这种限定名指到（它自己就在模块里）。
     // 父进程据此判"要不要为它保留节点"—— 是个结构事实，不用去猜哪个前缀算模块。
-    const rec = addTypeNode(node, lang, kind, undefined, { onDemand: true, hasModulePrefix: true });
+    const rec = addTypeNode(node, lang, kind, nsOverride, { onDemand: true, hasModulePrefix: true });
     if (rec) typeStack.push(rec);
     return rec;
   }
 
-  /** 造类型记录 + 压栈 + 递归收成员（普通的类型声明走这条） */  function emitType(node, lang, kind, extra) {
+  /** 造类型记录 + 压栈 + 递归收成员（普通的类型声明走这条） */
+  function emitType(node, lang, kind, extra) {
     const rec = addTypeNode(node, lang, kind, undefined, extra);
     // 基类子树不再当引用重复统计
     const baseChildren = new Set();
@@ -1658,10 +1699,11 @@ async function extractFiles(files) {
   // 不再在这里打“开始解析”：父进程已经报过总数（单语言时两行一模一样，看着像重复）
   // console.log(t(`  开始解析：${totalFiles} 个文件（${langsUsed.join(', ')}）`, `  Parsing ${totalFiles} files (${langsUsed.join(', ')})`));
 
+  // 本次扫描的文件清单（相对路径）：`ifaceOnly` 要用它判"这个 .mli 有没有同名 .ml"
+  const scannedRels = new Set(files.map((x) => x.rel));
   for (const f of files) {
     let rawSource;
-    let nonUtf8 = false;
-    try {
+    let nonUtf8 = false;    try {
       // 顺手查一眼编码：非 UTF-8（GBK / ANSI 之类）会被**静默**替换成 U+FFFD —— 注释和字符串变乱码，
       // 而语法树不报错，用户容易以为是工具的问题。统计出来，在报告 / MCP / 网页里都说一句。
       const rawBuf = fs.readFileSync(f.abs);
@@ -1692,7 +1734,7 @@ async function extractFiles(files) {
         }
       }
     }
-    const facts = extractFile(source, tree, f.lang, f.rel);
+    const facts = extractFile(source, tree, f.lang, f.rel, scannedRels);
     tree.delete?.();
 
     const fileId = 0;   // 文件内局部（父进程合并时换成全局 file id）

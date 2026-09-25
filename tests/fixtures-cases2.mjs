@@ -441,4 +441,28 @@ export const EXTRA_CASES = [
     // 两条 unresolved：`Lib.B.iter`（refer.ml 里没有别名 B）与 `C.iter`（别名右边不在图里）
     errorsMax: 0,
   },
+  {
+    // 只有 `.mli`、没有同名 `.ml`（2026-09-25）：接口里的 `val` 必须能成节点。
+    // 以前它**走不到建节点那条路**（`emitOnDemandValue` 只在成员分支被调用，而
+    // `value_specification` 不在 ocaml profile 的 `members` 表里）→ 整个接口文件在图上隐形：
+    // 没有 `CSE.fundecl` 这种节点，别的文件写 `CSE.fundecl` 只能去撞同名嵌套模块。
+    // 实测 3 个真样本里这样的文件有 152 个（典型 `asmcomp/CSE.mli` —— 实现是同名但在别的目录）。
+    // 这个夹具钉两头：
+    //   ① `Iface.normalize` / `Iface.describe` 是节点、引用接得上；
+    //   ② **没人引用**的 `Iface.unused_helper` 不许进图（按需裁剪不能因为这次改动失效）。
+    // 有同名 `.ml` 时"不许出现两个同 fqn 节点"由 ocaml-cross 夹具与自检保着。
+    dir: 'ocaml-iface',
+    lang: 'ocaml',
+    types: 4,                                   // Iface.normalize / Iface.describe + 两个合成 module
+    names: ['normalize', 'describe', 'iface', 'refer'],
+    kinds: { value: 2, module: 2 },
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [
+      ['refer.ml', 'Iface.normalize', true],    // 引用方 → 接口里的 val
+      ['refer.ml', 'Iface.describe', true],
+    ],
+    errorsMax: 0,
+  },
 ];
