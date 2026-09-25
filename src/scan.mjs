@@ -891,6 +891,21 @@ function extractFile(source, tree, lang, fileRel) {
   }
   const namespaces = new Set();
   const nsStack = [];
+  /**
+   * **函子参数**作用域（OCaml）：`module Make (Ord : OrderedType) = struct … end` 里的 `Ord`
+   * 是**抽象**的 —— 它是调用方传进来的模块，源码里没有实现。
+   *
+   * 为什么必须记下来：解析期按"限定名后三档"（同文件 → 全名 → **后缀**）找候选，而后缀档是
+   * 最弱的一档。`Ord.t` 在图上会被粘到**任何**一个 fqn 以 `.Ord.t` 结尾的候选上 —— 实测 16 条
+   * 真源码 → 测试目录的错边全是这么来的（`stdlib/map.ml` 的 `Ord.t` 接到
+   * `testsuite/…/functors.ml` 里那个 `Functors.Ord.t`）。前缀既然是抽象的，正确动作是**放弃**。
+   *
+   * 作用域用栈，跟 `nsStack` 同一套进出方式：值 = `[名字, 是函子参数?]` —— 函子参数在**整棵子树**
+   * 上都成立（`struct … end` 里到处都能引用 `Ord.t`）。
+   */
+  const abstractScopeStack = [];
+  // 每个类型节点带一份"本文件里、在该节点位置可见的抽象前缀"。父进程建边时按名字查（见 resolveName）。
+  const abstractScopes = new Map();   // typeIndex -> string[]（去重、保持首次出现顺序）
   let fileNamespace = '';
   const typeStack = [];
   let errors = 0;
@@ -996,6 +1011,8 @@ function extractFile(source, tree, lang, fileRel) {
       if (tsig.r) rec.r = tsig.r;
     }
     types.push(rec);
+    // 抽象前缀（函子参数）随类型记录带出去：解析期要用（见 abstractScopeStack 的说明）
+    if (abstractScopeStack.length) abstractScopes.set(rec.index, abstractScopeStack.filter((s) => s[1]).map((s) => s[0]));
     // `extra`：给"按需候选"带内部标记（`onDemand` / `hasModulePrefix`）。不写进 bundle。
     if (extra) Object.assign(rec, extra);
     return rec;
@@ -1098,6 +1115,11 @@ function extractFile(source, tree, lang, fileRel) {
           return;
         }
         nsStack.push(name);
+        // OCaml 的函子参数：`module Make (Ord : OrderedType) = …` —— `Ord` 是**抽象**的，
+        // 在整棵子树上都按"抽象前缀"记一笔（见 abstractScopeStack 的说明）。语言在 profile 里
+        // 声明 `moduleParameterOf`；没声明的语言这里整个是 no-op。
+        const paramNames = lang.moduleParameterOf ? lang.moduleParameterOf(node) : null;
+        if (paramNames) for (const pn of paramNames) abstractScopeStack.push([pn, true]);
         // ⚠ 命名空间节点**自己**通常不成节点（Java/Kotlin 的 package 语句、C# 的 namespace 块都不是类型）。
         // 但 OCaml 的 `module` 是**实体**：既开作用域又是个可被引用的模块。少了它，图上就没有
         // "模块"这个节点了（实测 fixture：类型数 4→3、`Shape` 整个消失）。
@@ -1124,6 +1146,7 @@ function extractFile(source, tree, lang, fileRel) {
           for (const c of node.namedChildren) walk(c);
         }
         nsStack.pop();
+        if (paramNames) for (let i = 0; i < paramNames.length; i++) abstractScopeStack.pop();
         return;
       }
     }
@@ -1252,7 +1275,7 @@ function extractFile(source, tree, lang, fileRel) {
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
     console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
   }
-  return { types, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, abstractScopes, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -1690,6 +1713,8 @@ async function extractFiles(files) {
         // 按需候选的内部标记必须**原样带过去** —— 漏了这两个键，父进程的 pruneOnDemandTypes
         // 就认不出候选，裁剪静默失效（实测踩过：`Env.unused` 这种没被引用的值也留在了图上）。
         ...(t.onDemand ? { onDemand: true, hasModulePrefix: !!t.hasModulePrefix } : null),
+        // 抽象前缀（函子参数）：只在这个节点位置**真能**构成抽象时才写，别给每个节点加个空数组
+        ...(facts.abstractScopes?.has(t.index) ? { abstract: facts.abstractScopes.get(t.index) } : null),
         fanIn: 0,
         fanOut: 0,
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
@@ -1927,6 +1952,27 @@ function pruneOnDemandTypes(merged) {
     .filter(Boolean);
   for (const f of merged.fileRecs || []) {
     if (f.types) f.types = f.types.filter((i) => keep[i]).map((i) => map[i]);
+  }
+  return merged;
+}
+
+/**
+ * 摘掉**只给解析期用**的内部键，别写进 bundle。
+ *
+ * `onDemand` / `hasModulePrefix`（按需候选）与 `abstract`（函子参数这种抽象前缀，见
+ * abstractScopeStack）都是"建边时的中间状态"：读侧（mcp.mjs / 网页）不认识它们，
+ * 留在 bundle 里既是噪声、也让人以为那是可以依赖的字段。数据是 `{...t}` 一路展开过来的，
+ * 所以要在**写出之前**统一摘一次。
+ *
+ * ⚠ **必须在建边之后**：`abstract` 正是 resolveName 用来判"这个前缀是抽象的"的依据，
+ * 提前摘掉等于修复静默失效（实测踩过：在 pruneOnDemandTypes 里摘，OCaml 样本的接错边
+ * 一条都没少）。所以它挂在 scan() 里"图建完 → 造 bundle"之间，而不是裁剪那一步。
+ */
+function stripResolveOnlyKeys(merged) {
+  for (const t of merged.allTypes || []) {
+    delete t.onDemand;
+    delete t.hasModulePrefix;
+    delete t.abstract;
   }
   return merged;
 }
@@ -2567,6 +2613,31 @@ export async function scan(opts) {
     if (name.includes('.')) {
       const leaf = name.slice(name.lastIndexOf('.') + 1);
       const from = allTypes[fromTypeId];
+      /**
+       * **抽象前缀**（OCaml 函子参数）：`module Make (Ord : OrderedType) = struct … Ord.t … end`
+       * 里的 `Ord` 是调用方传进来的模块 —— 源码里**没有**它的实现，所以这个限定名在本次扫描里
+       * 根本无从解析。正确动作是**放弃**，而不是让它掉进下面那三档去撞后缀。
+       *
+       * 为什么必须在这里挡（实测，OSS 的 OCaml 项目）：三档里的后缀档最弱，`Ord.t` 会黏上
+       * 任何一个 fqn 以 `.Ord.t` 结尾的候选 —— 真源码 → 测试目录的 **16 条**错边全是这么来的
+       * （`stdlib/map.ml` 的 `Ord.t` → `testsuite/…/functors.ml` 的 `Functors.Ord.t`），
+       * 而且它们还落在 `unique` 档（等于把"猜的"记成"有依据的"）。这与项目"宁缺勿错"一致。
+       *
+       * 只在**引用名在第一个点之前就有内容**时才挡（`Ord.t` 挡、`.x` 不挡）。
+       * 数据来自提取侧记的"该节点位置可见的抽象前缀"（见 scan.mjs 的 abstractScopeStack）；
+       * 其他语言没有这个键，整个判断是 no-op。
+       */
+      if (from && Array.isArray(from.abstract) && name.indexOf('.') > 0) {
+        const prefix = name.slice(0, name.indexOf('.'));
+        if (from.abstract.includes(prefix)) {
+          // 诊断开关：`CA_DEBUG_ABSTRACT=<语言id>` 时把每一条被放弃的引用打出来（核对用，默认关）
+          if (process.env.CA_DEBUG_ABSTRACT && fileRecs[from.file]?.lang === process.env.CA_DEBUG_ABSTRACT) {
+            console.error(`[ABSTRACT] ${name} @ ${from.fqn || from.name} (${fileRecs[from.file]?.path}:${from.line})`);
+          }
+          unresolved.unknown++;
+          return null;
+        }
+      }
       const fromLang = fileRecs[from?.file]?.lang;
       const rawPool = (bySimpleName.get(leaf) || []).filter((id) => {
         // ⚠ **只在同族内解析限定名**。跨族的"限定名"没有意义（C 里不会出现 `List.map`），
@@ -2862,6 +2933,10 @@ export async function scan(opts) {
       else f.git = { changes: 0, lastDaysAgo: null };
     }
   }
+  // 图已经建完 → 只给解析期用的内部键在这里统一摘掉（`abstract` 就是建边时用的，见
+  // stripResolveOnlyKeys）。放在**造 bundle 之前**：`serve` / `mcp` 这些不是走 scanToDisk
+  // 写盘的路径也拿的是这个对象，漏了它们 bundle 里就带着内部键。
+  stripResolveOnlyKeys({ allTypes });
   const bundle = {
     schema: SCHEMA,
     generator: { name: 'code-atlas', version: VERSION },

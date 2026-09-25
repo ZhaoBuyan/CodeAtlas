@@ -967,6 +967,29 @@ export const LANGUAGES = {
     wasm: 'ocaml/tree-sitter-ocaml.wasm',
     namespaces: { module_definition: 1 },
     namespaceIsType: true,   // module 既是作用域又是节点（少了它图上就没有"模块"）
+    // **函子参数**：`module Make (Ord : OrderedType) = …` 里的 `Ord` 是**抽象**的（调用方传进来的
+    // 模块，源码里没有实现）。`Make` 的整棵子树上，`Ord.t` 这种限定名**无从解析** —— 必须放弃，
+    // 不能让它掉进后缀档去黏"尾巴相同"的候选：实测真源码 → 测试目录的 16 条错边全是这么来的
+    // （`stdlib/map.ml` 的 `Ord.t` → `testsuite/…/functors.ml` 的 `Functors.Ord.t`）。
+    // 语法树形状（实测 probe，两种都见过）：
+    //   ① `module Make (Ord : OrderedType) = struct … end`  → module_parameter 直接在 module_binding 下
+    //   ② `module Make : functor (Ord : OrderedType) -> S`  → 包在 module_binding 的 functor_type 下
+    // 两种都得认（`.mli` 里第 ② 种很常见）。
+    moduleParameterOf: (node) => {
+      const binding = node.namedChildren.find((c) => c.type === 'module_binding');
+      if (!binding) return null;
+      const out = [];
+      const collect = (n) => {
+        for (const c of n.namedChildren) {
+          if (c.type === 'module_parameter') {
+            const nm = c.namedChildren.find((x) => x.type === 'module_name');
+            if (nm && nm.text && nm.text !== '_') out.push(nm.text);
+          } else if (c.type === 'functor_type') collect(c);
+        }
+      };
+      collect(binding);
+      return out.length ? out : null;
+    },
     refTypes: ['value_path', 'type_constructor_path'],
     refFilter: (node) => node.namedChildren.some((c) => c.type === 'module_path' || c.type === 'extended_module_path'),
     types: {

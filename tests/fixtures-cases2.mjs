@@ -388,4 +388,28 @@ export const EXTRA_CASES = [
     edgeWeights: [['Panel', 'Widget', 'ref', 1]],
     errorsMax: 0,
   },
+  {
+    // 函子参数是**抽象前缀**（2026-09-25）：`module Make (Client : T) = … Client.t …` 里的
+    // `Client` 是调用方传进来的模块，源码里没有实现 —— 让 `Client.t` 掉进后缀档，它就会黏上
+    // **任何** fqn 以 `.Client.t` 结尾的候选（真项目实测：`stdlib/map.ml` 的 `Ord.t` 接到了
+    // `testsuite/…/functors.ml`，真源码 → 测试目录共 **16 条**这种错边）。
+    // 这一道门同时钉两头（只钉"错边没了"会把"后缀档整个被删"当成通过）：
+    //   ① `uses_pair → Pair.t` **必须还在**（同文件里的真 `Pair`，后缀档还得工作）；
+    //   ② `Make.t → Decoy.Client.t` **必须没有**（前缀是函子参数 → 放弃）。
+    dir: 'ocaml-abstract',
+    lang: 'ocaml',
+    types: 9,
+    names: ['t', 'Pair', 'uses_pair', 'Make', 'Decoy', 'Client'],
+    kinds: { type: 5, module: 4 },
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    edgeWeights: [['uses_pair', 't', 'ref', 1]],
+    // 负向/正向都按**限定名**写：这个夹具里的 fqn 都带文件模块前缀（`abstract.ml` → `Abstract`）
+    refEdges: [
+      ['Abstract.uses_pair', 'Abstract.Pair.t', true],       // ① 同文件里的真 `Pair` —— 后缀档还得工作
+      ['Abstract.Make.t', 'Abstract.Decoy.Client.t', false], // ② 前缀是函子参数 → 放弃，不许黏到 Decoy 上
+    ],
+    errorsMax: 0,
+  },
 ];

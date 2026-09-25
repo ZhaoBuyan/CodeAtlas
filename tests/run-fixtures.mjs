@@ -529,6 +529,22 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
         `${from} → ${to}（${kind}）权重 ${e ? e.w : '（没这条边）'}（期望 ${want}）`);
     }
   }
+  /**
+   * 按**限定名**（fqn）断"这条边在不在" —— 简单名会撞（`Make.t` 与 `Decoy.Client.t` 都叫 `t`），
+   * 所以"某条边**不该存在**"这类负向断言只能按 fqn 写：
+   *   refEdges: [['uses_pair', 'Pair.t', true], ['Make.t', 'Decoy.Client.t', false]]
+   * 第三个元素 false = 断言**没有**这条边（宁缺勿错那一类修复的回归门，2026-09-25 起有）。
+   */
+  if (c.refEdges) {
+    for (const [from, to, want] of c.refEdges) {
+      const fromIds = b.types.filter((x) => (x.fqn || x.name) === from).map((x) => x.id);
+      const toIds = b.types.filter((x) => (x.fqn || x.name) === to).map((x) => x.id);
+      const e = b.edges.find((x) => fromIds.includes(x.from) && toIds.includes(x.to) && x.kind === 'ref');
+      const what = `${from} → ${to}（ref）`;
+      if (want) push(Boolean(e), `${what} 存在${e ? `，权重 ${e.w}` : '（没这条边）'}`);
+      else push(!e, `${what} ${e ? `不该存在，实际权重 ${e.w}` : '不存在（对）'}`);
+    }
+  }
   // 成员分档与列表必须一致：以前取不到名字的成员**只进分档、不进 memberList**，
   // 于是 symbol / map 里整块消失（1.4.0 复测报告 P1）。名字取不到时要逐层兜底，
   // 最后宁可拿源码那一行截取当名字，也不能让它无声消失。
