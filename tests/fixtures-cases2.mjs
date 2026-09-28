@@ -560,4 +560,87 @@ export const EXTRA_CASES = [
     ],
     errorsMax: 0,
   },
+  // ---------------------------------------------------------------------------
+  // A3 局部绑定名（2026-09-25）：**类名 / 模块名与另一个文件里的局部变量同名**时，裸名不该跨文件接上去。
+  // 每个夹具都是"两头钉"：负向断言（`alpha` 那条边**不存在**）+ 正向对照（`gamma` 那条边**存在**）。
+  // ⚠ 负向断言在**基线（A3 之前）上实测是有边的**（工作文档\A3-局部绑定名-2026-09-25.md 有记录），
+  //   所以它们是真回归门，不是"本来就接不上"的空断言。
+  // ---------------------------------------------------------------------------
+  {
+    // Kotlin：`val alpha` 是局部绑定；`alpha` 在 b.kt 里当**类型**用（Kotlin 只采类型位置的引用，
+    // 值位置的裸名 `println(alpha)` 本来就不进引用表 —— 用值位置写夹具会得到一条空断言）。
+    dir: 'a3-locals-kotlin',
+    lang: 'kotlin',
+    types: 3,
+    names: ['alpha', 'gamma', 'Beta'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Beta', 'alpha', false], ['Beta', 'gamma', true]],
+    errorsMax: 0,
+  },
+  {
+    // PHP：`$alpha` 是 variable_name（名字在它的 name 字段里，文本带 `$`）
+    dir: 'a3-locals-php',
+    lang: 'php',
+    types: 3,
+    names: ['alpha', 'gamma', 'Beta'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Beta', 'alpha', false], ['Beta', 'gamma', true]],
+    errorsMax: 0,
+  },
+  {
+    // Ruby：局部变量是小写 identifier，撞的是**文件合成的 module 节点**（`alpha.rb` → 节点名/ fqn `alpha.rb`）
+    // —— sinatra 上被砍掉的 23 条边就是这个形状。
+    dir: 'a3-locals-ruby',
+    lang: 'ruby',
+    types: 3,
+    names: ['Gamma', 'alpha', 'Beta'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Beta', 'alpha.rb', false], ['Beta', 'Gamma', true]],
+    errorsMax: 0,
+  },
+  {
+    // Swift：`let alpha` 在函数体里是局部（类体里的同名属性**不算**，那条闸见 profile 的 only）
+    dir: 'a3-locals-swift',
+    lang: 'swift',
+    types: 3,
+    names: ['alpha', 'gamma', 'Beta'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Beta', 'alpha', false], ['Beta', 'gamma', true]],
+    errorsMax: 0,
+  },
+  {
+    // Scala：`val alpha` 在函数里是局部（类体里的 `val` 是属性，不算 —— 同一道闸）
+    dir: 'a3-locals-scala',
+    lang: 'scala',
+    types: 3,
+    names: ['alpha', 'gamma', 'Beta'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Beta', 'alpha', false], ['Beta', 'gamma', true]],
+    errorsMax: 0,
+  },
+  {
+    // OCaml：`localBindings` 声明了（`let … in` 的 let_binding + 函数参数），**但这条夹具只钉正向对照**：
+    // OCaml 的引用采集中裸值引用（`value_path` 没有 module_path）在 refFilter 那一步就被丢掉了，
+    // 图上只剩限定名（`A.helper`）—— 所以 A3 的裸名过滤在 OCaml 上**本来就不会改变任何一条边**
+    // （实测 ocaml-ocaml 样本 0 变化）。这里保的是"声明还在、夹具不炸、限定名照旧接得上"。
+    dir: 'a3-locals-ocaml',
+    lang: 'ocaml',
+    types: 5,
+    names: ['alpha', 'gamma', 'helper', 'a', 'b'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['b.ml', 'A.helper', true]],
+    errorsMax: 0,
+  },
 ];

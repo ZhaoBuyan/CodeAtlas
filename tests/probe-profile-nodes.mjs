@@ -39,15 +39,29 @@ const SLOTS = [
   ['typeGuards', (p) => Object.keys(p.typeGuards || {})],
   ['memberGuards', (p) => Object.keys(p.memberGuards || {})],
   ['typeSkipParent', (p) => Object.keys(p.typeSkipParent || {}).concat(Object.values(p.typeSkipParent || {}).flat())],
+  ['localBindings', (p) => Object.keys(p.localBindings || {})],
 ];
 
-let checked = 0, badLangs = 0, failedLoad = 0;
+/**
+ * `localBindings` 里声明的**字段名**也要查：字段名写错和节点名写错一样是**静默失效**
+ * （`childForFieldName('nmae')` 返回 null → 一个局部绑定都收不到，测试却全绿）。
+ * 取值形态有四种（见 scan.mjs 的 walk）：`'字段'` / `['字段1','字段2']` / `'auto'` / `{ field|fields|auto, only }`
+ * —— `'auto'` 和函数（PHP 的 foreach）没有字段名，跳过。
+ */
+const fieldNamesOf = (spec) => {
+  if (typeof spec === 'string') return spec === 'auto' ? [] : [spec];
+  if (Array.isArray(spec)) return spec;
+  if (spec && typeof spec === 'object') return [].concat(spec.field ?? spec.fields ?? []);
+  return [];
+};
+
+let checked = 0, badLangs = 0, failedLoad = 0, fieldsChecked = 0;
 const allMiss = [];
 for (const [id, prof] of Object.entries(LANGUAGES)) {
   if (!prof.wasm) continue;
-  let names;
+  let names, language;
   try {
-    const language = await Language.load(resolveWasm(prof));
+    language = await Language.load(resolveWasm(prof));
     names = new Set();
     for (let i = 0; i < language.nodeTypeCount; i++) {
       try { names.add(language.nodeTypeForId(i)); } catch { /* 个别 id 取不到名字，跳过 */ }
@@ -65,6 +79,14 @@ for (const [id, prof] of Object.entries(LANGUAGES)) {
       if (!names.has(nm)) miss.push(`${slot}:${nm}`);
     }
   }
+  // 字段名：`fieldIdForName` 返回 null 就是这门语法里根本没有这个字段名（写错了）
+  for (const [type, spec] of Object.entries(prof.localBindings || {})) {
+    for (const f of fieldNamesOf(spec)) {
+      if (!f || typeof f !== 'string') continue;
+      fieldsChecked++;
+      if (language.fieldIdForName(f) == null) miss.push(`localBindings.${type}.field:${f}`);
+    }
+  }
   if (miss.length) {
     badLangs++;
     console.log(`✗ ${id}（语法包 ${names.size} 个节点名）查无此名 ${miss.length} 个：`);
@@ -74,5 +96,6 @@ for (const [id, prof] of Object.entries(LANGUAGES)) {
 }
 
 console.log(`\n查了 ${checked} 门语言${failedLoad ? `（另有 ${failedLoad} 门语法包没加载起来）` : ''}；` +
-  (badLangs ? `**${badLangs} 门有查无此名的声明**（共 ${allMiss.length} 处）` : '**全部节点名都在语法包里** ✓'));
+  `顺带查了 ${fieldsChecked} 个 localBindings 字段名；` +
+  (badLangs ? `**${badLangs} 门有查无此名的声明**（共 ${allMiss.length} 处）` : '**全部节点名与字段名都在语法包里** ✓'));
 process.exitCode = badLangs ? 1 : 0;

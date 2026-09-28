@@ -362,6 +362,79 @@ const ID_TYPES = ['type_identifier', 'simple_identifier', 'scoped_identifier', '
  */
 const DECLARATOR_TYPES = new Set(['variable_declarator', 'init_declarator', 'declarator', 'pointer_declarator', 'function_declarator', 'array_declarator']);
 /**
+ * **局部绑定（A3）取名字时能安全往里走的"包裹层"**：这些节点自己不是名字，但名字一定在它里面。
+ * 名单全部来自实测（`tools/probe-tree.mjs` + 工作文档的 A3 探针），不是猜的：
+ *   · Kotlin `val tmp = …` 是 `property_declaration` → `variable_declaration`；
+ *     `val (a, b) = …` 走 `multi_variable_declaration`（2026-09-25 实测：这两种都**没有** name 字段）；
+ *   · PHP 的 `$x` 是 `variable_name`，名字在它**自己的** `name` 字段里（文本是 `$x`，字段里是 `x`）；
+ *     解构赋值 `list($a, $b) = …` / `[$a, $b] = …` 左值是 `list_literal`；
+ *   · Ruby `def f(a, b = 1, *rest, key:, **opts, &blk)` 的 `method_parameters`（里面是
+ *     `optional_parameter` / `splat_parameter` / `keyword_parameter` / `hash_splat_parameter` /
+ *     `block_parameter`，**每个都有自己的 name 字段**）、`|a, b|` 的 `block_parameters`、
+ *     `x, y = 1, 2` 的 `left_assignment_list`；
+ *   · Swift 的 `pattern`（`let x: Int` 的名字、`for (i, v) in …` 的元组都在这层里，可递归）。
+ * ⚠ 往里找时**只认名字**：类型名（`user_type` / `type_identifier` / `primitive_type`）不在名单里，收不进来。
+ * ⚠ **声明符（DECLARATOR_TYPES）不在这张表里**：它另有专门的一支（见 `collectBindingNames`）。
+ */
+const BINDING_WRAPPER_TYPES = new Set([
+  'variable_declaration', 'multi_variable_declaration', 'variable_name',
+  'identifier_list', 'expression_list', 'list_literal',
+  'method_parameters', 'block_parameters', 'lambda_parameters',
+  'optional_parameter', 'splat_parameter', 'keyword_parameter', 'hash_splat_parameter', 'block_parameter',
+  'formal_parameters', 'parameters', 'function_value_parameters', 'class_parameters',
+  'exception_variable', 'left_assignment_list',
+  'pattern',
+]);
+/** 不是通用标识符、但**文本本身就是裸名字**的叶子（实测：OCaml `parameter` 的 pattern 是 `value_pattern`） */
+const LOCAL_NAME_TYPES = new Set(['value_pattern']);
+
+/**
+ * **严格**地从一个"绑定位置"里收集裸名字：只沿 `标识符 → 包裹层 → 标识符` 走，遇到不认识的节点就停。
+ * 停是关键 —— 继续往里找会把**类型名**（`let x: Int` 里的 `Int`）和**取值表达式**当成变量名。
+ *
+ * C / C++ / C# / TS 的**声明符**（`DECLARATOR_TYPES`）不走这条严格递归，仍然交给 `declaratorName()`：
+ * 那条路要剥指针 / 数组 / 引用（`const char *p` 的 `*p`、`const auto& elem` 的 `&elem`），
+ * 而声明符的节点名很多（`reference_declarator` / `parenthesized_declarator` / `attributed_declarator`…），
+ * **一条条列全很难，漏一个就少收一个局部名**。实测代价（abseil）：漏了 `reference_declarator`，
+ * `elem` / `status` / `cord` / `output` / `mutex` 五个名字没收进 `locals` → 回来 6 条
+ * "局部名撞上别的文件的合成模块节点"的错边。
+ */
+function collectBindingNames(node, out = [], depth = 0) {
+  if (!node || depth > 6) return out;
+  if (ID_TYPES.includes(node.type) || LOCAL_NAME_TYPES.has(node.type)) { out.push(node.text); return out; }
+  if (DECLARATOR_TYPES.has(node.type)) {
+    const nm = declaratorName(node);
+    if (nm) out.push(nm);
+    return out;
+  }
+  if (BINDING_WRAPPER_TYPES.has(node.type)) {
+    const inner = node.childForFieldName('name') || node.childForFieldName('pattern') || node.childForFieldName('declarator');
+    if (inner) return collectBindingNames(inner, out, depth + 1);
+    for (const c of node.namedChildren) collectBindingNames(c, out, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * `'auto'` 规格（这门语法**不给字段**）：从声明节点自己出发找名字。
+ * 节点本身是"绑定位置"就直接收；否则按"声明写在最前面"的顺序看直接孩子，**取出名字就停** ——
+ * 停是必须的：Kotlin `val tmp = foo(bar)` 里的 `foo` / `bar` 也是孩子，继续找会把引用当成声明。
+ */
+function collectBindingNamesAuto(node, out = []) {
+  if (!node) return out;
+  if (ID_TYPES.includes(node.type) || LOCAL_NAME_TYPES.has(node.type) || BINDING_WRAPPER_TYPES.has(node.type)) {
+    return collectBindingNames(node, out);
+  }
+  for (const c of node.namedChildren) {
+    if (ID_TYPES.includes(c.type) || LOCAL_NAME_TYPES.has(c.type) || BINDING_WRAPPER_TYPES.has(c.type)) {
+      const before = out.length;
+      collectBindingNames(c, out);
+      if (out.length > before) return out;
+    }
+  }
+  return out;
+}
+/**
  * ① 成员级名字级调用图（2026-09-20）：这个名字所在的这一行，看起来是**调用**还是**成员访问**？
  *   判据只看源码那一行：名字后面（跳过空白）紧跟 `(` → 调用；名字前面紧挨 `.` / `>` / `:` → 成员访问
  *   （`.` / `->` / `::` / `?.` 都能盖住）。
@@ -961,6 +1034,17 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
    * 只按 profile 的 `localBindings` 声明收集，**不做猜测**；没声明的语言这里是空集合。
    */
   const localNames = new Set();
+  /**
+   * 登记一个局部绑定名。两道清洗：
+   *   · 剥掉写进**名字文本**里的 `$`（PHP 的 `variable_name` 文本是 `$radius`；多数情况下取值走的是
+   *     它自己的 `name` 字段，这里只兜底）；
+   *   · **只收裸标识符** —— `self.x` / `a.b` / `()` / `{a, b}` 这类成员访问与解构整体都不是一个变量名。
+   */
+  const addLocalName = (raw) => {
+    if (typeof raw !== 'string' || !raw) return;
+    const nm = raw.startsWith('$') ? raw.slice(1) : raw;
+    if (/^[A-Za-z_][A-Za-z0-9_']*$/.test(nm)) localNames.add(nm);
+  };
   let fileNamespace = '';
   const typeStack = [];
   let errors = 0;
@@ -1154,26 +1238,30 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
 
   function walk(node) {
     const type = node.type;
-    // 局部绑定（参数 / `x := …` / `var x …`）：把**裸名字**登记下来（见 localBindings 的说明）。
-    // 只按 profile 声明的节点名与字段取，取不到就跳过 —— 不做任何猜测。
-    const lbField = lang.localBindings ? lang.localBindings[type] : null;
-    if (lbField) {
-      const pushNames = (n) => {
-        if (!n) return;
-        // 字段可能是**列表**（`short_var_declaration` 的 left 是一串 identifier）或单个节点
-        const cands = n.type === 'expression_list' || n.type === 'identifier_list' ? n.namedChildren : [n];
-        for (const c of cands) {
-          let nm = null;
-          if (c.type === 'identifier' || ID_TYPES.includes(c.type)) nm = c.text;
-          // C/C++ 的参数与变量是**声明符**（`const char *path` 的 declarator 是 `*path`）——
-          // 走既有 declaratorName() 剥掉指针/数组，拿到底层标识符
-          else if (DECLARATOR_TYPES.has(c.type)) nm = declaratorName(c);
-          // 只收**裸标识符**：`self.x` / `a.b` 这类成员访问不是局部绑定
-          if (nm && /^[A-Za-z_][A-Za-z0-9_']*$/.test(nm)) localNames.add(nm);
+    // 局部绑定（参数 / `x := …` / `val x = …`）：把**裸名字**登记下来（见 localBindings 的说明）。
+    // 规格由 profile 声明，四种写法（都不猜）：
+    //   · `'字段名'`             —— 名字在这个字段里（`name` / `left` / `pattern` / `declarator`…）；
+    //   · `['字段1','字段2']`    —— 同上，但两个字段都算（Swift `if let` 是 `bound_identifier`、
+    //                              `if case let` 是 `pattern`，同一个节点两种形状）；
+    //   · `'auto'`               —— 这门语法**不给字段**：按"声明位置"自动找（Kotlin 的参数与 `val`）；
+    //   · `{ field(s)|auto, only }` —— 再加一道**归属闸**：`val x` 既可能是类属性（成员，不算局部）
+    //                              也可能是函数里的局部变量，靠 `only(node)` 区分；
+    //   · `(node) => ['名', …]`  —— 形状实在没有字段可循的（PHP 的 `foreach (… as $k => $v)`）。
+    const lbSpec = lang.localBindings ? lang.localBindings[type] : null;
+    if (lbSpec) {
+      if (typeof lbSpec === 'function') {
+        for (const raw of lbSpec(node) || []) addLocalName(raw);
+      } else {
+        // 归一化三种声明形态：'字段' / ['字段1','字段2'] / 'auto'
+        const spec = typeof lbSpec === 'string'
+          ? (lbSpec === 'auto' ? { auto: true } : { field: [lbSpec] })
+          : (Array.isArray(lbSpec) ? { field: lbSpec } : lbSpec);
+        if (!spec.only || spec.only(node)) {
+          const names = spec.auto ? collectBindingNamesAuto(node) : [];
+          for (const f of [].concat(spec.field ?? [])) collectBindingNames(node.childForFieldName(f), names);
+          for (const raw of names) addLocalName(raw);
         }
-      };
-      pushNames(node.childForFieldName(lbField));
-      if (lbField === 'name' && lang.localExtraFields) for (const f of lang.localExtraFields) pushNames(node.childForFieldName(f));
+      }
     }
 
     // 只数真正的 ERROR（语法树里放不下的部分）。

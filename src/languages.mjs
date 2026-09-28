@@ -261,6 +261,27 @@ const jsImportKind = (node) => {
   return null;
 };
 
+/**
+ * `val x = …`（Kotlin / Swift / Scala）**既可能是类的属性、也可能是函数里的局部变量**。
+ * 只有后者才该登记进 `file.locals` —— 类属性的裸名引用是**合法**的跨文件引用，
+ * 登记了会把真边一起砍掉（"宁缺勿错"要的是别接错，不是尽量少接）。
+ * 判据（2026-09-25 实测祖先链）：从父节点往上走，**先撞到函数体算局部、先撞到类型体算成员**；
+ * 两头都没撞到（文件顶层那种）按**成员**处理 —— 猜错的代价是少砍一条边，比砍错真边轻。
+ */
+const localNotMember = (funcTypes, typeBodyTypes) => (node) => {
+  for (let p = node.parent; p; p = p.parent) {
+    if (funcTypes.includes(p.type)) return true;
+    if (typeBodyTypes.includes(p.type)) return false;
+  }
+  return false;
+};
+
+/** 祖先链里有没有某个类型的节点（`only` 闸用） */
+const hasAncestorType = (node, type) => {
+  for (let p = node.parent; p; p = p.parent) if (p.type === type) return true;
+  return false;
+};
+
 // TS 与 TSX 的语法节点名完全一致（tsx 只是多了 JSX），共用一份
 const TS_SHAPE = {
   importKindOf: jsImportKind,
@@ -1008,6 +1029,27 @@ export const LANGUAGES = {
       class_parameter: (node) => node.namedChildren.some((c) => c.type === 'binding_pattern_kind'),
     },
     imports: { import_header: 1 },
+    /**
+     * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
+     *
+     * Kotlin 的坑：**参数与 `val` / `var` 都没有 `name` 字段**（`probe-fields` 实测）——
+     *   · `fun render(radius: Double)` 的 `radius` 是 `parameter` 的第一个孩子 `simple_identifier`；
+     *   · `val tmp = …` 是 `property_declaration` → `variable_declaration` → `simple_identifier`；
+     *   · `val (a, b) = …` 走 `multi_variable_declaration`；`for ((k, v) in m)` 同理；
+     *   · `catch (e: Exception)` 是 `catch_block` 的第一个孩子；lambda 参数是
+     *     `lambda_parameters` → `variable_declaration`。
+     * 所以这几项都用 `'auto'`（按声明位置找），不用字段名。
+     *
+     * `property_declaration` / `variable_declaration` **既是类属性、又是函数里的局部变量**：
+     * 类属性的裸名引用是**合法**的跨文件引用，所以只认"在函数体里"的那种（`only` 闸）。
+     */
+    localBindings: {
+      parameter: 'auto',
+      catch_block: 'auto',
+      lambda_parameters: 'auto',
+      property_declaration: { auto: true, only: localNotMember(['function_body', 'lambda_literal'], ['class_body', 'enum_class_body']) },
+      variable_declaration: { auto: true, only: localNotMember(['function_body', 'lambda_literal'], ['class_body', 'enum_class_body']) },
+    },
     baseFields: [],
     baseNodes: ['delegation_specifier'],
     decisions: ['if_expression', 'when_expression', 'for_statement', 'while_statement', 'try_expression', 'catch_block'],
@@ -1395,6 +1437,19 @@ export const LANGUAGES = {
     // 同名模块在图上有很多个，那时候"精确匹配"会从里面挑中一个（宁缺勿错还没落地）。
     // **这一条后来落地了**：resolveName 的三档优先级 + fileModuleNamespace，残留见上面"已知残留"。
     imports: {},
+    /**
+     * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
+     *   · `parameter`：`let render radius label = …` 与 `fun item -> …` 的参数（`pattern` 字段，
+     *     节点类型是 `value_pattern`）；`let use () = …` 的 `()` 是 `unit`，裸名正则挡掉；
+     *   · `let_binding`：**只有 `let … in` 里的才是局部变量**。顶层 `let helper x = …` 是**模块成员**
+     *     （别的文件写 `Spec.helper` 指的就是它），登记成局部会把真边砍掉 —— 闸就是"祖先里有
+     *     `let_expression`"。
+     * ⚠ `let a, b = (1, 2)` 的 pattern 是 `tuple_pattern`（**叶子**，下面没有标识符）—— 收不到就不收。
+     */
+    localBindings: {
+      let_binding: { field: 'pattern', only: (node) => hasAncestorType(node, 'let_expression') },
+      parameter: 'pattern',
+    },
     baseFields: [],
     baseNodes: [],
     decisions: ['if_expression', 'match_expression', 'match_case', 'for_expression', 'while_expression', 'infix_expression'],
@@ -1570,8 +1625,13 @@ export const LANGUAGES = {
       let_declaration: 'pattern',
       closure_parameters: 'pattern',
       for_expression: 'pattern',
-      if_let_expression: 'pattern',
-      while_let_expression: 'pattern',
+      // `if let x = …` / `while let x = …`：真正的节点是 **`let_condition`**（`if_expression` 的
+      // `condition` 孩子）。⚠ 2026-09-25 的 profile 审计查出这里原本写的是 `if_let_expression` /
+      // `while_let_expression` —— **语法包里根本没有这两个名字**，等于一条也没生效（静默失效）。
+      // 也不能直接挂 `if_expression` 的 `condition` 字段：普通 `if flag` 的 `flag` 是**引用**，
+      // 挂上去会把引用当成声明（见 Swift profile 里同一类取舍）。
+      // ⚠ `if let Some(x) = …` 的 `x` 仍收不到（`pattern` 是 `tuple_struct_pattern`）—— 不猜。
+      let_condition: 'pattern',
       match_arm: 'pattern',
     },
     decisions: ['if_expression', 'match_expression', 'match_arm', 'for_expression', 'while_expression', 'loop_expression', 'binary_expression'],
@@ -1648,6 +1708,39 @@ export const LANGUAGES = {
       enum_case: 'enumValue',
     },
     imports: { namespace_use_declaration: 1 },
+    /**
+     * 局部绑定（A3，2026-09-25 实测）。PHP 的名字都在 `variable_name` 里，而它的**文本带 `$`**、
+     * 真正的名字在它自己的 `name` 字段（`$radius` → `radius`）—— 取值层会自动走进去。
+     *   · `int $radius`（`simple_parameter`）/ `...$rest`（`variadic_parameter`）/ `static $c`；
+     *   · `$tmp = …`（`assignment_expression`）与 `$acc += …`、`$ref = &$a`；
+     *     `$this->x = …` 是 `member_access_expression`、`$a[0] = …` 是 `subscript_expression`，
+     *     都不是 `variable_name`，天然被排除；
+     *   · `list($a, $b) = …` / `[$a, $b] = …` 左值是 `list_literal`（解构，算一组局部绑定）；
+     *   · `global $db;` 没有字段，按声明位置取。
+     */
+    localBindings: {
+      simple_parameter: 'name',
+      variadic_parameter: 'name',
+      static_variable_declaration: 'name',
+      assignment_expression: 'left',
+      augmented_assignment_expression: 'left',
+      reference_assignment_expression: 'left',
+      global_declaration: 'auto',
+      /**
+       * `foreach ($arr as $k => $v)`：`as` 后面的那（几）个变量**没有字段**，而且排在**第二个**孩子
+       * 之后 —— 用 `'auto'`（取第一个能取到名字的孩子）会把被遍历的那个表达式 `$arr` 当成绑定。
+       * 所以自己取：跳过第一个孩子，其余 `variable_name` / `pair` 里的 `variable_name` 都是绑定。
+       */
+      foreach_statement: (node) => {
+        const out = [];
+        const visit = (c) => {
+          if (c.type === 'variable_name') out.push(c.text);
+          else if (c.type === 'pair') c.namedChildren.forEach(visit);
+        };
+        for (const c of node.namedChildren.slice(1)) visit(c);
+        return out;
+      },
+    },
     // 类型引用在这个语法里是 `name` / `qualified_name`（不像别的语言叫 identifier / type_identifier）——
     // 不加这两类就一个引用也采不到（实测 guzzle：132 个文件、0 条 ref 边）。
     refTypes: ['name', 'qualified_name'],
@@ -1695,6 +1788,26 @@ export const LANGUAGES = {
       typealias_declaration: 'type',
     },
     imports: { import_declaration: 1 },
+    /**
+     * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
+     *   · `func render(radius: Double, …)` 的参数与闭包参数 `{ (x: Int) in … }` 都有 `name` 字段；
+     *   · `let tmp = …` / `var acc = …` 的名字在 `name` 字段（节点类型是 `pattern`），
+     *     **类体里的属性不算**（`only` 闸）—— 属性的裸名引用是合法跨文件引用；
+     *   · `for i in …` / `for (idx, value) in …`：绑定就是 `item` 字段（元组模式可递归取到两个名字）；
+     *   · `if let first = …` / `guard let last = …` / `while let top = …` 都绑在 `bound_identifier` 字段上。
+     * ⚠ `if case let .some(v) = …` 的 `v` **收不到**：它不在任何字段上（是 `condition` 字段的第 3 个孩子，
+     *   `childForFieldName('condition')` 只返回第一个）—— 按名字取 `condition` 会把普通 `if flag` 的
+     *   **引用** `flag` 当成本地声明（更坏），所以宁可不收。
+     */
+    localBindings: {
+      parameter: 'name',
+      lambda_parameter: 'name',
+      property_declaration: { field: 'name', only: localNotMember(['function_body', 'lambda_literal'], ['class_body', 'protocol_body']) },
+      for_statement: 'item',
+      if_statement: 'bound_identifier',
+      guard_statement: 'bound_identifier',
+      while_statement: 'bound_identifier',
+    },
     baseFields: [],
     // 继承列表：实测只有 `inheritance_specifier` 这一个节点名是真的（另两个名字语法包里没有）。
     baseNodes: ['inheritance_specifier'],
@@ -1713,6 +1826,23 @@ export const LANGUAGES = {
     family: 'jvm',      // 与 Java / Kotlin 同族（见 java profile 的说明）
     namespaces: { package_clause: 1 },
     namespaceScope: 'file',
+    /**
+     * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
+     *   · `def f(xs: List[Int])` 的参数有 `name` 字段；
+     *   · `val tmp = …` / `var acc = …` 的名字在 `pattern` 字段（`val (p, q) = …` 是 `tuple_pattern`，
+     *     它是**叶子**、下面没有标识符可走 —— 收不到就不收，宁缺勿错）；
+     *   · `for (i <- xs; j = i * 2)` 的枚举变量没有字段，第一个标识符就是它（第二个是来源，不能收）；
+     *   · `catch { case e: Exception => … }` 是 `typed_pattern`（`pattern` 字段）。
+     * `val` / `var` 在**类体**里是属性（成员），在函数里才是局部变量 —— 靠 `only` 闸区分，
+     * `typed_pattern` 同理（`val x: Int = …` 的 pattern 就是它）。
+     */
+    localBindings: {
+      parameter: 'name',
+      enumerator: 'auto',
+      val_definition: { field: 'pattern', only: localNotMember(['function_definition', 'lambda_expression', 'block'], ['template_body']) },
+      var_definition: { field: 'pattern', only: localNotMember(['function_definition', 'lambda_expression', 'block'], ['template_body']) },
+      typed_pattern: { field: 'pattern', only: localNotMember(['function_definition', 'lambda_expression', 'block'], ['template_body']) },
+    },
     types: { class_definition: 'class', object_definition: 'object', trait_definition: 'trait', enum_definition: 'enum' },
     members: {
       function_definition: 'function',
@@ -1779,6 +1909,25 @@ export const LANGUAGES = {
     importTextOf: rubyImportText,
     // Ruby 的类型引用是**常量**（`Base` / `Walkable` / `Helper`）；identifier 是方法名（默认那两类仍生效）
     refTypes: ['constant'],
+    /**
+     * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
+     *   · 参数表：`def f(a, b = 1, *rest, key:, opt: 2, **opts, &blk)` 是 `method_parameters`，
+     *     里面每个参数（含 `optional_parameter` / `splat_parameter` / `keyword_parameter` /
+     *     `hash_splat_parameter` / `block_parameter`）**各自带 name 字段**；块参数 `|a, b|` 是
+     *     `block_parameters`，lambda 的是 `lambda_parameters`；
+     *   · `x = …` / `x += …`：左值是裸 `identifier`；`x, y = 1, 2` 是 `left_assignment_list`。
+     *     `@x = …`（instance_variable）/ `$x`（global_variable）/ `A.x = …`（call）都不是 identifier，天然排除；
+     *   · `for i in 1..3` 的循环变量在 `pattern` 字段；`rescue StandardError => e` 是 `exception_variable`。
+     */
+    localBindings: {
+      method_parameters: 'auto',
+      block_parameters: 'auto',
+      lambda_parameters: 'auto',
+      assignment: 'left',
+      operator_assignment: 'left',
+      for: 'pattern',
+      exception_variable: 'auto',
+    },
     decisions: ['if', 'unless', 'if_modifier', 'unless_modifier', 'case', 'while', 'until', 'for', 'rescue', 'rescue_modifier', 'binary'],
     decisionOps: ['&&', '||'],
     isDecision: (node) => {
