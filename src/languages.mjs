@@ -641,6 +641,91 @@ const pwshImportText = (node) => {
   return /\$/.test(v) ? '' : v;
 };
 
+/**
+ * R（2026-09-25 新加）。
+ *
+ * 这门语法**没有**专门的函数/类声明节点：`make_widget <- function(...) {...}` 是
+ * `binary_operator`（`<-`）左边一个 identifier、右边一个 `function_definition`
+ * （而那个 `function_definition` 的 `name` 字段是**字面量 `function`**，不能当名字）。
+ * 参考类（R5/R6 风格）是 `Widget <- setRefClass("Widget", …)` / `setClass("Widget", …)`。
+ *
+ * 所以三类钩子都要：
+ *   · `rKindOf`：把这两形状的 `binary_operator` 认成类型声明（function / class）；
+ *   · `rNameOf`：名字取**左边**那个 identifier；
+ *   · `rMembersOf`：块里的 `foo <- function(...)` / `describe = function(...)` 是成员（函数），
+ *     其余 `identifier <- value` 是字段。
+ * 实测零 ERROR（`工作文档\样本库\probe-any.mjs` 跑 `r-sample.R`）。
+ */
+const rAssign = (node) => {
+  if (node.type !== 'binary_operator') return null;
+  const op = node.childForFieldName('operator') || node.namedChildren.find((c) => c.type === '<-' || c.type === '=' || c.type === '<<-');
+  if (!op || !['<-', '=', '<<-'].includes(op.text)) return null;
+  const lhs = node.namedChildren.find((c) => c.type === 'identifier');
+  const rhs = node.namedChildren.find((c) => c.type === 'function_definition' || c.type === 'call');
+  return lhs && rhs ? { lhs, rhs } : null;
+};
+const rKindOf = (node) => {
+  const a = rAssign(node);
+  if (!a) return null;
+  if (a.rhs.type === 'function_definition') return 'function';
+  if (a.rhs.type === 'call') {
+    const fn = a.rhs.namedChildren.find((c) => c.type === 'identifier');
+    if (fn && ['setRefClass', 'setClass', 'setGeneric', 'R6Class'].includes(fn.text)) return 'class';
+  }
+  return null;
+};
+const rNameOf = (node) => {
+  if (node.type === 'binary_operator') {
+    const a = rAssign(node);
+    if (a) return a.lhs.text;
+  }
+  return null;
+};
+const rMembersOf = (node) => {
+  if (node.type === 'binary_operator') {
+    // ⚠ 只有**块级的 `名字 <- function(...)`** 才是成员：
+    //   R 里到处是 `w <- 值`，把它们都记成成员会灌一堆假成员（实测 `make_widget` 的成员里混进 `w`）。
+    //   类里的**方法**用 R5/R6 的 `methods = list(describe = function()…)` 那种写法，
+    //   或者 `名字 <- function(...)` —— 两者都覆盖到了；纯数据字段（`fields = list(name = "character")`）
+    //   不是函数，暂不发成员（要发得先想清楚"字段类型"怎么表达）。
+    const a = rAssign(node);
+    if (!a || a.rhs.type !== 'function_definition') return null;
+    const par = node.parent ? node.parent.type : '';
+    if (!['program', 'braced_expression', 'call', 'arguments'].includes(par)) return null;
+    return [{ kind: 'function', name: a.lhs.text }];
+  }
+  // R5/R6 风格：`list(describe = function() …)` 里的 `argument`
+  if (node.type === 'argument') {
+    const nm = node.childForFieldName('name');
+    const val = node.childForFieldName('value');
+    if (nm && val && val.type === 'function_definition') return [{ kind: 'function', name: nm.text }];
+  }
+  return null;
+};
+
+/** R 的依赖：`library(dplyr)` / `require(x)` / `source("helpers.R")` —— 只认字面量参数 */
+const rImportKind = (node) => {
+  if (node.type !== 'call') return null;
+  const fn = node.namedChildren.find((c) => c.type === 'identifier');
+  if (!fn) return null;
+  if (fn.text === 'library' || fn.text === 'require') return 'library';
+  if (fn.text === 'source') return 'source';
+  return null;
+};
+const rImportText = (node) => {
+  const args = node.namedChildren.find((c) => c.type === 'arguments');
+  const first = args && args.namedChildren.find((c) => c.type === 'argument');
+  if (!first) return '';
+  const v = first.childForFieldName('value') || first.namedChildren[0];
+  if (!v) return '';
+  if (v.type === 'string') {
+    const content = v.namedChildren.find((c) => c.type === 'string_content');
+    return content ? content.text : '';                 // source("helpers.R") → helpers.R
+  }
+  if (v.type === 'identifier') return v.text;           // library(dplyr) → dplyr
+  return '';                                            // 动态（library(pkg, character.only=TRUE)）→ 不认
+};
+
 /** Dart 的签名都包在 *_signature 里（declaration 与 method_signature 都可能包着一层） */
 const dartSigNode = (node) => {
   if (node.type === 'declaration' || node.type === 'method_signature') {
@@ -943,8 +1028,28 @@ export const LANGUAGES = {
     decisionOps: ['&&', '||'],
   },
 
-  powershell: {
-    id: 'powershell',
+  r: {
+    id: 'r',
+    label: 'R',
+    status: 'ok',
+    exts: ['.r', '.R', '.rmd'],
+    wasm: 'r/tree-sitter-r.wasm',
+    namespaces: {},
+    types: {},
+    members: {},
+    kindOf: rKindOf,
+    nameOf: rNameOf,
+    membersOf: rMembersOf,
+    imports: {},
+    importKindOf: rImportKind,
+    importTextOf: rImportText,
+    baseFields: [],
+    baseNodes: [],
+    decisions: ['if_statement', 'for_statement', 'while_statement', 'repeat_statement'],
+    decisionOps: [],
+  },
+
+  powershell: {    id: 'powershell',
     label: 'PowerShell',
     status: 'ok',
     exts: ['.ps1', '.psm1', '.psd1'],

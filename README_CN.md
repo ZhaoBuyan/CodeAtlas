@@ -142,7 +142,7 @@ npm run publish:lite   # 只出精简版
   不是当前版本的旧解包目录会在**每次启动**时自动清掉（只留**当前在用的 + 最近用过的那个**），免得换个版本就多留一百多 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本 / **包内容指纹**不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 30 门代码语言 + 6 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
+- 打包只带**我们支持的 31 门代码语言 + 6 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - **反编译在完全版里无需安装**：扫 `.dll` / `.exe` 用链接进启动器的反编译器（ILSpy 引擎）；扫 `.jar` 用自带的裁剪版 Java 运行时 + cfr.jar —— 都不需要先装 ilspycmd / sfextract / Java。精简版不带 Java 运行时（它本来就要求 .NET 9 + Node），扫 `.jar` 仍需自己装 Java。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -379,7 +379,7 @@ node src/cli.mjs langs [--json]                    # 看支持哪些语言（--j
 反编译只支持三类：**.NET 程序集**、**.NET 单文件发行版**、**Java .jar**（详见下面「没有源码也能扫」的已知限制）。
 Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指它就能扫。
 
-### 认识的语言（30 门代码语言）
+### 认识的语言（31 门代码语言）
 
 | 语言 | 后缀 | 状态 |
 | --- | --- | --- |
@@ -402,6 +402,7 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | Scala | `.scala` `.sc` | ✅ fixtures（class/object/trait） |
 | Shell | `.sh` `.bash` `.zsh` | ✅ fixtures + 实测（nvm）（无类型 → module 节点；`source` / `.` 变成 import，命令名变成引用） |
 | PowerShell | `.ps1` `.psm1` `.psd1` | ✅ fixtures（class / function；跨文件依赖靠**命令名**调用，`Import-Module` 与 `using namespace` 变成 import —— 注意 `$PSScriptRoot` 那种动态点源不采） |
+| R | `.r` `.R` `.rmd` | ✅ fixtures + 真项目实测（shiny，276 个 `.R`：函数与参考类、`library()` / `source()` 变成 import、跨文件调用连成边） |
 | Zig | `.zig` | ✅ fixtures（const X = struct/enum） |
 | Solidity | `.sol` | ✅ fixtures（contract/interface + 继承） |
 | OCaml | `.ml` `.mli` | ✅ fixtures + 真项目实测（3,514 文件：模块当命名空间，`List.map` 这类限定名引用接到 `stdlib/list.ml`，值只在被限定名指到时才成节点；函子参数 / 模块别名按作用域解析；只有 `.mli` 没有同名 `.ml` 时接口里的 `val` 也成节点） |
@@ -511,7 +512,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：30 门代码语言 + 6 种文件级格式（含 **Markdown 的标题层级**）
+- [x] 语言覆盖：31 门代码语言 + 6 种文件级格式（含 **Markdown 的标题层级**）
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤

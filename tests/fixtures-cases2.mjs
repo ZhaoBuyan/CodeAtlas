@@ -7,6 +7,28 @@
  */
 export const EXTRA_CASES = [
   {
+    // R（2026-09-25 新加）：函数 / 参考类 / library 导入 / 跨文件引用。
+    // 这门语法**没有**专门的函数与类节点（实测，见 profile 里 rKindOf/rNameOf/rMembersOf 的说明）：
+    //   `f <- function(...)` 是 binary_operator(<-) 套 function_definition（name 字段是字面量
+    //   `function`，不能当名字）；类走 `Widget <- setRefClass("Widget", …)`。
+    // 钉三件事：① 函数/类的名字取**左边**那个 identifier；② 块级 `名字 <- function` 才算成员
+    // （`w <- 值` 不许混进成员）；③ `source("widget.R")` 要变成 import，跨文件调用连成边。
+    dir: 'r',
+    lang: 'r',
+    types: 4,                                   // class Widget + 三个 function
+    names: ['Widget', 'make_widget', 'format_widget', 'show_all'],
+    kinds: { class: 1, function: 3 },
+    importsMin: 2,                              // library(stats) + source("widget.R")
+    docs: 0,
+    membersMin: 1,                              // Widget 的 describe
+    edgeWeights: [
+      ['show_all', 'make_widget', 'ref', 1],    // 跨文件调用（source 进来的）
+      ['show_all', 'format_widget', 'ref', 1],
+      ['make_widget', 'Widget', 'ref', 1],      // `Widget$new(...)` → 类引用
+    ],
+    errorsMax: 0,
+  },
+  {
     // PowerShell（2026-09-25 新加）：class / function / 参数 / 跨文件命令调用。
     // 这门语言的节点名全是实测出来的（`工作文档\样本库\probe-pwsh.mjs`）：
     //   · 类型 = class_statement / function_statement；
