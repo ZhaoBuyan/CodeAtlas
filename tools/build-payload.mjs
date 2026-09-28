@@ -190,7 +190,15 @@ const bytes = files.reduce((a, f) => a + fs.statSync(path.join(STAGE, f)).size, 
 console.log(`  暂存：${files.length} 个文件 / ${(bytes / 1048576).toFixed(1)} MB`);
 
 rmFile(OUT_ZIP);
-const ps = `Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::CreateFromDirectory('${STAGE}', '${OUT_ZIP}')`;
+/**
+ * PowerShell 的**单引号字符串**里：`'` 要靠**写两遍**转义（`''`），`$` 不展开。
+ * 为什么不直接拼：`STAGE` / `OUT_ZIP` 是从**仓库所在路径**推出来的 —— 路径里只要有**一个** `'`
+ * （Windows 上合法：`C:\Users\O'Brien\…`），拼出来的命令就被截断，后面的内容变成**在构建机上执行的
+ * PowerShell**。所以这里统一走 `psQuote()`，路径永远只是一段字面量。
+ * （不塞进双引号：双引号里 `$` 会展开、反引号是转义符，注入面更大。）
+ */
+const psQuote = (s) => "'" + String(s).replace(/'/g, "''") + "'";
+const ps = `Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::CreateFromDirectory(${psQuote(STAGE)}, ${psQuote(OUT_ZIP)})`;
 execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { stdio: 'inherit' });
 const zipBytes = fs.readFileSync(OUT_ZIP);
 const zipMb = zipBytes.length / 1048576;

@@ -78,7 +78,7 @@ function boot(b) {
     (state.ins.get(e.to) || state.ins.set(e.to, []).get(e.to)).push(e);
   }
   state.kinds = new Set(b.types.map((t) => t.kind));
-  state.sysColors = new Map((b.facets?.systems || []).map((s) => [s.name, s.color]).filter(([, c]) => c));
+  state.sysColors = sysColorMap(b);
   state.hasFacets = Boolean(b.facets?.configFile);
   // 反编译产物默认把编译器生成物藏起来（那些东西不是人写的，混在里面只会干扰看）
   state.hideGenerated = Boolean(b.source.ingest?.tool) && (b.totals.compilerGenerated || 0) > 0;
@@ -440,16 +440,36 @@ function keyLabel(key) {
   return key.split('⁄').pop();
 }
 
-/** 键 -> 颜色：facets 配的色优先，否则按键 hash 出色相（不限于 10 色） */
+/**
+ * 键 -> 颜色：facets 配的色优先，否则按键 hash 出色相（不限于 10 色）
+ *
+ * ⚠ **安全边界**：facets 的 `color` 来自仓库里的 `atlas.facets.json`，即**不可信输入**；
+ * 而它会被拼进 `innerHTML` 的 `style="background:…"`。恶意仓库写 `color: "red;background:url(javascript:…)"`
+ * 之类就能在**打开页面时执行脚本**，把本地读到的 bundle 外传 —— 直接毁掉"全本地、不上传"的承诺。
+ * 所以两个入口（boot / 监控模式重建）都用 `safeColor()` 过滤，这里再兜一道（旧 bundle 仍可能带脏值）。
+ * 引擎侧 `applyFacets` 会先过滤一次（双保险：单看 bundle 也干净，单看页面也不怕）。
+ */
 function hashColor(key) {
   if (!key) return '#30363d';
-  if (state.sysColors.has(key)) return state.sysColors.get(key);
+  if (state.sysColors.has(key)) return safeColor(state.sysColors.get(key)) || '#30363d';
   if (!state.groupColors.has(key)) {
     let h = 0;
     for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) % 360;
     state.groupColors.set(key, d3.hsl(h, 0.5, 0.56).formatHex());
   }
   return state.groupColors.get(key);
+}
+
+/** 只认十六进制色值与**纯字母**的 CSS 颜色名；别的（含 `;` / `(` / `url(` / 引号）一律丢弃 */
+const COLOR_RE = /^(#[0-9a-f]{3,8}|[a-z]{3,20})$/i;
+function safeColor(c) {
+  if (typeof c !== 'string') return null;
+  const s = c.trim();
+  return COLOR_RE.test(s) ? s : null;
+}
+/** bundle.facets.systems → 名字到颜色的表（**只收安全的颜色**） */
+function sysColorMap(b) {
+  return new Map((b.facets?.systems || []).map((s) => [s.name, safeColor(s.color)]).filter(([, c]) => c));
 }
 
 // ---- git 热度（读 bundle 的 files[].git，见 src/scan.mjs 的 gitHeat）----
@@ -1294,7 +1314,7 @@ function applyBundle(b) {
   // 类型类别：现有的里还存在的留下、新出现的补上，用户取消过的（kindsOff）依然取消
   const kinds = new Set(b.types.map((t) => t.kind));
   state.kinds = new Set([...kinds].filter((k) => !state.kindsOff.has(k)));
-  state.sysColors = new Map((b.facets?.systems || []).map((s) => [s.name, s.color]).filter(([, c]) => c));
+  state.sysColors = sysColorMap(b);
   state.hasFacets = Boolean(b.facets?.configFile);
   if (state.selected != null && !state.typeById.has(state.selected)) state.selected = null;   // 选中的那条没了
   // ---- 下面几样是 boot() 里有、这里以前漏了的（监控模式下换 bundle 会留下陈旧状态）----

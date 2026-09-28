@@ -408,6 +408,19 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
     const missing = c.extends.filter((x) => !got.has(x));
     push(missing.length === 0, missing.length ? `缺继承边：${missing.join(', ')}（现有 ${[...got].join(', ') || '无'}）` : `继承边正确（${c.extends.length} 条）`);
   }
+  /**
+   * facets 各系统的 `color`（安全）：`color` 来自**仓库里的配置文件**，是不可信输入 ——
+   * 它会被前端拼进 `style="background:…"`，所以引擎只保留十六进制色值 / 纯字母颜色名，
+   * 带 `;` `(` 引号之类的一律丢成 null（见 src/scan.mjs 的 safeFacetColor 与 web/app.js 的 safeColor）。
+   * 断言写法：`facetColors: [['evil', null], ['okhex', '#58a6ff']]`。
+   */
+  if (c.facetColors) {
+    const got = new Map((b.facets?.systems || []).map((s) => [s.name, s.color ?? null]));
+    for (const [name, want] of c.facetColors) {
+      const v = got.has(name) ? got.get(name) : '（这份图里没这个系统）';
+      push(v === want, `facets「${name}」的 color = ${JSON.stringify(v)}（期望 ${JSON.stringify(want)}）`);
+    }
+  }
   if (c.importsMin != null) {
     const n = b.files.reduce((a, f) => a + f.imports.length, 0);
     push(n >= c.importsMin, `import 条数 ${n}（期望 ≥ ${c.importsMin}）`);

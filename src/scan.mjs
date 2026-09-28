@@ -1742,11 +1742,25 @@ function loadFacets(opts, roots) {
   return null;
 }
 
+/**
+ * facets 的 `color` 只允许**十六进制色值**或**纯字母的 CSS 颜色名**，别的丢掉（变成 null）。
+ *
+ * 为什么必须过滤：`color` 来自**仓库里的配置文件**（`<扫描根>/atlas.facets.json`，或 `--facets`
+ * 指定的文件）—— 也就是"被扫的代码"能控制的内容；而它会被写进 `bundle.json`，前端再拼进
+ * `innerHTML` 的 `style="background:…"`。恶意仓库写
+ * `"color": "red;background-image:url(javascript:…)"` 之类就能在**打开页面时执行脚本**：
+ * bundle 是本地读的、页面是本地打开的，一旦能执行就能把整份图外传，
+ * "全本地、不上传"的承诺直接破。丢掉的色会退回前端按键 hash 的色相，功能不受影响。
+ * ⚠ 前端 `safeColor()`（web/app.js）里还有同样一道闸：老 bundle 里可能已经带着脏值。
+ */
+const SAFE_COLOR_RE = /^(#[0-9a-f]{3,8}|[a-z]{3,20})$/i;
+const safeFacetColor = (c) => (typeof c === 'string' && SAFE_COLOR_RE.test(c.trim()) ? c.trim() : null);
+
 /** 给每个类型打上 system，并汇总各系统体量 */
 function applyFacets(facetsDoc, allTypes, fileRecs) {
   const rules = (facetsDoc?.config?.systems || []).map((r) => ({
     name: r.name,
-    color: r.color || null,
+    color: safeFacetColor(r.color),
     mats: [...(r.paths || []), ...(r.files || []), ...(r.namespaces || [])]
       .map((p) => ({ re: globToRe(p), src: p })),
   }));
@@ -2275,7 +2289,9 @@ function readScanCache(cacheFile, langSpec, maxKb) {
 }
 
 function writeScanCache(cacheFile, langSpec, maxKb, files, byRel) {
-  const out = { schema: 1, engine: engineStamp(), lang: langSpec, maxKb, at: new Date().toISOString(), files: {} };
+  // `files` 用**无原型对象**：键是仓库里的相对路径，万一有个文件就叫 `__proto__`，
+  // 普通对象上那句赋值改的是原型而不是数据项（缓存条目静默丢失）。见安全审查记录。
+  const out = { schema: 1, engine: engineStamp(), lang: langSpec, maxKb, at: new Date().toISOString(), files: Object.create(null) };
   for (const f of files) {
     const pf = byRel.get(f.rel);
     if (!pf) continue;                        // 读失败之类的，不缓存（下次重试）

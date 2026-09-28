@@ -643,4 +643,26 @@ export const EXTRA_CASES = [
     refEdges: [['b.ml', 'A.helper', true]],
     errorsMax: 0,
   },
+  {
+    // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
+    // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
+    // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
+    // bundle 外传（"全本地、不上传"的承诺直接破）。
+    // 引擎侧只保留**十六进制色值**与**纯字母颜色名**，被丢掉的色退回默认灰（未分类色 `#6e7681`）；
+    // 前端 `safeColor()` 还有同样一道闸兜旧 bundle。
+    dir: 'facets-color',
+    lang: 'javascript',
+    types: 4,
+    names: ['One', 'Two', 'Three', 'Four'],
+    importsMin: 0,
+    docs: 4,
+    membersMin: 0,
+    facetColors: [
+      ['evil', '#6e7681'],            // `red;background-image:url(javascript:…)` → 丢弃 → 退回默认灰（未分类色）
+      ['evilquote', '#6e7681'],       // `#fff"onmouseover="alert(1)` → 丢弃 → 默认灰
+      ['okhex', '#58a6ff'],           // 十六进制 → 原样保留
+      ['okname', 'rebeccapurple'],    // 纯字母颜色名 → 原样保留
+    ],
+    errorsMax: 0,
+  },
 ];

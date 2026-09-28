@@ -1,0 +1,9 @@
+{
+  "_comment": "测试用：facets 的 color 是**不可信输入**（仓库里的配置文件）—— 它会被拼进页面的 innerHTML，所以引擎只保留十六进制色值与纯字母颜色名，别的一律丢弃（见 src/scan.mjs 的 safeFacetColor）。",
+  "systems": [
+    { "name": "evil", "color": "red;background-image:url(javascript:alert(document.domain))", "paths": ["a/**"] },
+    { "name": "okhex", "color": "#58a6ff", "paths": ["b/**"] },
+    { "name": "okname", "color": "rebeccapurple", "paths": ["c/**"] },
+    { "name": "evilquote", "color": "#fff\"onmouseover=\"alert(1)", "paths": ["d/**"] }
+  ]
+}

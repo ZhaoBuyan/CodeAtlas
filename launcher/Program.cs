@@ -405,7 +405,8 @@ namespace CodeAtlas
             string root = Resolve(null);
             if (root == null) throw new InvalidOperationException(L.T("找不到引擎，拿不到 MCP 配置。", "Engine not found — cannot build the MCP config."));
             string script = Path.Combine(root, "src", "cli.mjs");
-            var psi = new ProcessStartInfo(PickNode(cfg, root), $"\"{script}\" mcp --out \"{outAbs}\" --config-json")
+            // ⚠ 参数一律走 ArgumentList，**不拼命令行字符串**（理由见 Start() 里的同一段注释）
+            var psi = new ProcessStartInfo(PickNode(cfg, root))
             {
                 WorkingDirectory = WorkDir(),
                 RedirectStandardOutput = true,
@@ -414,6 +415,11 @@ namespace CodeAtlas
                 CreateNoWindow = true,
                 StandardOutputEncoding = Encoding.UTF8,
             };
+            psi.ArgumentList.Add(script);
+            psi.ArgumentList.Add("mcp");
+            psi.ArgumentList.Add("--out");
+            psi.ArgumentList.Add(outAbs);
+            psi.ArgumentList.Add("--config-json");
             using var p = Process.Start(psi);
             string outp = p.StandardOutput.ReadToEnd();
             if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch { } throw new InvalidOperationException(L.T("引擎 30 秒没响应", "the engine did not answer within 30s")); }
@@ -498,7 +504,8 @@ namespace CodeAtlas
             if (root == null) throw new InvalidOperationException(L.T("找不到引擎：这个 exe 没带内置引擎，旁边也没有 src\\cli.mjs。", "Engine not found: this exe carries no built-in engine and there is no src\\cli.mjs next to it."));
             string script = Path.Combine(root, "src", "cli.mjs");
             string nodeExe = PickNode(cfg, root);
-            var psi = new ProcessStartInfo(nodeExe, $"\"{script}\" langs --json")
+            // ⚠ 参数一律走 ArgumentList，**不拼命令行字符串**（理由见 Start() 里的同一段注释）
+            var psi = new ProcessStartInfo(nodeExe)
             {
                 WorkingDirectory = root,
                 RedirectStandardOutput = true,
@@ -508,6 +515,9 @@ namespace CodeAtlas
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+            psi.ArgumentList.Add(script);
+            psi.ArgumentList.Add("langs");
+            psi.ArgumentList.Add("--json");
             var sb = new StringBuilder();
             var proc = new Process { StartInfo = psi };
             proc.ErrorDataReceived += (s, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
@@ -527,16 +537,9 @@ namespace CodeAtlas
             if (root == null) throw new InvalidOperationException(L.T("找不到引擎，没法草拟分组规则。", "Engine not found — cannot draft grouping rules."));
             string script = Path.Combine(root, "src", "cli.mjs");
             string node = PickNode(cfg, root);
-            var args = new StringBuilder();
-            args.Append('"').Append(script).Append('"');
-            args.Append(" draft-facets \"").Append(target).Append("\" --json");
-            if (byNamespace)
-            {
-                args.Append(" --by namespace");
-                if (!string.IsNullOrWhiteSpace(bundleDir)) args.Append(" --bundle \"").Append(bundleDir).Append('"');
-            }
-            if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
-            var psi = new ProcessStartInfo(node, args.ToString())
+            // ⚠ 参数一律走 ArgumentList：`target` / `bundleDir` / `langs` 都可能是用户给的路径，
+            // 拼字符串时路径里一个 `"` 就能提前闭合引号、把后面变成额外参数（理由见 Start() 里的同一段注释）
+            var psi = new ProcessStartInfo(node)
             {
                 WorkingDirectory = root,
                 RedirectStandardOutput = true,
@@ -546,6 +549,17 @@ namespace CodeAtlas
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+            psi.ArgumentList.Add(script);
+            psi.ArgumentList.Add("draft-facets");
+            psi.ArgumentList.Add(target);
+            psi.ArgumentList.Add("--json");
+            if (byNamespace)
+            {
+                psi.ArgumentList.Add("--by");
+                psi.ArgumentList.Add("namespace");
+                if (!string.IsNullOrWhiteSpace(bundleDir)) { psi.ArgumentList.Add("--bundle"); psi.ArgumentList.Add(bundleDir); }
+            }
+            if (!string.IsNullOrWhiteSpace(langs)) { psi.ArgumentList.Add("--lang"); psi.ArgumentList.Add(langs.Trim()); }
             var err = new StringBuilder();
             var proc = new Process { StartInfo = psi };
             proc.ErrorDataReceived += (s, e) => { if (e.Data != null) err.AppendLine(e.Data); };
@@ -575,26 +589,38 @@ namespace CodeAtlas
                     ? L.T($"内置的 node 跑不起来：{node}", $"the built-in node will not run: {node}")
                     : L.T($"跑不起来：找不到 node（当前配置为 \"{node}\"）。精简版需要机器上装 Node.js；或在 launcher.config.json 里把 NodePath 改成 node.exe 的完整路径。", $"cannot start: node not found (currently configured as \"{node}\"). The lite build needs Node.js installed; or point NodePath in launcher.config.json at the full path of node.exe."));
 
-            var args = new StringBuilder();
-            args.Append('"').Append(script).Append('"');
+            var args = new List<string> { script };
             // scanOnly：改走 `scan` 子命令。位置参数那条路是"扫描 + 起本地服务"（服务不会自己退，
             // 启动器靠它把地图嵌进窗口）—— 自检拿它就只能等超时，所以自检走 scan（扫完就退）。
             // watch 也**必须**走 scan：`--watch` 只在 scan 子命令里被处理，传给位置参数那条路会被默默忽略
             //（实测：日志只出普通扫描 + 起服务，压根不进监控态 —— 「内构监控」其实没在监控）
-            if (scanOnly || watch) args.Append(" scan");
-            args.Append(" \"").Append(target).Append('"');
-            args.Append(" --out \"").Append(cfg.Out).Append('"');
-            if (!scanOnly) args.Append(" --port ").Append(cfg.Port);
+            if (scanOnly || watch) args.Add("scan");
+            args.Add(target);
+            args.Add("--out");
+            args.Add(cfg.Out);
+            if (!scanOnly) { args.Add("--port"); args.Add(cfg.Port.ToString()); }
             // 语言：空串 = 引擎默认（auto）。显式选过就原样传过去。
-            if (!string.IsNullOrWhiteSpace(langs)) args.Append(" --lang \"").Append(langs.Trim()).Append('"');
-            if (cfg.Incremental) args.Append(" --incremental");   // 只重解析改过的文件
-            if (!cfg.RespectGitignore) args.Append(" --no-gitignore"); // 默认按项目自己的 .gitignore 跳过；用户明确关掉才传这个
-            if (watch) args.Append(" --watch");                   // 内构监控：分趟长出来 + 改动自动重扫（不会自己结束）
+            if (!string.IsNullOrWhiteSpace(langs)) { args.Add("--lang"); args.Add(langs.Trim()); }
+            if (cfg.Incremental) args.Add("--incremental");   // 只重解析改过的文件
+            if (!cfg.RespectGitignore) args.Add("--no-gitignore"); // 默认按项目自己的 .gitignore 跳过；用户明确关掉才传这个
+            if (watch) args.Add("--watch");                   // 内构监控：分趟长出来 + 改动自动重扫（不会自己结束）
             // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
-            if (!string.IsNullOrWhiteSpace(facets)) args.Append(" --facets \"").Append(facets.Trim()).Append('"');
-            if (!open && !scanOnly) args.Append(" --no-open");   // scan 没有"开浏览器"这回事
+            if (!string.IsNullOrWhiteSpace(facets)) { args.Add("--facets"); args.Add(facets.Trim()); }
+            if (!open && !scanOnly) args.Add("--no-open");   // scan 没有"开浏览器"这回事
 
-            var psi = new ProcessStartInfo(node, args.ToString())
+            /**
+             * ⚠ **参数一律走 ArgumentList，绝不拼命令行字符串**（2026-09-25 安全审查）。
+             *
+             * 为什么：下面这些参数里有好几项来自**可写的 `launcher.config.json`**
+             * （`Out` / `Port` / `RespectGitignore` 等）或用户给的路径。拼字符串时靠 `"…"` 包路径，
+             * 路径里**一个双引号**就能提前闭合引号，把后面整段变成**传给 node 的额外参数** ——
+             * 例如 `--import <任意 .mjs>`：node 会在引擎进程里**先把那个模块跑一遍**，等于
+             * "打开一次启动器 = 执行构建机上的任意代码"。ArgumentList 由 .NET 按 Windows 的
+             * 引号规则逐项转义，路径再怪也只是一段字面量参数。
+             *
+             * 同一处理的还有 McpConfigJson / ListLangs / DraftFacets（都别改回拼字符串）。
+             */
+            var psi = new ProcessStartInfo(node)
             {
                 // 工作目录：开发模式还是仓库（行为不变）；完全/精简版用 exe 所在目录，
                 // 这样 dist/ 和 ingest/ 落在 exe 旁边（引擎目录是缓存，不该往里写用户数据）
@@ -606,6 +632,7 @@ namespace CodeAtlas
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+            foreach (var a in args) psi.ArgumentList.Add(a);
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.OutputDataReceived += (s, e) => { if (e.Data != null) onLine(e.Data); };
             proc.ErrorDataReceived += (s, e) => { if (e.Data != null) onLine("[err] " + e.Data); };
