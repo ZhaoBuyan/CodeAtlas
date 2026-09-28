@@ -357,6 +357,11 @@ function declaratorName(node, depth = 0) {
 /** 取节点名：优先 name/declarator 字段，没有字段就找第一个标识符子节点（Kotlin 等语法不给 name 字段） */
 const ID_TYPES = ['type_identifier', 'simple_identifier', 'scoped_identifier', 'identifier', 'dotted_name', 'qualified_name', 'name', 'value_name', 'constructor_name', 'module_name', 'type_constructor', 'value_identifier', 'module_identifier', 'symbol', 'id'];
 /**
+ * "声明符"类节点：名字挂在它**里面**，要剥掉指针 / 数组才行。
+ * （`nameOf` 内部有一份同样的名单用于取名；这里提出来给"局部绑定"取值复用 —— 两处必须一致。）
+ */
+const DECLARATOR_TYPES = new Set(['variable_declarator', 'init_declarator', 'declarator', 'pointer_declarator', 'function_declarator', 'array_declarator']);
+/**
  * ① 成员级名字级调用图（2026-09-20）：这个名字所在的这一行，看起来是**调用**还是**成员访问**？
  *   判据只看源码那一行：名字后面（跳过空白）紧跟 `(` → 调用；名字前面紧挨 `.` / `>` / `:` → 成员访问
  *   （`.` / `->` / `::` / `?.` 都能盖住）。
@@ -1158,7 +1163,11 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
         // 字段可能是**列表**（`short_var_declaration` 的 left 是一串 identifier）或单个节点
         const cands = n.type === 'expression_list' || n.type === 'identifier_list' ? n.namedChildren : [n];
         for (const c of cands) {
-          const nm = c.type === 'identifier' ? c.text : (ID_TYPES.includes(c.type) ? c.text : null);
+          let nm = null;
+          if (c.type === 'identifier' || ID_TYPES.includes(c.type)) nm = c.text;
+          // C/C++ 的参数与变量是**声明符**（`const char *path` 的 declarator 是 `*path`）——
+          // 走既有 declaratorName() 剥掉指针/数组，拿到底层标识符
+          else if (DECLARATOR_TYPES.has(c.type)) nm = declaratorName(c);
           // 只收**裸标识符**：`self.x` / `a.b` 这类成员访问不是局部绑定
           if (nm && /^[A-Za-z_][A-Za-z0-9_']*$/.test(nm)) localNames.add(nm);
         }

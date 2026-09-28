@@ -814,6 +814,12 @@ export const LANGUAGES = {
     preprocess: 'csharp',
     // 参数名的标识符不算"引用"（否则参数名与类型重名时会产生假依赖）
     skipNameNodes: { parameter: 'name' },
+    // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 + 本地变量声明
+    localBindings: {
+      parameter: 'name',
+      variable_declarator: 'name',
+      foreach_statement: 'left',
+    },
     namespaces: { namespace_declaration: 1, file_scoped_namespace_declaration: 1 },
     // C# 10 的 `namespace Foo;`：整份文件都属于它。新版语法里它只包住名字，
     // 后面的类型是兄弟节点（旧语法是包在里面的）——不声明这条，所有类型都会落到 (global)。
@@ -907,6 +913,14 @@ export const LANGUAGES = {
     family: 'jvm',
     namespaces: { package_declaration: 1 },
     namespaceScope: 'file',
+    // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 + 本地变量声明 + 增强 for 的变量
+    localBindings: {
+      formal_parameter: 'name',
+      spread_parameter: 'name',
+      variable_declarator: 'name',
+      enhanced_for_statement: 'name',
+      catch_formal_parameter: 'name',
+    },
     types: {
       class_declaration: 'class',
       interface_declaration: 'interface',
@@ -1550,6 +1564,16 @@ export const LANGUAGES = {
     baseNodes: [],
     // impl_item 的名字取它实现的类型（field 'type'），这样方法就挂在同名节点下
     nameFromField: { impl_item: 'type' },
+    // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 / `let x` / 闭包参数 / 匹配绑定
+    localBindings: {
+      parameter: 'pattern',
+      let_declaration: 'pattern',
+      closure_parameters: 'pattern',
+      for_expression: 'pattern',
+      if_let_expression: 'pattern',
+      while_let_expression: 'pattern',
+      match_arm: 'pattern',
+    },
     decisions: ['if_expression', 'match_expression', 'match_arm', 'for_expression', 'while_expression', 'loop_expression', 'binary_expression'],
     decisionOps: ['&&', '||'],
   },
@@ -1568,6 +1592,14 @@ export const LANGUAGES = {
     // typedef struct X {...} X; 会让 struct_specifier 成为 type_definition 的子节点，别重复记
     typeSkipParent: { struct_specifier: ['type_definition'], enum_specifier: ['type_definition'], union_specifier: ['type_definition'] },
     members: { function_definition: 'function', declaration: 'field', field_declaration: 'field', enumerator: 'enumValue' },
+    // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数与**块内**变量声明。
+    // 名字在 `declarator` 字段上（`const char *path` 的 declarator 是 `*path`），
+    // 取值时走 declaratorName() 剥掉指针/数组。
+    localBindings: {
+      parameter_declaration: 'declarator',
+      init_declarator: 'declarator',
+      declaration: 'declarator',
+    },
     imports: { preproc_include: 1 },
     baseFields: [],
     baseNodes: [],
@@ -1586,6 +1618,12 @@ export const LANGUAGES = {
     types: { class_specifier: 'class', struct_specifier: 'struct', enum_specifier: 'enum', union_specifier: 'union' },
     typeSkipParent: { struct_specifier: ['type_definition', 'class_specifier'], enum_specifier: ['type_definition'], union_specifier: ['type_definition'] },
     members: { function_definition: 'function', field_declaration: 'field', declaration: 'field', enumerator: 'enumValue' },
+    // 局部绑定：与 C 同形（见 c profile 里那份说明）
+    localBindings: {
+      parameter_declaration: 'declarator',
+      init_declarator: 'declarator',
+      declaration: 'declarator',
+    },
     imports: { preproc_include: 1 },
     baseFields: [],
     baseNodes: ['base_class_clause'],
