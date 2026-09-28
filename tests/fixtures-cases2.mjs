@@ -629,10 +629,12 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
-    // OCaml：`localBindings` 声明了（`let … in` 的 let_binding + 函数参数），**但这条夹具只钉正向对照**：
-    // OCaml 的引用采集中裸值引用（`value_path` 没有 module_path）在 refFilter 那一步就被丢掉了，
+    // OCaml：`localBindings` 声明了（`let … in` 的 let_binding + 函数参数），但这条夹具钉的是
+    // **OCaml 的引用采集口径**：裸值引用（`value_path` 没有 module_path）在 refFilter 那一步就被丢掉了，
     // 图上只剩限定名（`A.helper`）—— 所以 A3 的裸名过滤在 OCaml 上**本来就不会改变任何一条边**
-    // （实测 ocaml-ocaml 样本 0 变化）。这里保的是"声明还在、夹具不炸、限定名照旧接得上"。
+    // （实测 ocaml-ocaml 样本 0 变化；另用两文件小样本核实过：裸 `helper 1` 连 unresolved 都不计）。
+    // 断言两件事：① 限定名照旧接得上（`b.ml -> A.helper`）；② 裸名 `b.ml -> helper` 不存在。
+    // 哪天真放宽了 refFilter，这条夹具会红 —— 那时要重新评估 A3 在 OCaml 上的作用面。
     dir: 'a3-locals-ocaml',
     lang: 'ocaml',
     types: 5,
@@ -640,7 +642,7 @@ export const EXTRA_CASES = [
     importsMin: 0,
     docs: 0,
     membersMin: 0,
-    refEdges: [['b.ml', 'A.helper', true]],
+    refEdges: [['b.ml', 'A.helper', true], ['b.ml', 'helper', false]],
     errorsMax: 0,
   },
   {
