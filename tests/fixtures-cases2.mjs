@@ -7,6 +7,33 @@
  */
 export const EXTRA_CASES = [
   {
+    // PowerShell（2026-09-25 新加）：class / function / 参数 / 跨文件命令调用。
+    // 这门语言的节点名全是实测出来的（`工作文档\样本库\probe-pwsh.mjs`）：
+    //   · 类型 = class_statement / function_statement；
+    //   · 成员 = class_property_definition（field）/ class_method_definition（method）；
+    //   · 参数 = script_parameter（**不在通用参数表名单里**，不声明就一个成员都列不出来）；
+    //   · 属性名带 `$`（`$Name`）、参数名带类型注解（`[string]$Name`）→ nameOf 钩子剥掉；
+    //   · 依赖：跨文件靠**命令名**（`Get-Widget`），静态 import 是 `Import-Module -Name X`；
+    //     `using namespace …` 在这门语法里是 `command` 节点（不是 using_statement）。
+    dir: 'powershell',
+    lang: 'powershell',
+    types: 4,                                   // class Widget + 三个 function
+    names: ['Widget', 'Get-Widget', 'Format-Widget', 'Show-All'],
+    kinds: { class: 1, function: 3 },
+    importsInclude: ['Pester'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 6,
+    // 成员名要**干净**：属性不带 `$`、参数不带 `[type]` 与默认值
+    memberSigs: [['Widget', 'Describe', ''], ['Get-Widget', 'Size', '']],
+    edgeWeights: [
+      ['Show-All', 'Get-Widget', 'ref', 1],      // 跨文件命令名调用
+      ['Show-All', 'Format-Widget', 'ref', 1],
+      ['Get-Widget', 'Widget', 'ref', 1],        // `[Widget]::new(...)` → 类引用
+    ],
+    errorsMax: 0,
+  },
+  {
     dir: 'bash',
     lang: 'bash',
     types: 1,

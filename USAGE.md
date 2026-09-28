@@ -88,9 +88,9 @@ step towards understanding unfamiliar code.
 its source and its uncertainty, and nothing is uploaded to any server.
 
 Languages: C# / TypeScript / TSX / JavaScript / Java / Python / Kotlin / Lua / Go / Rust / C / C++ / PHP / Swift /
-Scala / Shell / Zig / Solidity / OCaml / ReScript / Ruby / HCL (Terraform) / GraphQL / TLA+ / SystemRDL /
-Emacs Lisp / Elixir / Vue
-(28 in total), plus file-level formats such as JSON / YAML /
+Scala / Shell / PowerShell / Zig / Solidity / OCaml / ReScript / Ruby / Dart / HCL (Terraform) / GraphQL / TLA+ /
+SystemRDL / Emacs Lisp / Elixir / Vue
+(30 in total), plus file-level formats such as JSON / YAML /
 TOML / CSS / HTML (off by default — tick them explicitly under "Setup… → Languages").
 
 ---

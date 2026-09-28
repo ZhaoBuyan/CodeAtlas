@@ -567,6 +567,80 @@ const bashImportText = (node) => {
   return '';
 };
 
+/**
+ * PowerShell（2026-09-25 新加）。
+ *
+ * 结构（实测 probe，见 `工作文档\样本库\probe-pwsh.mjs`）：
+ *   · 类型：`class_statement`（class）/ `function_statement`（function）——
+ *     **注意参数是 `script_parameter`、不是通用名单里的 `parameter`**，不声明就一个成员都列不出来；
+ *   · 成员：`class_property_definition` / `class_method_definition`；
+ *   · 名字：class / 属性 / 方法直接给 `simple_name` / `variable` / 返回类型 + `simple_name`，
+ *     函数给 `function_name`；属性名带 `$`，要剥掉（`$Name` → `Name`，与源码里 `$this.Name` 一致）。
+ */
+const pwshNameOf = (node) => {
+  const named = (t) => {
+    const c = node.namedChildren.find((x) => x.type === t);
+    return c ? c.text : null;
+  };
+  if (node.type === 'function_statement') return named('function_name');
+  if (node.type === 'class_statement') return named('simple_name');
+  if (node.type === 'class_property_definition') {
+    const v = named('variable');
+    return v ? v.replace(/^\$/, '') : null;
+  }
+  if (node.type === 'class_method_definition') {
+    // 返回类型在前、名字在后：取**最后一个** simple_name（构造函数那个就是类名）
+    const names = node.namedChildren.filter((c) => c.type === 'simple_name');
+    return names.length ? names[names.length - 1].text : null;
+  }
+  /**
+   * 参数：`[Parameter(Mandatory=$true)] [string] $Name` —— 通用兜底会把这**整串**当名字
+   * （实测成员列表里是 `[Parameter(Mandatory = $true)],[int]$Size = 3` 这种）。
+   * 剥掉类型注解与 `$` 前缀，只留变量名。
+   */
+  if (node.type === 'script_parameter' || node.type === 'class_method_parameter') {
+    const v = node.namedChildren.find((c) => c.type === 'variable');
+    return v ? v.text.replace(/^\$/, '') : null;
+  }
+  return null;
+};
+
+/**
+ * PowerShell 的依赖：`using namespace System.Text` 与 `Import-Module -Name Pester` /
+ * `Import-Module ./helpers.psm1`。点源 `. ./helpers.ps1` 也算（与 bash 的 `source` 同义）。
+ * 只认**字面量**：变量拼接（`Import-Module "$PSScriptRoot/x.psm1"`）一律不碰 —— 路径是动态的。
+ *
+ * ⚠ 实测：`using namespace …` 在这门语法里**不是** `using_statement`，而是一个 `command`
+ *   （command_name = `using`，参数是 `generic_token` 序列）—— 按 `using_statement` 判会一条都采不到。
+ *   参数也不是 `simple_name` / `bareword`，是 `generic_token`；`-Name` 是 `command_parameter`。
+ */
+const pwshImportKind = (node) => {
+  if (node.type !== 'command') return null;
+  const cmd = node.namedChildren.find((c) => c.type === 'command_name');
+  if (!cmd) return null;
+  const t = cmd.text.replace(/^['"]|['"]$/g, '');
+  if (t === 'using') return 'using';
+  if (t === 'Import-Module') return 'import';
+  if (t === '.') return 'source';
+  return null;
+};
+const pwshImportText = (node) => {
+  const cmd = node.namedChildren.find((c) => c.type === 'command_name');
+  const name = cmd ? cmd.text.replace(/^['"]|['"]$/g, '') : '';
+  const els = node.namedChildren.filter((c) => c.type === 'command_elements');
+  const toks = els.flatMap((el) => el.namedChildren).filter((c) => c.type === 'generic_token');
+  if (name === 'using') {
+    // `using namespace System.Text` → 第二个 token（第一个是 `namespace`）
+    return toks.length >= 2 ? toks[1].text : '';
+  }
+  // Import-Module / 点源：取**最后一个** token（`-Name Pester` → Pester；`. ./x.ps1` → ./x.ps1）
+  const last = toks[toks.length - 1];
+  if (!last) return '';
+  const v = last.text.replace(/^['"]|['"]$/g, '');
+  // 引号里含变量（`"$PSScriptRoot/x.psm1"`）→ 动态路径，不认
+  return /\$/.test(v) ? '' : v;
+};
+
 /** Dart 的签名都包在 *_signature 里（declaration 与 method_signature 都可能包着一层） */
 const dartSigNode = (node) => {
   if (node.type === 'declaration' || node.type === 'method_signature') {
@@ -867,6 +941,37 @@ export const LANGUAGES = {
     baseNodes: [],
     decisions: ['if_statement', 'for_statement', 'while_statement', 'case_statement', 'binary_expression'],
     decisionOps: ['&&', '||'],
+  },
+
+  powershell: {
+    id: 'powershell',
+    label: 'PowerShell',
+    status: 'ok',
+    exts: ['.ps1', '.psm1', '.psd1'],
+    wasm: 'powershell/tree-sitter-powershell.wasm',
+    namespaces: {},
+    // 类型：class / function（实测节点名，见 pwshNameOf 上方的说明）
+    types: {
+      class_statement: 'class',
+      function_statement: 'function',
+    },
+    members: {
+      class_property_definition: 'field',
+      class_method_definition: 'method',
+      // 函数体里的参数是 script_parameter（**不在通用参数表名单里**），不声明的话
+      // 成员签名会缺参数表
+      script_parameter: 'parameter',
+    },
+    nameOf: pwshNameOf,
+    imports: {},
+    importKindOf: pwshImportKind,
+    importTextOf: pwshImportText,
+    // `Get-Widget` 这类命令名算引用：PowerShell 的跨文件函数调用就长这样
+    refTypes: ['command_name', 'type_identifier'],
+    baseFields: [],
+    baseNodes: [],
+    decisions: ['if_statement', 'elseif_clause', 'else_clause', 'foreach_statement', 'for_statement', 'while_statement', 'switch_statement', 'comparison_expression', 'logical_expression'],
+    decisionOps: [],
   },
 
   zig: {
