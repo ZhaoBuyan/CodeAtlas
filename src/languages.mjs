@@ -1188,6 +1188,10 @@ export const LANGUAGES = {
     wasm: 'go/tree-sitter-go.wasm',
     namespaces: { package_clause: 1 },
     namespaceScope: 'file',
+    // ⚠ `package_clause` 的文本是**整串** `package cobra` —— 不取里面的 `package_identifier`，
+    // 命名空间就会记成 `"package cobra"`（实测：某真 Go 项目里所有候选的 ns 都是这个形状，
+    // 于是"同包"这一档**一次都没匹配上**，同一包内的裸名引用只能去撞同名的别包符号）。
+    nameOf: (node) => (node.namedChildren.find((c) => c.type === 'package_identifier') || {}).text || null,
     types: { type_declaration: 'type' },
     // type_declaration 下面包着 type_spec，kind 要看 type_spec 的 type 字段
     typeKindFn: (node) => {
