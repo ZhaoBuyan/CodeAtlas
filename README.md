@@ -325,9 +325,11 @@ Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the rea
 ## Debugging tools
 
 ```bash
-npm test                                          # language fixtures regression (48 cases, one process each)
+npm test                                          # language fixtures regression (55 cases, one process each) + security gates
 npm run probe                                     # print the node names tree-sitter actually produces per language
-npm run probe:profile                             # audit: every node name declared in a language profile must exist in its grammar
+npm run probe:profile                             # audit: every node name AND `localBindings` field name in a profile must exist in its grammar
+npm run probe:web                                 # security gate: facets `color` comes from the scanned repo — the UI must only accept safe colors
+npm run probe:payload                             # security gate: how the packaging script quotes paths for PowerShell (paths containing `'`)
 node tests/probe-file.mjs <file> [--lang csharp]   # single-file probe: where the ERRORs are, which declarations are recognized
 node tests/probe-abi.mjs                           # grammar smoke test (load + parse every wasm from both sources)
 node tests/probe-grammars.mjs [--release] [--gc]   # grammar memory probe (where loading many grammars breaks, line by line)

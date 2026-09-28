@@ -275,9 +275,11 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（48 个用例，各自独立进程）
+npm test                                          # 语言 fixtures 回归（55 个用例，各自独立进程）+ 安全回归
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
-npm run probe:profile                             # 审计：语言 profile 里声明的每个节点名都必须真在语法包里
+npm run probe:profile                             # 审计：语言 profile 里声明的每个节点名与 `localBindings` 字段名都必须真在语法包里
+npm run probe:web                                 # 安全回归：facets 的 color 是仓库里的配置，前端只许放行安全色值
+npm run probe:payload                             # 安全回归：打包脚本给 PowerShell 传路径时的引用（带 `'` 的路径）
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
 node tests/probe-abi.mjs                           # 语法包冒烟（两个来源里的 wasm 全加载 + 全解析一遍）
 node tests/probe-grammars.mjs [--release] [--gc]   # 语法包内存探针（多语法包崩在哪儿，逐行落盘）
