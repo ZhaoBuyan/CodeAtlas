@@ -945,6 +945,17 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
    * 别名右边的模块如果不在本次图里 → 解析照样失败 → 如实放弃（这正是"宁缺勿错"要的）。
    */
   const aliases = new Map();
+  /**
+   * 本文件里**局部绑定**的名字（参数、`x := …`、`var x …` 之类）。
+   *
+   * 为什么要记：这些名字在当前作用域里是**变量**，可"引用"是按名字记的 —— 于是
+   * `for i := range x` 里的 `i`、`func f(s string)` 里的 `s` 都会被当成引用，
+   * 万一图里有个同名的类型/函数，就接出一条**错边**；没有同名节点时只是灌噪声
+   * （实测某真 Go 项目：`unresolved` 里 Top 名字是 `string`/`error`/`bool`/`s`/`x`/`i`）。
+   *
+   * 只按 profile 的 `localBindings` 声明收集，**不做猜测**；没声明的语言这里是空集合。
+   */
+  const localNames = new Set();
   let fileNamespace = '';
   const typeStack = [];
   let errors = 0;
@@ -1138,6 +1149,23 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
 
   function walk(node) {
     const type = node.type;
+    // 局部绑定（参数 / `x := …` / `var x …`）：把**裸名字**登记下来（见 localBindings 的说明）。
+    // 只按 profile 声明的节点名与字段取，取不到就跳过 —— 不做任何猜测。
+    const lbField = lang.localBindings ? lang.localBindings[type] : null;
+    if (lbField) {
+      const pushNames = (n) => {
+        if (!n) return;
+        // 字段可能是**列表**（`short_var_declaration` 的 left 是一串 identifier）或单个节点
+        const cands = n.type === 'expression_list' || n.type === 'identifier_list' ? n.namedChildren : [n];
+        for (const c of cands) {
+          const nm = c.type === 'identifier' ? c.text : (ID_TYPES.includes(c.type) ? c.text : null);
+          // 只收**裸标识符**：`self.x` / `a.b` 这类成员访问不是局部绑定
+          if (nm && /^[A-Za-z_][A-Za-z0-9_']*$/.test(nm)) localNames.add(nm);
+        }
+      };
+      pushNames(node.childForFieldName(lbField));
+      if (lbField === 'name' && lang.localExtraFields) for (const f of lang.localExtraFields) pushNames(node.childForFieldName(f));
+    }
 
     // 只数真正的 ERROR（语法树里放不下的部分）。
     // 不数 isMissing：那种零宽节点很常见（比如 using 后面），无害，数它只会把信号淹了。
@@ -1349,7 +1377,7 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
     console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
   }
-  return { types, abstractScopes, aliases, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, abstractScopes, aliases, localNames, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -1916,6 +1944,8 @@ async function extractFiles(files) {
     // 模块别名表（OCaml 的 `module B = Bytes`）：解析限定名时要用（见 aliases 的说明）。
     // 只在这个文件真有别名时才写，别给每个文件加个空对象。
     if (facts.aliases?.size) part.file.aliases = Object.fromEntries(facts.aliases);
+    // 局部绑定名（参数 / `x := …`）：解析裸名时用来判断"这是变量、不是引用"（见 localNames 的说明）
+    if (facts.localNames?.size) part.file.locals = [...facts.localNames];
     if (isTestPath(f.rel)) part.file.isTest = true;
     part.ns = facts.namespaces;
     parts.push(part);
@@ -2776,6 +2806,12 @@ export async function scan(opts) {
    */
   const debugRefLog = [];
   const dbgRef = (msg) => { if (process.env.CA_DEBUG_REF) debugRefLog.push(msg); };
+  /**
+   * 诊断：局部名当引用的规模（A3）。`CA_DEBUG_LOCAL=<文件>` 时，把"裸名命中本文件局部绑定"
+   * 的引用逐条记下来（名字 / 引用方文件 / 最终接上了谁 / 是否放弃），用来判断
+   * "跳过局部名"是**清噪声**还是**会丢真边**。
+   */
+  const localLog = [];
   const resolveName = (name, fromTypeId) => {
     // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的，
     // 所以必须按完整限定名精确匹配 —— 匹配不上就**放弃**，绝不能退化成"按叶子名撞"。
@@ -2996,13 +3032,28 @@ export async function scan(opts) {
     // 真跨族依赖（FFI / 反编译产物）不靠名字匹配表达，过滤掉只会让图更准。
     // 族内是例外，而且是必须的：`js ↔ ts ↔ tsx ↔ vue`、`c ↔ cpp`（见限定名分支那段说明与实测数字）。
     const fromLang = fileRecs[allTypes[fromTypeId]?.file]?.lang;
+    /**
+     * **A3：局部绑定名不当跨文件引用**（2026-09-25）。
+     *
+     * 参数 / `x := …` / `var x …` 在当前作用域里是**变量**，可引用是按裸名记的 ——
+     * 实测某真 Go 项目：**22,256 条**引用是局部名，其中 **19,471 条**在图上一个候选都没有
+     * （纯噪声，把 `unresolved` 灌成 5 万），**1,283 条**却接上了东西（潜在错边，
+     * 例：`credentials/google_test.go` 里的局部 `s` 接到了另一个包的 `google.s`）。
+     *
+     * 保守在哪：**只砍跨文件**。同文件那一档保留 —— "本文件里就有这个同名符号"是比
+     * "别的文件里有个同名符号"强得多的证据，而且同文件候选很可能正是那个变量本身的归属
+     * （`value` / `field` 节点）。这一刀只去掉"变量名撞上别的文件的同名类型"这一类。
+     */
+    const fromFile = fileRecs[allTypes[fromTypeId]?.file];
+    const isLocalName = Boolean(fromFile?.locals && fromFile.locals.includes(name));
     const hit = collapseUnits((bySimpleName.get(name) || []).filter((id) => {
       const t = allTypes[id];
-      return t && sameFamily(fileRecs[t.file]?.lang, fromLang);
+      if (!t || !sameFamily(fileRecs[t.file]?.lang, fromLang)) return false;
+      if (isLocalName && t.file !== fromFile?.id) return false;
+      return true;
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
-    if (!hit || !hit.length) {
-      /**
+    if (!hit || !hit.length) {      /**
        * **裸名是"某条 import 的尾巴"** → 接到那条 import 的**前缀**上（2026-09-25）。
        *
        * 场景（实测 junit5 一个样本就有 3,193 条真可接的）：Java 的静态导入
@@ -3038,36 +3089,47 @@ export async function scan(opts) {
       }
       unresolved.unknown++;
       dbgUnres(name, fromTypeId, 'simple-no-candidate', 0);
+      if (isLocalName && process.env.CA_DEBUG_LOCAL) localLog.push(`${name}\tno-candidate\t-\t${fromFile?.path}`);
       return null;
     }
+    /** A3 诊断的统一出口：局部名接上了谁（- 表示没有） */
+    const localNote = (picked, why) => {
+      if (isLocalName && process.env.CA_DEBUG_LOCAL) {
+        const t = picked ? allTypes[picked] : null;
+        localLog.push(`${name}\t${why}\t${t ? `${t.fqn || t.name}@${fileRecs[t.file]?.path}` : '-'}\t${fromFile?.path}`);
+      }
+      return picked;
+    };
     if (hit.length === 1) {
       // 唯一候选也得看 import：这个档位差很多（有 import 依据 > 只是没撞名）
       const id = hit[0];
+      if (isLocalName && process.env.CA_DEBUG_LOCAL) localNote(id, 'unique');
       return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
     }
     const from = allTypes[fromTypeId];
     const sameFile = hit.filter((id) => allTypes[id].file === from.file);
-    if (sameFile.length === 1) return { id: sameFile[0] };
+    if (sameFile.length === 1) { localNote(sameFile[0], 'same-file'); return { id: sameFile[0] }; }
     // ③ 复测报告 §1：同名两处 + 第三方调用时，以前**直接放弃**（静默丢边）—— JS 没有命名空间，
     // “同文件”是唯一能救它的一档，救不到就丢；自扫实测 57 处这种被丢掉的引用。
     // 补一档：**用引用方文件的 imports 消歧**（与读期 evidenceOf 同一套口径，见 src/modules.mjs）。
     const viaImport = hit.filter((id) => hasImportBacking(fromTypeId, id));
-    if (viaImport.length === 1) return { id: viaImport[0], import: true };
+    if (viaImport.length === 1) { localNote(viaImport[0], 'via-import'); return { id: viaImport[0], import: true }; }
     // ⚠ `viaImport.length > 1` 不等于"没有 import 依据"：候选**都**有依据、挑不出唯一的那一个
     // （典型：import `a.b.X.Something` 经前缀规则同时指得到 `a.b.X` 与 `a.b.X.Something`，
     //  于是引用 `X` 时三个同名候选一起命中）。下面挑出来的候选仍然可能**确实有** import 依据，
     //  此时必须把 `evidenced` 带出去 —— 否则 `tierOf` 只会看到 `{id}`，把有依据的边记成 name 档。
     //  实测 oss3-akka：7 条这样的边（`jdocs.ddata.protobuf.TwoPhaseSetSerializer → jdocs.ddata.TwoPhaseSet` 等）。
     const sameNs = hit.filter((id) => allTypes[id].ns === from.ns);
-    if (sameNs.length === 1) return { id: sameNs[0], evidenced: hasImportBacking(fromTypeId, sameNs[0]) };
+    if (sameNs.length === 1) { localNote(sameNs[0], 'same-ns'); return { id: sameNs[0], evidenced: hasImportBacking(fromTypeId, sameNs[0]) }; }
     const sameRoot = hit.filter((id) => {
       const a = allTypes[id].ns.split('.')[0];
       const b = from.ns.split('.')[0];
       return a && a === b;
     });
-    if (sameRoot.length === 1) return { id: sameRoot[0], evidenced: hasImportBacking(fromTypeId, sameRoot[0]) };
+    if (sameRoot.length === 1) { localNote(sameRoot[0], 'same-root'); return { id: sameRoot[0], evidenced: hasImportBacking(fromTypeId, sameRoot[0]) }; }
     unresolved.ambiguous++;
     dbgUnres(name, fromTypeId, 'simple-ambiguous', hit.length);
+    if (isLocalName && process.env.CA_DEBUG_LOCAL) localNote(null, 'ambiguous');
     return null;
   };
 
@@ -3249,6 +3311,9 @@ export async function scan(opts) {
   }
   if (process.env.CA_DEBUG_UNRESOLVED) {
     try { fs.writeFileSync(process.env.CA_DEBUG_UNRESOLVED, unresolvedLog.join('\n') + '\n'); } catch { /* 诊断用 */ }
+  }
+  if (process.env.CA_DEBUG_LOCAL) {
+    try { fs.writeFileSync(process.env.CA_DEBUG_LOCAL, localLog.join('\n') + '\n'); } catch { /* 诊断用 */ }
   }
   stripResolveOnlyKeys({ allTypes });
   const bundle = {

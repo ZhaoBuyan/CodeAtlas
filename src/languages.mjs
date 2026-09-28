@@ -286,6 +286,18 @@ const TS_SHAPE = {
     variable_declaration: (node) => isFunctionAssignment(node),
   },
   skipNameNodes: { required_parameter: 'pattern', optional_parameter: 'pattern', assignment_pattern: 'left', formal_parameters: 'identifier' },
+  /**
+   * 局部绑定（"参数 / `const x = …`"这类名字）—— 规则与保守边界见 Go profile 里的同一项。
+   * 从 TS_SHAPE 共享，所以 js / ts / tsx / vue 四个 profile 都会带上。
+   */
+  localBindings: {
+    variable_declarator: 'name',
+    required_parameter: 'pattern',
+    optional_parameter: 'pattern',
+    rest_pattern: 'name',
+    assignment_pattern: 'left',
+    shorthand_property_identifier_pattern: 'name',
+  },
   members: {
     method_definition: 'method',
     method_signature: 'method',
@@ -933,6 +945,15 @@ export const LANGUAGES = {
       function_definition: 'function',
       assignment: 'field',
     },
+    // 局部绑定（见 Go profile 里同一项的说明）：`x = …` 的左边、参数的名字
+    localBindings: {
+      assignment: 'left',
+      named_expression: 'name',
+      parameters: 'name',
+      default_parameter: 'name',
+      typed_parameter: 'name',
+      typed_default_parameter: 'name',
+    },
     imports: { import_statement: 1, import_from_statement: 1 },
     baseFields: ['superclasses'],
     baseNodes: [],
@@ -1477,6 +1498,15 @@ export const LANGUAGES = {
     // 于是"同包"这一档**一次都没匹配上**，同一包内的裸名引用只能去撞同名的别包符号）。
     nameOf: (node) => (node.namedChildren.find((c) => c.type === 'package_identifier') || {}).text || null,
     types: { type_declaration: 'type' },
+    // 局部绑定（参数 / `x := …` / `var x …`）：这些名字在当前作用域里是**变量**，
+    // 不该当成"别处那个同名类型/函数"的引用（见 localBindings 的说明）
+    localBindings: {
+      parameter_declaration: 'name',
+      short_var_declaration: 'left',
+      var_spec: 'name',
+      range_clause: 'left',
+      type_parameter_declaration: 'name',
+    },
     // type_declaration 下面包着 type_spec，kind 要看 type_spec 的 type 字段
     typeKindFn: (node) => {
       const spec = node.namedChildren.find((c) => c.type === 'type_spec');
