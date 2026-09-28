@@ -275,7 +275,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
-npm test                                          # 语言 fixtures 回归（38 个用例，各自独立进程）
+npm test                                          # 语言 fixtures 回归（48 个用例，各自独立进程）
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 npm run probe:profile                             # 审计：语言 profile 里声明的每个节点名都必须真在语法包里
 node tests/probe-file.mjs <文件> [--lang csharp]   # 单文件探针：ERROR 在哪、哪些声明认得出来
@@ -283,6 +283,29 @@ node tests/probe-abi.mjs                           # 语法包冒烟（两个来
 node tests/probe-grammars.mjs [--release] [--gc]   # 语法包内存探针（多语法包崩在哪儿，逐行落盘）
 node src/cli.mjs langs [--json]                    # 看支持哪些语言（--json 给程序读）
 ```
+
+**改解析 / 加语言时用的四件套**（都在 `tools/`，`npm run` 里也有别名）：
+
+```bash
+npm run probe:tree -- <文件> [深度] [--wasm r/tree-sitter-r.wasm]   # 任意文件的真实节点名（加语言先跑它）
+npm run diag:unresolved -- <扫描目录> [--top 25]                    # 把"接不上的引用"按 语言×原因×名字 聚合
+npm run diff:bundles -- <旧bundle目录> <新bundle目录> [--sample 源码根] [--by-lang]  # 逐边对账
+npm run verify:edges -- <旧目录> <新目录> <源码根> [--lang java]     # 新增边逐条回源码核对依据
+npm run diff:rescan -- <基线复扫日志> <新复扫日志>                  # 66+ 样本全量复扫的逐样本对账
+```
+
+为什么是这四件（都是踩出来的）：
+- **`probe:tree` 而不是猜节点名** —— 加三门语言时三次都是"按文档/直觉写必错"：
+  PowerShell 的 `using namespace X` 不是 `using_statement` 而是 `command`；R 的函数节点
+  名字在**左边**（`function_definition` 的 `name` 字段是字面量 `function`）；
+  Protobuf 的 `message` 没有 `name` 字段。
+- **`diag:unresolved` 而不是只看 `unresolved` 总数** —— 那个总数一半是内建类型/宏/局部变量，
+  按名字聚合才能把**噪声**与**真缺口**分开（曾一次看出 Java 静态导入成员名是 3,193 条真可接，
+  也一次证明 C 侧"65,922 条里只有 1% 有定义"→ 不值得做）。
+- **`diff:bundles` 而不是只看边数变化** —— "总数不变、边被换了目标"是更坏的回归；
+  逐边比才能说"新增 0 种 = 纯减法、没把任何边换目标"。
+- **`verify:edges` 而不是眼看** —— 新增边逐条回源码找 import / include 依据（本会话
+  2,695 条 Java 新增边机械核对全过，才敢说没问题）。
 
 ## 界面能干什么
 

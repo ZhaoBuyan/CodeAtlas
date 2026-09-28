@@ -325,7 +325,7 @@ Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the rea
 ## Debugging tools
 
 ```bash
-npm test                                          # language fixtures regression (38 cases, one process each)
+npm test                                          # language fixtures regression (48 cases, one process each)
 npm run probe                                     # print the node names tree-sitter actually produces per language
 npm run probe:profile                             # audit: every node name declared in a language profile must exist in its grammar
 node tests/probe-file.mjs <file> [--lang csharp]   # single-file probe: where the ERRORs are, which declarations are recognized
@@ -333,6 +333,31 @@ node tests/probe-abi.mjs                           # grammar smoke test (load + 
 node tests/probe-grammars.mjs [--release] [--gc]   # grammar memory probe (where loading many grammars breaks, line by line)
 node src/cli.mjs langs [--json]                    # list supported languages (--json for machines)
 ```
+
+**The four tools for changing parsing / adding a language** (in `tools/`, also aliased under `npm run`):
+
+```bash
+npm run probe:tree -- <file> [depth] [--wasm r/tree-sitter-r.wasm]   # real node names for any file (run this first)
+npm run diag:unresolved -- <scan dir> [--top 25]                    # unresolved refs grouped by language × reason × name
+npm run diff:bundles -- <old dir> <new dir> [--sample src-root] [--by-lang]   # edge-by-edge diff
+npm run verify:edges -- <old dir> <new dir> <src-root> [--lang java] # check every new edge against the source
+npm run diff:rescan -- <baseline log> <new log>                     # per-sample diff of a full rescan
+```
+
+Why these four exist (all learned the hard way):
+- **`probe:tree` instead of guessing node names** — adding three languages, all three were
+  "writing it from the docs is wrong": PowerShell's `using namespace X` is not a `using_statement`
+  but a `command`; R's function name lives on the **left** side (`function_definition`'s `name`
+  field is the literal `function`); Protobuf's `message` has no `name` field at all.
+- **`diag:unresolved` instead of the raw `unresolved` count** — half that count is built-in types,
+  preprocessor macros and local variables. Grouping by name is what separates noise from real gaps
+  (it once showed Java static-import member names were 3,193 genuinely resolvable refs, and also
+  proved the C side was "1% of 65,922 have a definition" → not worth doing).
+- **`diff:bundles` instead of watching the edge count** — "same total, edges re-targeted" is a worse
+  regression than losing edges; only an edge-by-edge diff can say "0 added = pure subtraction,
+  nothing re-targeted".
+- **`verify:edges` instead of eyeballing** — every new edge is checked back against an explicit
+  import/include in the source (2,695 new Java edges passed mechanically before we called it good).
 
 ## What the UI can do
 
