@@ -726,6 +726,46 @@ const rImportText = (node) => {
   return '';                                            // 动态（library(pkg, character.only=TRUE)）→ 不认
 };
 
+/**
+ * Protobuf（2026-09-25 新加）。实测（`工作文档\样本库\probe-any.mjs`，零 ERROR）：
+ *   · 类型：`message`（含嵌套 message）/ `enum` / `service`；名字在 `message_name` / `enum_name` /
+ *     `service_name` 上（没有 `name` 字段，所以要 `pwshNameOf` 式的钩子）；
+ *   · 成员：message 里的 `field`（字段）、enum 里的 `enum_field`、service 里的 `rpc`；
+ *   · 命名空间：`package atlas.widget.v1;`（`package` 节点的文本是整串，要取 `full_ident`）；
+ *   · 依赖：`import "atlas/common.proto";` → import（引号里的路径直接可用）；
+ *     类型引用是 `message_or_enum_type`（`atlas.common.Meta` / `google.protobuf.Timestamp`）。
+ */
+const protoNameOf = (node) => {
+  const suffixes = { message: 'message_name', enum: 'enum_name', service: 'service_name' };
+  const want = suffixes[node.type];
+  if (want) {
+    const c = node.namedChildren.find((x) => x.type === want);
+    // `message_name` 包着一层 identifier；取不到就退回它自己的文本
+    if (c) return (c.namedChildren.find((x) => x.type === 'identifier') || c).text;
+  }
+  if (node.type === 'field' || node.type === 'enum_field') {
+    const n = node.namedChildren.find((x) => x.type === 'identifier');
+    return n ? n.text : null;
+  }
+  if (node.type === 'rpc') {
+    const c = node.namedChildren.find((x) => x.type === 'rpc_name');
+    return c ? c.text : null;
+  }
+  return null;
+};
+const protoImports = {
+  import: 'import',
+};
+const protoImportText = (node) => {
+  const s = node.namedChildren.find((x) => x.type === 'string');
+  return s ? s.text.replace(/^"|"$/g, '') : '';
+};
+/** package 节点的文本是 `package a.b.c;`，命名空间只取 full_ident */
+const protoNamespace = (node) => {
+  const f = node.namedChildren.find((c) => c.type === 'full_ident');
+  return f ? f.text : null;
+};
+
 /** Dart 的签名都包在 *_signature 里（declaration 与 method_signature 都可能包着一层） */
 const dartSigNode = (node) => {
   if (node.type === 'declaration' || node.type === 'method_signature') {
@@ -1046,6 +1086,40 @@ export const LANGUAGES = {
     baseFields: [],
     baseNodes: [],
     decisions: ['if_statement', 'for_statement', 'while_statement', 'repeat_statement'],
+    decisionOps: [],
+  },
+
+  proto: {
+    id: 'proto',
+    label: 'Protobuf',
+    status: 'ok',
+    exts: ['.proto'],
+    wasm: 'proto/tree-sitter-proto.wasm',
+    namespaces: { package: 1 },
+    namespaceScope: 'file',
+    // `package atlas.widget.v1;` 的节点文本是**整串**，`full_ident` 才是命名空间本身
+    namespaceNameOf: (node) => {
+      const f = node.namedChildren.find((c) => c.type === 'full_ident');
+      return f ? f.text : null;
+    },
+    nameOf: protoNameOf,                        // 类型与成员的名字都在这一个钩子里（见上）
+    types: {
+      message: 'message',
+      enum: 'enum',
+      service: 'service',
+    },
+    members: {
+      field: 'field',
+      enum_field: 'enumValue',
+      rpc: 'method',
+    },
+    imports: protoImports,
+    importKindOf: (node) => (node.type === 'import' ? 'import' : null),
+    importTextOf: protoImportText,
+    refTypes: ['message_or_enum_type'],
+    baseFields: [],
+    baseNodes: [],
+    decisions: [],
     decisionOps: [],
   },
 

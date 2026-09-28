@@ -1170,7 +1170,9 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
     }
 
     if (lang.namespaces[type]) {
-      const name = nameOf(node, lang);
+      // 命名空间的名字可以走专用钩子（Protobuf 的 `package a.b.c;` 节点文本是整串，
+      // 而 `nameOf` 已经被类型/成员占了；这种情况用 `namespaceNameOf` 最干净）
+      const name = lang.namespaceNameOf ? lang.namespaceNameOf(node) : nameOf(node, lang);
       if (name) {
         namespaces.add(name);
         // 作用域=整份文件：Java/Kotlin 的 package 语句，以及 C# 10 的 `namespace X;`

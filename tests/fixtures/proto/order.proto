@@ -1,0 +1,16 @@
+// 引用方：`import "widget.proto"` + 引用里面声明的 message / enum（跨文件依赖）。
+
+syntax = "proto3";
+
+package atlas.shop.v1;
+
+import "widget.proto";
+
+message Order {
+  atlas.widget.v1.Widget item = 1;
+  atlas.widget.v1.Kind kind = 2;
+}
+
+service OrderService {
+  rpc Get(Order) returns (atlas.widget.v1.Widget);
+}

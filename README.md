@@ -163,7 +163,7 @@ runtime (about 30 MB).
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
-- The payload ships wasm only for the **31 code languages + 6 file-level formats** we support
+- The payload ships wasm only for the **32 code languages + 6 file-level formats** we support
   and nothing else (the unused grammars in the npm package stay out).
 - Third-party components and licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
   (a copy also ships in the extracted engine directory).
@@ -459,7 +459,7 @@ Decompilation supports three things: **.NET assemblies**, **.NET single-file pub
 (see the known limits under "Scanning without source" above).
 Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, point at it and it scans.
 
-### Supported languages (31 code languages)
+### Supported languages (32 code languages)
 
 | Language | Extensions | Status |
 | --- | --- | --- |
@@ -483,6 +483,7 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | Shell | `.sh` `.bash` `.zsh` | ✅ fixtures + measured (nvm) (no types → module node; `source`/`.` become imports, command names become refs) |
 | PowerShell | `.ps1` `.psm1` `.psd1` | ✅ fixtures (class / function; cross-file dependencies ride on **command names**, `Import-Module` and `using namespace` become imports — dynamic dot-sourcing like `$PSScriptRoot\x.ps1` is not guessed at) |
 | R | `.r` `.R` `.rmd` | ✅ fixtures + measured (shiny, 276 `.R` files: functions and reference classes, `library()` / `source()` become imports, cross-file calls become edges) |
+| Protobuf | `.proto` | ✅ fixtures + measured (real `.proto` files across several projects: `package` acts as a namespace, message / enum / service and nested messages, fields and rpcs are members, `import "x.proto"` becomes a dependency edge) |
 | Zig | `.zig` | ✅ fixtures (const X = struct/enum) |
 | Solidity | `.sol` | ✅ fixtures (contract/interface + inheritance) |
 | OCaml | `.ml` `.mli` | ✅ fixtures + measured (a 3,514-file project: modules act as namespaces, `List.map`-style qualified refs land on `stdlib/list.ml`, a value only becomes a node when some qualified ref points at it, functor parameters / module aliases resolve by scope, and a `.mli` with no sibling `.ml` still contributes its `val`s) |
@@ -625,7 +626,7 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
 - [x] Grouping layer: system rules (facets config) + directory / namespace / flat
 - [x] MCP server (search symbols / find references / export subgraphs) for AI
-- [x] Language coverage: 31 code languages + 6 file-level formats (including **Markdown heading structure**)
+- [x] Language coverage: 32 code languages + 6 file-level formats (including **Markdown heading structure**)
 - [x] Dependency graph view (force-directed) + package-level dependency matrix
 - [x] Pick languages to scan in the launcher (UI + `--lang`)
 - [x] Search improvements: type names + member names (web and MCP) · per-language filtering in the map

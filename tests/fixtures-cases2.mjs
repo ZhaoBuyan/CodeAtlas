@@ -7,6 +7,30 @@
  */
 export const EXTRA_CASES = [
   {
+    // Protobuf（2026-09-25 新加）：package / message / enum / service / 嵌套 message / import。
+    // 实测要点（`工作文档\样本库\probe-any.mjs`，零 ERROR）：
+    //   · 名字在 message_name / enum_name / service_name / rpc_name 上（没有 `name` 字段）→ 钩子；
+    //   · `package atlas.widget.v1;` 节点文本是**整串**，命名空间要取 `full_ident`（专用钩子
+    //     `namespaceNameOf` —— `nameOf` 已经被类型/成员占了）；
+    //   · `import "widget.proto";` → import（引号里就是路径）；
+    //   · 类型引用是 `message_or_enum_type`（`atlas.widget.v1.Widget`）→ 跨文件边是 import 档。
+    dir: 'proto',
+    lang: 'proto',
+    types: 6,                                   // 2 message + 1 嵌套 message + 2 service + 1 enum
+    names: ['Widget', 'Nested', 'Kind', 'WidgetService', 'Order', 'OrderService'],
+    kinds: { message: 3, service: 2, enum: 1 },
+    importsMin: 2,                              // widget.proto 的 timestamp + order.proto 的 widget.proto
+    docs: 0,
+    membersMin: 8,                              // 字段 + 枚举值 + rpc
+    edgeWeights: [
+      // 按**限定名**写：带包名的语言里简单名（Widget / Kind）会跨包撞
+      ['atlas.widget.v1.WidgetService', 'atlas.widget.v1.Widget', 'ref', 6],
+      ['atlas.shop.v1.Order', 'atlas.widget.v1.Widget', 'ref', 2],   // 跨文件（import 档）：字段 + rpc 返回类型
+      ['atlas.widget.v1.Widget', 'atlas.widget.v1.Kind', 'ref', 2],
+    ],
+    errorsMax: 0,
+  },
+  {
     // R（2026-09-25 新加）：函数 / 参考类 / library 导入 / 跨文件引用。
     // 这门语法**没有**专门的函数与类节点（实测，见 profile 里 rKindOf/rNameOf/rMembersOf 的说明）：
     //   `f <- function(...)` 是 binary_operator(<-) 套 function_definition（name 字段是字面量

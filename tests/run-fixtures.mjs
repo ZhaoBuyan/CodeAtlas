@@ -521,7 +521,8 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
   // 边权重 = 引用**次数**（同一个名字在同一个 owner 里出现几次就是几），不是"有 N 个来源"
   if (c.edgeWeights) {
     for (const [from, to, kind, want] of c.edgeWeights) {
-      const sel = (n) => b.types.filter((x) => x.name === n).map((x) => x.id);
+      // 既认简单名、也认限定名（Protobuf 这类带包名的语言里简单名会撞 —— 与下面 refEdges 同一口径）
+      const sel = (n) => b.types.filter((x) => x.name === n || (x.fqn || x.name) === n).map((x) => x.id);
       const fromIds = sel(from);
       const toIds = sel(to);
       const e = b.edges.find((x) => fromIds.includes(x.from) && toIds.includes(x.to) && x.kind === kind);

@@ -1,0 +1,30 @@
+// 回归夹具（2026-09-25，新加语言 Protobuf）：package / message / enum / service / 嵌套 / import。
+// 由 caller.proto 引用（`import "widget.proto"`）。
+
+syntax = "proto3";
+
+package atlas.widget.v1;
+
+import "google/protobuf/timestamp.proto";
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_SMALL = 1;
+  KIND_LARGE = 2;
+}
+
+message Widget {
+  string name = 1;
+  int32 size = 2;
+  Kind kind = 3;
+  google.protobuf.Timestamp created_at = 4;
+
+  message Nested {
+    bool flag = 1;
+  }
+}
+
+service WidgetService {
+  rpc Get(Widget) returns (Widget);
+  rpc List(Kind) returns (stream Widget);
+}
