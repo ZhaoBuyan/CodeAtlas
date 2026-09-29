@@ -33,10 +33,13 @@ jobs:
       # 安全回归（2026-09-25）：
       #   · probe-web-color    —— facets 的 color 是不可信输入，前端只许放行安全色值
       #   · probe-payload-quote —— 打包脚本给 PowerShell 传路径时必须转义 `'`（不转义=构建机执行注入）
-      - name: 安全回归（前端颜色入口 / 打包脚本路径引用）
+      # 运行时回归（同日）：
+      #   · probe-runtime      —— 本地服务 + 路径穿越 + 非法编码 + 增量缓存 + `--watch` 自动重扫
+      - name: 安全与运行时回归（前端颜色入口 / 打包脚本路径引用 / 服务与监控）
         run: |
           node tests/probe-web-color.mjs
           node tests/probe-payload-quote.mjs
+          node tests/probe-runtime.mjs
 
       - name: 先扫一份 bundle（MCP 自检要用）
         run: node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua

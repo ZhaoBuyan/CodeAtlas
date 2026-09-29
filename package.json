@@ -1,6 +1,6 @@
 {
   "name": "code-atlas",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "description": "Code Atlas —— 把任意代码库扫成一份可读的中间数据（bundle），供人探索、供 AI 查询",
@@ -18,11 +18,12 @@
   "scripts": {
     "scan": "node src/cli.mjs scan",
     "serve": "node src/cli.mjs serve",
-    "test": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node tests/mcp-selftest.mjs",
-    "test:ci": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua && node tests/mcp-selftest.mjs tests/.out/ci",
+    "test": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node tests/probe-runtime.mjs && node tests/mcp-selftest.mjs",
+    "test:ci": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node tests/probe-runtime.mjs && node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua && node tests/mcp-selftest.mjs tests/.out/ci",
     "probe": "node tests/probe-nodes.mjs",
     "probe:profile": "node tests/probe-profile-nodes.mjs",
     "probe:web": "node tests/probe-web-color.mjs",
+    "probe:runtime": "node tests/probe-runtime.mjs",
     "probe:payload": "node tests/probe-payload-quote.mjs",
     "probe:abi": "node tests/probe-abi.mjs",
     "probe:mem": "node tests/probe-grammars.mjs",
