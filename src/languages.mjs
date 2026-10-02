@@ -263,7 +263,8 @@ const jsImportKind = (node) => {
 
 /**
  * `val x = …`（Kotlin / Swift / Scala）**既可能是类的属性、也可能是函数里的局部变量**。
- * 只有后者才该登记进 `file.locals` —— 类属性的裸名引用是**合法**的跨文件引用，
+ * 只有后者才该登记进局部绑定表（`file.locals` = 文件顶层、`file.localOwners` = 类型/函数内，见 scan.mjs 的 localByOwner）——
+ * 类属性的裸名引用是**合法**的跨文件引用，
  * 登记了会把真边一起砍掉（"宁缺勿错"要的是别接错，不是尽量少接）。
  * 判据（2026-09-25 实测祖先链）：从父节点往上走，**先撞到函数体算局部、先撞到类型体算成员**；
  * 两头都没撞到（文件顶层那种）按**成员**处理 —— 猜错的代价是少砍一条边，比砍错真边轻。
@@ -281,6 +282,54 @@ const hasAncestorType = (node, type) => {
   for (let p = node.parent; p; p = p.parent) if (p.type === type) return true;
   return false;
 };
+
+/**
+ * **JS 绑定位置取名字**（参数 / `const x = …` / `for (const x of …)` / 解构）：
+ * JS 语法里这些位置**都没有"名字"字段** —— 直接是 `identifier` / `assignment_pattern`（默认值，名字在 `left`）/
+ * `pair_pattern`（`{k: v}`，名字在 `value`）/ `rest_pattern` / `object_pattern` / `array_pattern`。
+ * 所以只能按绑定位置逐个挑（形状实测见 `工作文档\验证\_smoke\js-locals-probe.js` + `npm run probe:tree`）。
+ * ⚠ 别照 TS 写 `required_parameter` / `optional_parameter` —— 那是 TS 语法的节点名，
+ *   在 JS 语法包里**根本不存在**（`probe:profile` 会报"查无此名"，但功能是**静默失效**的）。
+ */
+const jsBindingNames = (node) => {
+  const out = [];
+  const take = (n) => {
+    if (!n || out.length > 64) return;
+    if (n.type === 'identifier' || n.type === 'shorthand_property_identifier_pattern') { out.push(n.text); return; }
+    if (n.type === 'assignment_pattern') { take(n.childForFieldName('left')); return; }   // `b = 1` → 名字在 left
+    if (n.type === 'pair_pattern') { take(n.childForFieldName('value')); return; }         // `{ k: v }` → 名字在 value
+    if (n.type === 'rest_pattern' || n.type === 'object_pattern' || n.type === 'array_pattern' || n.type === 'formal_parameters') {
+      for (const c of n.namedChildren) take(c);
+    }
+  };
+  take(node);
+  return out;
+};
+
+/**
+ * **CommonJS 的 `require` 绑定不是局部变量**（2026-10-03 实测踩到）。
+ *
+ * Babel 编译出来的 JS 满地都是这个形状：
+ *   `var _require = require('../core/CompilerError'), createCompilerError = _require.createCompilerError;`
+ * 这里的 `createCompilerError` 在语法上是 `variable_declarator`，但语义上是**导入绑定** ——
+ * 它指向 `CompilerError.js` 里那个函数，是**真依赖**。要是按局部变量登记（A3 的局部名过滤），
+ * 这些真边会被整片砍掉：实测 oss4-graphql-tools 一个样本上被砍的 202 条里有 **166 条**是这种
+ * （`createUserError` 31 · `createCompilerError` 15 · `resolvers` 7 …）。
+ *
+ * 判据：同一条声明语句里只要有**任何一个** declarator 的值是 `require(...)`（或它的成员访问
+ * `require('x').y`），这条语句里的名字就都算导入绑定。这是 Babel 输出里固定的形状；
+ * 判宽了只会"少砍几条边"（保守方向），不会砍错。
+ * ESM 的 `import { a } from '…'` 本来就不是 `variable_declarator`，不受这里影响。
+ */
+const isRequireDeclaration = (decl) => Boolean(decl) && (decl.namedChildren || []).some((d) => {
+  if (d.type !== 'variable_declarator') return false;
+  const v = d.childForFieldName('value');
+  if (!v) return false;
+  const isRequireCall = (n) => Boolean(n) && n.type === 'call_expression'
+    && (n.childForFieldName('function') || {}).text === 'require';
+  if (isRequireCall(v)) return true;
+  return v.type === 'member_expression' && isRequireCall(v.childForFieldName('object'));
+});
 
 // TS 与 TSX 的语法节点名完全一致（tsx 只是多了 JSX），共用一份
 const TS_SHAPE = {
@@ -309,7 +358,11 @@ const TS_SHAPE = {
   skipNameNodes: { required_parameter: 'pattern', optional_parameter: 'pattern', assignment_pattern: 'left', formal_parameters: 'identifier' },
   /**
    * 局部绑定（"参数 / `const x = …`"这类名字）—— 规则与保守边界见 Go profile 里的同一项。
-   * 从 TS_SHAPE 共享，所以 js / ts / tsx / vue 四个 profile 都会带上。
+   * `ts` / `tsx` / `vue` 三个 profile 直接从这里共享；
+   * ⚠ **`javascript` 是独立 profile（没有 `...TS_SHAPE`），必须自己再写一份** ——
+   *   2026-10-03 抓到过这个漏：那句"四个 profile 都会带上"其实不成立，JS 的局部名一个都没登记，
+   *   仓库自扫里 `web/app.js → src/i18n.mjs` 漏出 52 条单字母错边（`t`/`n`/`c`…）。
+   *   现在由夹具 `tests/fixtures/a3-locals-javascript/` 钉住（`shadowed` 不该成边、`genuine` 必须成边）。
    */
   localBindings: {
     variable_declarator: 'name',
@@ -906,6 +959,26 @@ export const LANGUAGES = {
       variable_declaration: (node) => isFunctionAssignment(node),
     },
     skipNameNodes: { required_parameter: 'pattern', optional_parameter: 'pattern', assignment_pattern: 'left', formal_parameters: 'identifier' },
+    // 局部绑定（`const x = …` / 参数 / `for (const x of …)` / `catch (e)`）—— **JS 语法自己的形状**，
+    // 与 `TS_SHAPE` 那份**不能互抄**（TS 有 `required_parameter` / `optional_parameter`，JS 语法里没有这两个节点名）。
+    // 实测（probe:tree + probe:profile，见 工作文档\验证\_smoke\js-locals-probe.js）：
+    //   · `formal_parameters` 下直接是 identifier / assignment_pattern / rest_pattern / object_pattern / array_pattern（没有"参数名"字段）→ 函数规格；
+    //   · `x => …` 的**单个裸参数**直接是 `arrow_function` 的孩子（没有 parameters 字段）→ 单独一条；
+    //   · `for (const t of xs)` / `for (const k in o)` → `for_in_statement.left`；
+    //   · `catch (e)` 没有 parameter 字段，是直接孩子 → `auto`；
+    //   · `const x = require('…')` / Babel 的 `var _r = require('…'), y = _r.y` → **导入绑定，不是局部变量**（见 isRequireDeclaration）。
+    localBindings: {
+      variable_declarator: (node) => (isRequireDeclaration(node.parent) ? [] : jsBindingNames(node.childForFieldName('name'))),
+      formal_parameters: jsBindingNames,
+      arrow_function: (node) => {
+        const body = node.childForFieldName('body');
+        const out = [];
+        for (const c of node.namedChildren) { if (c === body) break; if (c.type === 'identifier') out.push(c.text); }
+        return out;
+      },
+      for_in_statement: (node) => jsBindingNames(node.childForFieldName('left')),
+      catch_clause: 'auto',
+    },
     members: {
       method_definition: 'method',
       field_definition: 'field',

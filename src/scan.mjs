@@ -1035,15 +1035,37 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
    */
   const localNames = new Set();
   /**
-   * 登记一个局部绑定名。两道清洗：
+   * 局部绑定名**按作用域**记（2026-10-03）：`ownerIndex -> Set<名字>`。
+   *
+   * 为什么不能按整个文件记（A3 第一版就是那么干的）：文件里 `function a()` 声明了局部 `const t`，
+   * 会把**同一个文件里别的函数**里对 `t` 的**真引用**一起砍掉 —— 仓库自扫实测：
+   * `src/scan.mjs` / `mcp.mjs` / `languages.mjs` 里 68 条真的 `t('中文','English')` i18n 调用
+   * 因为"同文件别处有个局部 `const t`"而整批消失；而同一张图里 `web/app.js` 的 52 条**错边**还在。
+   *
+   * 作用域取哪一层：**引擎已经认得的那层归属** —— 引用是按 `currentType()`（函数 / 类 / 文件级）
+   * 归属的，所以局部绑定也按同一层记：
+   *   · 绑定落在某个类型/函数里 → 只对该 owner 的引用生效（`localByOwner`）；
+   *   · 绑定落在类型之外（文件顶层）→ 进 `localNames`，对该文件所有引用生效
+   *     （模块作用域的绑定本来就是全文件可见的）。
+   * 两个方向都**保守**：宁可少砍（作用域判宽 → 留下可能错的边），也不砍错（把真边砍掉）。
+   */
+  const localByOwner = new Map();
+  /**
+   * 登记一个局部绑定名。三道清洗：
    *   · 剥掉写进**名字文本**里的 `$`（PHP 的 `variable_name` 文本是 `$radius`；多数情况下取值走的是
    *     它自己的 `name` 字段，这里只兜底）；
-   *   · **只收裸标识符** —— `self.x` / `a.b` / `()` / `{a, b}` 这类成员访问与解构整体都不是一个变量名。
+   *   · **只收裸标识符** —— `self.x` / `a.b` / `()` / `{a, b}` 这类成员访问与解构整体都不是一个变量名；
+   *   · 按**当前 owner** 归位（见上面 `localByOwner` 的说明）。
    */
   const addLocalName = (raw) => {
     if (typeof raw !== 'string' || !raw) return;
     const nm = raw.startsWith('$') ? raw.slice(1) : raw;
-    if (/^[A-Za-z_][A-Za-z0-9_']*$/.test(nm)) localNames.add(nm);
+    if (!/^[A-Za-z_][A-Za-z0-9_']*$/.test(nm)) return;
+    const owner = currentType();
+    if (!owner) { localNames.add(nm); return; }
+    let set = localByOwner.get(owner.index);
+    if (!set) { set = new Set(); localByOwner.set(owner.index, set); }
+    set.add(nm);
   };
   let fileNamespace = '';
   const typeStack = [];
@@ -1474,7 +1496,7 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
     console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
   }
-  return { types, abstractScopes, aliases, localNames, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, abstractScopes, aliases, localNames, localByOwner, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -2057,6 +2079,20 @@ async function extractFiles(files) {
     if (facts.aliases?.size) part.file.aliases = Object.fromEntries(facts.aliases);
     // 局部绑定名（参数 / `x := …`）：解析裸名时用来判断"这是变量、不是引用"（见 localNames 的说明）
     if (facts.localNames?.size) part.file.locals = [...facts.localNames];
+    // 类型/函数**内**的局部绑定：按 owner（那个类型/函数的下标）分开记 —— 只对同一个 owner 的引用生效。
+    // 与 `locals`（文件顶层绑定，全文件可见）分开存，理由见 scan.mjs 里 localByOwner 的说明。
+    // ⚠ 键必须走 `keepIdx`（facts.types 下标 → part.types 下标）：按需候选去重（OCaml 的 let/external）
+    //   会让两个下标不再是同一个数 —— 直接写 facts 下标，owner 就指到**别的类型**上，
+    //   局部名过滤静默失效（实测：仓库自扫里 php 夹具的 `$alpha` 挂到了 340 号类型、
+    //   而那个 id 是 alpha.rb 的模块节点 → 单文件扫描绿、仓库自扫漏出 4 条错边）。
+    if (facts.localByOwner?.size) {
+      part.file.localOwners = {};
+      for (const [idx, names] of facts.localByOwner) {
+        const pid = keepIdx.get(idx);
+        if (pid == null) continue;                    // 这个类型没被发出（理论上不该发生）
+        part.file.localOwners[pid] = [...(part.file.localOwners[pid] || []), ...names];
+      }
+    }
     if (isTestPath(f.rel)) part.file.isTest = true;
     part.ns = facts.namespaces;
     parts.push(part);
@@ -2099,6 +2135,12 @@ function mergeParts(parts) {
       const tOff = out.allTypes.length;
       if (pf.file) {
         const rec = { ...pf.file, id: fileId, types: (pf.file.types || []).map((t) => t + tOff) };
+        // 局部绑定的 owner 是**文件内**的类型下标 → 合并时要跟着加偏移（与 refs / types 同一套换算）。
+        // 漏了这一步，owner 就指到别的文件的类型上，局部名过滤会静默失效（宁缺勿错的闸门不能靠运气）。
+        if (pf.file.localOwners) {
+          rec.localOwners = {};
+          for (const [k, names] of Object.entries(pf.file.localOwners)) rec.localOwners[Number(k) + tOff] = names;
+        }
         if (pf.fileUses?.length) rec.uses = pf.fileUses;    // ① 文件级（类型之外）的调用位置
         out.fileRecs.push(rec);
       }
@@ -2238,6 +2280,18 @@ function pruneOnDemandTypes(merged) {
     .filter(Boolean);
   for (const f of merged.fileRecs || []) {
     if (f.types) f.types = f.types.filter((i) => keep[i]).map((i) => map[i]);
+    // 局部绑定的 owner 也是**类型 id** → 同样要重映射（漏了它就指到别的类型上，
+    // 局部名过滤静默失效：实测仓库自扫里 php 夹具的 `$alpha` 挂到了一个 ruby 模块节点上）。
+    // 被剪掉的 owner 与 refs 一样**上移到最近活着的祖先** —— 语义不变（那个变量的作用域还在）。
+    if (f.localOwners) {
+      const next = {};
+      for (const [k, names] of Object.entries(f.localOwners)) {
+        const o = remapOwner(Number(k));
+        if (o == null) continue;
+        next[o] = [...(next[o] || []), ...names];
+      }
+      f.localOwners = next;
+    }
   }
   return merged;
 }
@@ -3156,9 +3210,21 @@ export async function scan(opts) {
      * 保守在哪：**只砍跨文件**。同文件那一档保留 —— "本文件里就有这个同名符号"是比
      * "别的文件里有个同名符号"强得多的证据，而且同文件候选很可能正是那个变量本身的归属
      * （`value` / `field` 节点）。这一刀只去掉"变量名撞上别的文件的同名类型"这一类。
+     *
+     * **2026-10-03：作用域细到"绑定所在的那层 owner"**（原来按**整个文件**记）。
+     * 按文件记有个反效果：文件里 `function a()` 声明了局部 `const t`，就把同文件**别的函数**里的
+     * 真引用也一起砍了 —— 仓库自扫实测丢了 68 条真的 `t('中文','English')` i18n 调用
+     * （`src/scan.mjs` / `mcp.mjs` / `languages.mjs`），而 `web/app.js` 的 52 条错边一个没少。
+     * 现在分两处查：
+     *   · `locals`      —— 文件顶层（模块作用域）的绑定名：对该文件所有引用都生效；
+     *   · `localOwners` —— 类型/函数**内**的绑定名，按 owner 下标分开：只对**同一个 owner** 的引用生效。
+     * 与"引用按 currentType() 归属"是同一层，所以判得准；判不准时**偏向少砍**（宁可留错边，不砍真边）。
      */
     const fromFile = fileRecs[allTypes[fromTypeId]?.file];
-    const isLocalName = Boolean(fromFile?.locals && fromFile.locals.includes(name));
+    const isLocalName = Boolean(
+      (fromFile?.locals && fromFile.locals.includes(name))
+      || (fromFile?.localOwners && fromFile.localOwners[fromTypeId]?.includes(name)),
+    );
     const hit = collapseUnits((bySimpleName.get(name) || []).filter((id) => {
       const t = allTypes[id];
       if (!t || !sameFamily(fileRecs[t.file]?.lang, fromLang)) return false;

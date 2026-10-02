@@ -646,6 +646,26 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **JavaScript：局部绑定按「作用域」而不是按「整个文件」**（2026-10-03）。
+    // 同一个文件里两个函数：
+    //   · `shadowed()` 里 `const alpha` → 那个 `alpha` 是变量，**不该**跨文件接到 a.js 的 `alpha`；
+    //   · `genuine()` 里没有同名局部绑定 → 那个 `alpha` 是**真引用**，**必须**接得上。
+    // 第二条是这轮新增的能力：老口径（A3 第一版把局部名按**文件**记）会把最热的那批真边一起砍掉 ——
+    // 仓库自扫实测就是 `src/scan.mjs` / `mcp.mjs` / `languages.mjs` 里 68 条真的 `t('中文','English')`
+    // 因为同文件别处有个局部 `const t` 而整批消失（见 工作文档\作用域局部名-2026-10-03.md）。
+    //   · `c.js` 的 `const { alpha } = require('./a.js')` 是 **CommonJS 导入绑定**（不是局部变量）→
+    //     `viaRequire → alpha` **必须**存在。实测 oss4-graphql-tools 上被误砍的 202 条里有 166 条是这种。
+    dir: 'a3-locals-javascript',
+    lang: 'javascript',
+    types: 5,
+    names: ['alpha', 'gamma', 'shadowed', 'genuine', 'viaRequire'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['shadowed', 'alpha', false], ['genuine', 'alpha', true], ['viaRequire', 'alpha', true]],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
