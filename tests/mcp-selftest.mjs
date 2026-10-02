@@ -283,6 +283,59 @@ check(/影响面|Impact/.test(impact) && /第 1 层|没有已知的引用者|Lev
 const impactMiss = await call('impact', { name: 'zzz-this-does-not-exist' });
 check(/找不到|No symbol|not found/i.test(impactMiss), 'impact（找不到时给提示）', impactMiss.split('\n')[0].slice(0, 50));
 
+// ── ㉙ impact 每行带**证据档**（2026-10-03 加）────────────────────────────────────
+// impact 是"改这里会波及谁"那个工具，而它以前只说 kind（引用/继承）×次数 ——
+// 于是"25 条进边里 24 条是**仅同名**"和"25 条都有 import 支撑"在上面长得一模一样。
+// 现在一行尾上挂档位；一行（一个类型）的进边可能**跨好几档**，所以按"强 → 弱"全列出来。
+// 这里钉两件事：① 每行都有档位标签（不是只给头部）；② 第 1 层的档位与 bundle 里那条边**逐条对得上**
+//（证明标签是从边数据来的，不是装饰）。第 1 层每行只可能有一个档（那时 frontier 只有它自己），
+//所以可以严格等值；第 2 层起才有混档（`[有支撑 + 仅同名]`）。
+{
+  const tb2 = readBundle(outDir);
+  const typeOf2 = new Map(tb2.types.map((t) => [t.id, t]));
+  const fileOf2 = new Map(tb2.files.map((f) => [f.id, f.path]));
+  const LABEL2TIER = {
+    '同文件': 'same', '有支撑': 'import', '唯一': 'unique', '仅同名': 'name',
+    'same file': 'same', backed: 'import', 'only candidate': 'unique', 'same name only': 'name',
+  };
+  // 行格式：`  <fqn> [<kind>] <kinds> ×<w> · <path>` + 可选 `  [<档>]` / `  [<档> + <档>]`
+  const ITEM = /^ {2}(.+?) \[(.+?)\] (\S+) ×(\d+) · (\S+?)(?: {2}\[(.+)\])?$/;
+  const layers = [];
+  let cur = null;
+  for (const l of impact.split('\n')) {
+    if (/^第 \d+ 层|^Level \d+/.test(l)) { cur = []; layers.push(cur); continue; }
+    // 只收"条目行"（`  <fqn> [kind] kinds ×N · path`）—— 两格缩进的**说明行**（`  （测试文件是按路径认的…）`）
+    // 不长这样，别把它们当成"没标签的条目"
+    if (cur && ITEM.test(l)) cur.push(l);
+  }
+  const items = layers.flat();
+  const untagged = items.filter((l) => !l.match(ITEM)[6]);
+  check(items.length > 0 && untagged.length === 0,
+    '㉙ impact 每行都标了证据档（不再只剩 kind ×次数）',
+    untagged.length ? `${untagged.length}/${items.length} 行没标签：${untagged[0].trim().slice(0, 60)}` : `${items.length} 行`);
+  const badLabel = items.map((l) => (l.match(ITEM) || [])[6]).filter(Boolean)
+    .flatMap((tag) => tag.split(' + ')).filter((x) => !LABEL2TIER[x]);
+  check(badLabel.length === 0, '㉙ impact 的档位只用那四个标签（没有自造词）', badLabel.length ? badLabel.join(',') : '');
+  // 第 1 层（直接引用它的那些类型）逐条对齐 bundle 里的边
+  const expectTier = new Map();
+  for (const e of tb2.edges) {
+    if (e.to !== hottest.id || !e.tier) continue;
+    const t = typeOf2.get(e.from);
+    if (t) expectTier.set(`${t.fqn} · ${fileOf2.get(t.file)}`, e.tier);
+  }
+  const mism = [];
+  for (const l of layers[0] || []) {
+    const m = l.match(ITEM);
+    if (!m || !m[6]) continue;
+    const want = expectTier.get(`${m[1]} · ${m[5]}`);
+    const got = LABEL2TIER[m[6]];
+    if (want && got !== want) mism.push(`${m[1]}：标签 ${got} / 图里 ${want}`);
+  }
+  check((layers[0] || []).length === 0 || mism.length === 0,
+    '㉙ impact 第 1 层的档位与 bundle 里的边逐条对得上（标签不是装饰）',
+    mism.length ? `${mism.length} 条不符：${mism[0]}` : `${(layers[0] || []).length} 行都对上`);
+}
+
 // ---------------------------------------------------------------------------
 // 快照新鲜度（overview 的「⚠ 快照后…」那行）：图里那些文件在磁盘上变了没有
 // 只 re-stat 已纳入图里的文件 —— 所以这里逐个造出三种情形（内容变了 / 只动时间戳 / 文件没了），

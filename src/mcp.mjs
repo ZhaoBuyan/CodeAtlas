@@ -55,8 +55,9 @@ const INSTRUCTIONS = [
   '  **name matching** — dynamic calls, reflection and names built by string concatenation are invisible, and the counts of',
   '  unmatched and ambiguous references are reported explicitly in overview and impact — note the **denominator**: they are',
   '  counted per reference site and are mostly member names, while edges are type-level, so they are not comparable to the edge count;',
-  '- `refs` tags every edge with its evidence strength, and the tier is now **recorded when the edge is built** (not',
-  '  re-guessed at read time) — `same file` (both sides in one file — solid) > `backed` (the referring file imports a module',
+  '- `refs` tags every edge with its evidence strength, and every `impact` line carries the tiers of the edges that brought',
+  '  that type in (strongest first; a line can list several, e.g. `[backed + same name only]`). The tier is **recorded when',
+  '  the edge is built** (not re-guessed at read time) — `same file` (both sides in one file — solid) > `backed` (the referring file imports a module',
   '  of that name, or imports the target\'s namespace / package, or both sides sit in the same namespace / package (or one Dart',
   '  part library — part files cannot import; the library\'s imports are visible to them), or the target file sits inside an',
   '  imported package, or a parent namespace in C# / VB — strong evidence, not proof) > `only candidate` (the name resolves to',
@@ -338,13 +339,31 @@ function evidenceRecomputed(idx, e) {
 }
 
 const EVIDENCE_RANK = { same: 3, import: 2, unique: 1, name: 0 };
+const EVIDENCE_ORDER = ['same', 'import', 'unique', 'name'];   // 强 → 弱，与 EVIDENCE_RANK 一致
+
+/** 证据档的短标签（zh / en 跟着会话语言 —— 别在模块加载期取，T() 依赖当前语言） */
+function evidenceLabel(ev) {
+  if (ev === 'same') return T('同文件', 'same file');
+  if (ev === 'import') return T('有支撑', 'backed');
+  if (ev === 'unique') return T('唯一', 'only candidate');
+  return T('仅同名', 'same name only');
+}
 
 /** refs 每行尾的短标签（有证据的排前面，标了才看得出来哪几条是噪声） */
 function evidenceTag(ev) {
-  if (ev === 'same') return T('  [同文件]', '  [same file]');
-  if (ev === 'import') return T('  [有支撑]', '  [backed]');
-  if (ev === 'unique') return T('  [唯一]', '  [only candidate]');
-  return T('  [仅同名]', '  [same name only]');
+  return `  [${evidenceLabel(ev)}]`;
+}
+
+/**
+ * 一行里有**多档**边时的标签（impact 的一行是一个类型，它的入边可能跨好几档）。
+ * 为什么不能只报最强那一档：那会把“25 条引用里 24 条是仅同名”读成“有依据”——
+ * 与 refs 的逐边标签是同一条纪律（宁可多打几个字，也不给乐观的误读空间）。
+ * 顺序固定“强 → 弱”，与 EVIDENCE_RANK 一致。
+ */
+function evidenceTags(evs) {
+  const list = EVIDENCE_ORDER.filter((x) => evs && evs.has(x));
+  if (!list.length) return '';
+  return `  [${list.map(evidenceLabel).join(' + ')}]`;
 }
 
 /**
@@ -1269,9 +1288,12 @@ function toolImpact(idx, a, sess = {}) {
         if (seen.has(e.from)) continue;
         const t = idx.byId.get(e.from);
         if (!t || seen.has(t.id)) continue;
-        const cur = next.get(t.id) || { t, kinds: new Set(), w: 0 };
+        // 一行是一个类型，但把它带进来的边可能是好几档（同文件 / 有支撑 / 唯一 / 仅同名）——
+        // 都收进 Set，行尾按“强 → 弱”全列出来（见 evidenceTags 的说明）
+        const cur = next.get(t.id) || { t, kinds: new Set(), w: 0, evs: new Set() };
         cur.kinds.add(e.kind || 'ref');
         cur.w += e.w || 1;
+        cur.evs.add(evidenceOf(idx, e));
         next.set(t.id, cur);
       }
     }
@@ -1301,7 +1323,7 @@ function toolImpact(idx, a, sess = {}) {
     out.push(T(`第 ${L.d} 层（${L.list.length} 个）：`, `Level ${L.d} (${L.list.length}):`));
     for (const x of L.list.slice(0, 25)) {
       const kinds = [...x.kinds].map((k) => KIND[k] || k).join('/');
-      out.push(`  ${x.t.fqn} [${x.t.kind}] ${kinds} ×${x.w} · ${idx.files.get(x.t.file)?.path}`);
+      out.push(`  ${x.t.fqn} [${x.t.kind}] ${kinds} ×${x.w} · ${idx.files.get(x.t.file)?.path}` + evidenceTags(x.evs));
     }
     if (L.list.length > 25) out.push(T(`  …（还有 ${L.list.length - 25} 个）`, `  …(${L.list.length - 25} more)`));
     if (L.dropped) out.push(dropNote(ex, L.dropped, L.list.length, ['类型', 'types']));

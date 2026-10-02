@@ -256,7 +256,7 @@ Tools provided:
 | `subgraph(name, depth)` | Dependency subgraph ("what does changing this drag along") |
 | `file(path, types?)` | A file's types, imports, line counts (**parse errors are called out when present**); `types:"count"` gives just the total plus a per-kind breakdown |
 | `map(budget)` | Exports a **skeleton** within a token budget (systems → key types → key members) so the AI gets the big picture cheaply; on a project with no grouping config it **says so** and falls back to a most-referenced list |
-| `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus the **test files** that would be affected (recognized by path), plus an explicit list of what is invisible (dynamic calls / reflection) |
+| `impact(name, depth)` | **Impact analysis**: multi-hop expansion along "who references it", plus the **test files** that would be affected (recognized by path), plus an explicit list of what is invisible (dynamic calls / reflection). Every line carries the **evidence strength** of the edges that brought that type in — one type can be reached through several tiers, so all of them are listed strongest-first (e.g. `[backed + same name only]`) |
 
 Every tool lists a bounded number of entries and says "first N of M" when it truncates (`search` 20 · `symbol` members 40 · `subgraph` 40 per level · `list` 40 — raise with `limit` / `members`).
 Each result ends with a **snapshot stamp (UTC)**, so even a single call tells you how fresh the data is.
@@ -677,7 +677,7 @@ Every item below is in the current build; what changed in each version lives in 
 - **git heat coloring**: files are colored by how often git touched them, so the busiest code stands out (uncommitted files get a bright border)
 - **Snapshot / monitor mode** in the launcher: edit your code and the map updates incrementally — no full rescan, no page refresh
 - **“Clear selection”** at the bottom-right of the map; hovering or clicking a module's *name* now hits the module itself
-- **Evidence strength on refs**: every reference is tagged same-file / import / name-only, and the overview hot list ranks by evidenced references
+- **Evidence strength**: every `refs` edge is tagged (same file / backed / only candidate / same name only), every `impact` line carries the tiers of the edges that brought it in (strongest first — a line can list several), and the overview hot list ranks by evidenced references
 
 ## License
 
