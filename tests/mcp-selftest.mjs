@@ -14,6 +14,13 @@ import { freshnessNote, parseExclude, isExcluded } from '../src/mcp.mjs';
 import { importMatchesTarget } from '../src/modules.mjs';
 import { csharpConditionalDirectives } from '../src/preprocess.mjs';
 import { rmrf } from '../src/fsx.mjs';   // 见 src/fsx.mjs：本环境 DSH 的 node 里 fs.rmSync 会静默不删
+import { LANGUAGES } from '../src/languages.mjs';
+
+/**
+ * 语言族（= 引擎解析时**候选池的边界**，见 src/scan.mjs 的 `sameFamily`）。
+ * ㉘ 要判"这个名字是不是撞名"必须按**族内**数：跨族不解析，所以跨族同名不算撞。
+ */
+const FAMILY_OF = new Map(Object.values(LANGUAGES).map((l) => [l.id, l.family || l.id]));
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -127,12 +134,35 @@ check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把
   // 跨文件、名字全图唯一的边：既不该标“有支撑”（没有 import 依据），也不该标“仅同名”（那个名字没撞）
   const fileOf = new Map(tb.files.map((f) => [f.id, f.path]));
   const typeOf = new Map(tb.types.map((t) => [t.id, t]));
-  const nameCount = new Map();
-  for (const t of tb.types) nameCount.set(t.name, (nameCount.get(t.name) || 0) + 1);
+  /**
+   * “名字唯一”要按**语言族**数，不能按整张图数 —— 引擎解析的门槛就是
+   * “族内按名字互相解析、跨族不解析”（src/scan.mjs 的 `sameFamily`），所以：
+   *   · JS 的 `t` 撞上 OCaml 的 5 个 `t`、6 种语言各一个 `Point` —— **都不是撞名**。
+   * ⚠ 以前这里按全图数名字，于是本仓库自扫（多语言混装：src 的 JS + 30 门语言的 fixtures）
+   *   出现 **50 条误报**；而 CI 的 fixtures 图只扫 7 门语言、跨语言同名恰好没撞上 → 这条门
+   *   一直“绿着但有洞”，直到 2026-10-03 把 dist 从 9/23 的旧图换成当前代码的图才露出来。
+   *
+   * ⚠ **OCaml 整门豁免**：它的引用采集只保留**限定名**（裸值引用在 `refFilter` 那一步就被丢掉），
+   *   所以它的边走的是“限定名精确匹配”那条路 —— 族内同名不算撞：`Env.normalize` 与
+   *   `Iface.normalize`、`Lib.M.iter` 与 `Refer.C.iter` 是**不同的限定名**，源码里写的就是限定的那一个。
+   *   这条口径由夹具 `tests/fixtures/a3-locals-ocaml` 的**负向断言**（裸名 `helper` 不成边）钉着 ——
+   *   哪条红了就说明口径变了，回来改这里。
+   *   （更精确的做法是让引擎在边上记“这个引用名是按限定名命中的”，那属于引擎侧的改动，不在这里做。）
+   */
+  const QUALIFIED_ONLY = new Set(['ocaml']);
+  const familyNameCount = new Map();
+  for (const t of tb.types) {
+    const k = `${FAMILY_OF.get(tb.files[t.file]?.lang) || tb.files[t.file]?.lang}\u0000${t.name}`;
+    familyNameCount.set(k, (familyNameCount.get(k) || 0) + 1);
+  }
   const uniqueCross = tb.edges.filter((e) => e.tier === 'unique');
   const wrongUnique = uniqueCross.filter((e) => {
     const a = typeOf.get(e.from), b2 = typeOf.get(e.to);
-    return !a || !b2 || a.file === b2.file || nameCount.get(b2.name) !== 1;
+    if (!a || !b2 || a.file === b2.file) return true;
+    const lang = tb.files[b2.file]?.lang;
+    if (QUALIFIED_ONLY.has(lang)) return false;
+    const fam = FAMILY_OF.get(lang) || lang;
+    return familyNameCount.get(`${fam}\u0000${b2.name}`) !== 1;
   });
   // ⚠ 与 ㉓ 的 file() 同一条纪律：**别要求小图里必须出现 `unique` 档**。
   //   `unique` 的语义是"引用名在候选表里唯一"，而 CI 扫的是 tests/fixtures（3 文件 / 19 条边），
@@ -141,7 +171,7 @@ check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把
   //   "有 unique 边时必须合格"始终检查；"必须有 unique 边"只在图足够大时才要求。
   const bigEnough = (tb.edges.length >= 200);
   check((bigEnough ? uniqueCross.length > 0 : true) && wrongUnique.length === 0,
-    '㉘ tier=unique 的边确实“跨文件且名字全图唯一”',
+    '㉘ tier=unique 的边确实“跨文件、且名字在族内唯一”',
     `${uniqueCross.length} 条 · 不符 ${wrongUnique.length}${bigEnough ? '' : '（图小，只校验已存在的 · ' + tb.edges.length + ' 条边）'}`);
   // overview 第一屏要把这个分布报出来（AI 不用自己数）
   const ovTiers = (await call('overview', {})).split('\n').find((l) => /按证据分|Edge evidence/.test(l)) || '';

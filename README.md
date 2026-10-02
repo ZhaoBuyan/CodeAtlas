@@ -149,6 +149,7 @@ No installer — just an exe you can put anywhere.
 npm run publish        # both editions (= publish:sc + publish:lite)
 npm run publish:sc     # full only
 npm run publish:lite   # lite only
+npm run launcher       # dev-mode launcher -> CodeAtlas.exe in the repo root (no embedded engine: it reads src/ next to it)
 ```
 
 One line on how it works: the engine (`src` / `web` / `configs` / 32 grammar wasm files / d3) is zipped by
@@ -325,6 +326,7 @@ Self-check: `node tests/mcp-selftest.mjs [dist]` (drives every tool over the rea
 ## Debugging tools
 
 ```bash
+npm run scan:self                                 # rescan this repo's own graph into dist/ (npm test runs it first via pretest)
 npm test                                          # language fixtures regression (55 cases, one process each) + security/runtime gates
 npm run probe                                     # print the node names tree-sitter actually produces per language
 npm run probe:profile                             # audit: every node name AND `localBindings` field name in a profile must exist in its grammar

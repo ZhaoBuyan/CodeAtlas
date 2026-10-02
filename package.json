@@ -10,14 +10,18 @@
   },
   "//scripts": [
     "⚠ test 与 test:ci 跑的是**两张不同的图**，改引擎/自检时两条都要跑：",
-    "  test     —— 自检跑 dist（本仓库自己的图，有 src/ 与 configs/）",
+    "  test     —— 自检跑 dist（本仓库自己的图，有 src/ 与 configs/）；pretest 会先 `npm run scan:self`",
+    "              把它**现扫**一遍 —— dist 以前靠手工重扫（上一次是 09-23），会悄悄过期：",
+    "              '本地全绿'可能是在旧代码的图上跑出来的（2026-10-03 换新图时立刻露出一条红门）",
     "  test:ci  —— 与 .github/workflows/ci.yml **逐字一致**：现扫 tests/fixtures 再自检",
     "两者内容不同 → '本地全绿'和 'CI 红'可以同时成立（2026-09-23 真踩过：一条门写死了 src/mcp.mjs，",
     "dist 有、fixtures 没有 → 假红藏了一整轮）。"
   ],
   "scripts": {
     "scan": "node src/cli.mjs scan",
+    "scan:self": "node tools/scan-self.mjs",
     "serve": "node src/cli.mjs serve",
+    "pretest": "npm run scan:self",
     "test": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node tests/probe-runtime.mjs && node tests/mcp-selftest.mjs",
     "test:ci": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node tests/probe-runtime.mjs && node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua && node tests/mcp-selftest.mjs tests/.out/ci",
     "probe": "node tests/probe-nodes.mjs",
@@ -33,7 +37,7 @@
     "verify:edges": "node tools/verify-edges.mjs",
     "diff:rescan": "node tools/diff-rescan-logs.mjs",
     "mcp": "node src/cli.mjs mcp",
-    "launcher": "dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -o .",
+    "launcher": "node tools/build-launcher.mjs",
     "payload": "node tools/build-payload.mjs",
     "payload:lite": "node tools/build-payload.mjs --no-node",
     "publish:sc": "node tools/build-payload.mjs && dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:CodeAtlasEdition=full -p:CodeAtlasPayload=payload.zip -o publish-sc",

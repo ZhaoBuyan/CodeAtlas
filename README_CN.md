@@ -130,6 +130,7 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # 给 AI 用的 MCP 服
 npm run publish        # 两个版本都出（= publish:sc + publish:lite）
 npm run publish:sc     # 只出完全版
 npm run publish:lite   # 只出精简版
+npm run launcher       # 开发模式的启动器 → 仓库根的 CodeAtlas.exe（不嵌引擎，直接读旁边的 src/）
 ```
 
 原理一句话：引擎（`src` / `web` / `configs` / 32 个语法包 wasm / d3）先由 `tools/build-payload.mjs`
@@ -275,6 +276,7 @@ node src/cli.mjs mcp --out dist        # stdio JSON-RPC，给 MCP 客户端连
 ## 调试工具
 
 ```bash
+npm run scan:self                                 # 重扫本仓库自己的图 → dist/（`npm test` 会先跑它；旧图曾藏住一条红门）
 npm test                                          # 语言 fixtures 回归（55 个用例，各自独立进程）+ 安全 / 运行时回归
 npm run probe                                     # 打印各语言 tree-sitter 实际解析出的节点名
 npm run probe:profile                             # 审计：语言 profile 里声明的每个节点名与 `localBindings` 字段名都必须真在语法包里

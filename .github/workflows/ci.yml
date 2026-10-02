@@ -1,6 +1,6 @@
 name: CI
 
-# 推代码/PR：跑测试（27 门语言回归 + MCP 自检）
+# 推代码/PR：跑测试（55 门语言回归 + 三条探针 + MCP 自检 + 启动器构建）
 # 打 tag（v*）：同上 + 打两个发行版 exe，并挂到 GitHub Release 当下载资产
 on:
   push:
@@ -24,6 +24,11 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # 启动器构建要 dotnet（`npm run launcher` 那一步）；发行版打包在 release 作业里另配一份
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
       - name: 装依赖
         run: npm ci
 
@@ -46,6 +51,13 @@ jobs:
 
       - name: MCP 协议自检（工具表 / 各工具 / map / impact / 成员搜索）
         run: node tests/mcp-selftest.mjs tests/.out/ci
+
+      # 这条门是补出来的（2026-10-03）：`npm run launcher` 以前写的是 `dotnet publish ... -o .`，
+      # 在本机 SDK 10 上必失败（输出目录=仓库根 → MSBuild 把 launcher/ 的 .cs 全排掉 → CS5001），
+      # 而 CI 从来没跑过这条脚本 → 坏了没人知道。现在改成 tools/build-launcher.mjs 并发到
+      # out-launcher 再拷回根目录；这一步只验「脚本能跑通、产落在该落的地方」。
+      - name: 启动器能构建（npm run launcher 脚本本身要有门）
+        run: npm run launcher
 
   release:
     name: 打包发行（只在打 tag 时）
