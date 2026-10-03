@@ -746,6 +746,23 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **限定名全名命中 = 依据**（精度轮 4，2026-10-04）：源码里写的就是完整限定名（`Alpha.value`），
+    // 命中的又是注册的全名 → 这条边与"同命名空间 / import 能指到"同级，不该落 unique 档。
+    // ⚠ 与上一个夹具的区别：这里**故意不写 `open`** —— 依据完全来自限定名本身。
+    // 实测：ocaml 真项目里 `Buffer.t` / `Sys.opaque_identity` / `Variables.t` 全是这种形状，
+    // 改之前 17,986 条 unique 边里有 17,870 条是它。
+    dir: 'ocaml-qualified',
+    lang: 'ocaml',
+    types: 3,
+    names: ['value', 'alpha', 'beta'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['beta.ml', 'Alpha.value', true]],
+    refTiers: [['beta.ml', 'Alpha.value', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

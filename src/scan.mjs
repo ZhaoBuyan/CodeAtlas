@@ -3258,6 +3258,19 @@ export async function scan(opts) {
       // ① 同文件（按 fqn / 简单名 / 去文件模块前缀名）→ ② 全名命中 → ③ 后缀命中
       const sameFileHit = pool.filter((id) => allTypes[id]?.file === own && (isRoot(id) || isSuffix(id) || sameFileNamed(id)));
       const rootHit = pool.filter(isRoot);
+      /**
+       * **全名命中 = 源码里写的就是完整限定名** → 这本身就是依据（2026-10-04 精度轮）。
+       *
+       * 为什么单独记一档：`Buffer.t`（odoc_html.mli 第 96 行）、`Sys.opaque_identity`
+       * （comparison_optim.ml 第 14 行）这类引用，源码里**明确写了模块名**，命中的又是注册的**全名** ——
+       * 这比"名字在族内唯一"硬得多，与"同命名空间 / import 能指到"同级。
+       * 以前这一档只看 `hasImportBacking`（OCaml 没有 import 语法时永远是 false）→ 全落在 `unique` 档：
+       * 实测 OCaml 两个样本上 remaining unique 的抽样全是这种形状（真边、但档位说成"猜的"）。
+       * ⚠ **只认 ②（`fqn === 引用名`）**；③ 后缀命中（`Scanning.from_string` 对 `Scanf.Scanning.from_string`）
+       *   不算 —— 那档是"登记的前缀更完整"，别人文件里嵌套的同名模块也满足它（见上面那段说明），
+       *   它要靠 import 依据（`open`）来升档。
+       */
+      const qualifiedFull = sameFileHit.length === 0 && rootHit.length > 0;
       let exact = sameFileHit.length ? sameFileHit : rootHit.length ? rootHit : pool.filter(isSuffix);
       /**
        * **同一档里既有测试文件又有非测试文件时，测试文件让位**（2026-09-25）。
@@ -3288,7 +3301,7 @@ export async function scan(opts) {
         const id = exact[0];
         // `uniq: true`：限定名**精确匹配**上了，不是"从多个同名的里近似挑一个"，
         // 所以它不该落最弱的 `name` 档。tier 只影响标签，不影响选边。
-        return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
+        return { id, uniq: true, import: qualifiedFull || hasImportBacking(fromTypeId, id) };
       }
       if (exact.length > 1) {
         // 走到这儿 = 上面挑中的那一档**内部还有多个**（同名模块在多处定义 —— OCaml 里
@@ -3308,7 +3321,8 @@ export async function scan(opts) {
         });
         if (byOwner.length === 1) {
           const id = byOwner[0];
-          return { id, uniq: true, import: hasImportBacking(fromTypeId, id) };
+          // 也是**全名命中**（只是档内多个、再用归属锚点挑了一次）→ 同样算依据
+          return { id, uniq: true, import: qualifiedFull || hasImportBacking(fromTypeId, id) };
         }
       }
       // 到这儿就是"限定名对不上 / 挑不出可信的" —— 计入 unknown 并放弃（宁可缺边，不要接错）
