@@ -666,6 +666,24 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **候选①：合成文件 module 节点只在"引用方真有一条以它命名的 import"时才参与裸名匹配**（2026-10-04）。
+    // 三个文件都**没有函数/类声明** → 各有一个合成 module 节点（名字 = 文件名主干，fqn = 文件路径）：
+    //   · `use.js` —— `const gamma = require('./gamma')`（导入绑定）→ 裸名 `gamma` **应该**接上 `gamma.js`；
+    //   · `other.js` —— 没有任何 import → 裸名 `gamma` **不该**接上（这就是 numpy 28.8% / tokio 40%
+    //     那类"名字撞文件名"的错边；依据不能是"包级 import 命中了包内某个文件"）。
+    dir: 'synth-module-bare',
+    lang: 'javascript',
+    types: 3,
+    // `names` 按**类型名**比（合成节点的名字是文件名主干）；边断言按 `fqn`（= 文件路径）比，见 refEdges
+    names: ['gamma', 'use', 'other'],
+    kinds: { module: 3 },
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['use.js', 'gamma.js', true], ['other.js', 'gamma.js', false]],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

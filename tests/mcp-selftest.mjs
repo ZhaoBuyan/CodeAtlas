@@ -150,8 +150,17 @@ check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把
    *   （更精确的做法是让引擎在边上记“这个引用名是按限定名命中的”，那属于引擎侧的改动，不在这里做。）
    */
   const QUALIFIED_ONLY = new Set(['ocaml']);
+  /**
+   * **合成的文件 module 节点不算裸名候选**（2026-10-04 候选①起）：它只在"引用方真有一条以它命名的 import"
+   * 时才参与裸名匹配，所以数"这个名字在族内是不是唯一"时必须把它排除 —— 否则一条**合法**的 unique 边
+   * （指向真类型，只是同名合成节点也在这张图里）会被误判成"撞名"。
+   * 判据与 `src/scan.mjs` 合成处一致：`kind === 'module'` 且 `fqn` 就是它所在文件的路径
+   * （引擎内部另有 `synthModule` 标记，但那是解析期内部键，写 bundle 前已被摘掉）。
+   */
+  const isSynthNode = (t) => t.kind === 'module' && t.fqn === tb.files[t.file]?.path;
   const familyNameCount = new Map();
   for (const t of tb.types) {
+    if (isSynthNode(t)) continue;
     const k = `${FAMILY_OF.get(tb.files[t.file]?.lang) || tb.files[t.file]?.lang}\u0000${t.name}`;
     familyNameCount.set(k, (familyNameCount.get(k) || 0) + 1);
   }
@@ -161,6 +170,8 @@ check(!hasNameOnly || /真引用|real references/.test(refs), 'refs 的图例把
     if (!a || !b2 || a.file === b2.file) return true;
     const lang = tb.files[b2.file]?.lang;
     if (QUALIFIED_ONLY.has(lang)) return false;
+    // 目标本身就是合成 module 节点：它走的是"命名 import"那道闸（不是名字唯一性），这里不适用
+    if (isSynthNode(b2)) return false;
     const fam = FAMILY_OF.get(lang) || lang;
     return familyNameCount.get(`${fam}\u0000${b2.name}`) !== 1;
   });

@@ -2019,6 +2019,11 @@ async function extractFiles(files) {
         id,
         name: f.rel.replace(/\.[^.]+$/, '').split('/').pop(),
         kind: 'module',
+        // **合成**节点标记（内部用，写 bundle 前会被 stripResolveOnlyKeys 摘掉）。
+        // 为什么要单独标一个：`kind === 'module'` 不是它的专属 —— Elixir 的 `defmodule`、HCL 的 `module`
+        // 等是**真**模块类型。而解析期要靠这个标记把"合成节点"与真模块分开（见 resolveName 里那条：
+        // 合成节点只在"引用方有一条以它命名的 import"时才参与裸名匹配）。
+        synthModule: true,
         // 文件级包 / 命名空间（Go 的 `package gin`、PHP 的 `namespace Foo`、Java/Kotlin 的 package）：
         // 合成的 module 节点也是这个包里的一员。ns 留空会让「同包」这一档认不出来 ——
         // gin 实测：跨文件引用里一大半是**同包互引**（Go 同目录的文件互相引不需要 import），
@@ -2313,6 +2318,7 @@ function stripResolveOnlyKeys(merged) {
     delete t.onDemand;
     delete t.hasModulePrefix;
     delete t.abstract;
+    delete t.synthModule;
   }
   return merged;
 }
@@ -2887,6 +2893,56 @@ export async function scan(opts) {
   };
 
   /**
+   * **引用方有没有"指名道姓"地 import 这个合成 module 节点**（2026-10-04，候选①）。
+   *
+   * 背景：合成 module 节点的名字就是**文件名主干**（`dtype.py` → `dtype`、`pool.rs` → `pool`），
+   * 于是裸名只要跟某个文件名撞上就会接出一条边 —— 实测 numpy 一个样本里**指向合成节点的边 1,499 条
+   * （占全图 28.8%）**、tokio **2,930 条（40%）**。样例：
+   *   · `numpy/_core/tests/test_datetime.py::TestDateTime → …/dtype.py [import]×648`
+   *     —— 依据是 `import numpy` 这条**包级** import（它当然"匹配"包内的任何文件）；
+   *   · `tokio/src/fs/file/tests.rs::tests → …/blocking/pool.rs [unique]×65`
+   *     —— 裸名 `pool` 恰好撞上 `pool.rs` 的文件名主干，而且"唯一"。
+   *
+   * 判据：import 必须**以这个名字结尾**（`import foo` / `from x import foo` / `require('./foo')` /
+   * `use …::foo`）才算依据；**包级 / 目录级**（`import numpy`）不算 —— 那种只证明"同属一个包"，
+   * 证明不了"这个裸名指的就是那个文件"。
+   * 真依赖照旧接得上：Python `import foo` + `foo.bar`（限定名，走的是另一条路）、
+   * JS `import foo from './foo'` / `const foo = require('./foo')` + 裸名 `foo`、Rust `use …::foo` ✓。
+   */
+  const importNamesModule = (fromFile, t) => {
+    if (!fromFile || !t) return false;
+    const base = String(fileRecs[t.file]?.path || '').split('/').pop();
+    const names = new Set([t.name, base].filter(Boolean));
+    for (const raw of [...(fromFile.imports || []), ...(fromFile.libImports || [])]) {
+      for (const seg of importTails(raw)) if (names.has(seg)) return true;
+    }
+    return false;
+  };
+  /**
+   * 一条 import 的"尾巴"候选。
+   *   · **路径形态**（含 `/` 或 `\`）：取最后一段，并附带"去掉扩展名"的那份 ——
+   *     `./lib/helper.sh` → `helper.sh` / `helper`（分别对得上合成节点的文件名与 name）；
+   *   · **限定名形态**（`a.b.C` / `crate::x::foo`）：取最后一段。
+   * ⚠ **带路径分隔符时绝不能按 `.` 切** —— `./lib/helper.sh` 会被切成 `sh`，
+   *   于是 Bash 那条"`source` 进来的调用算有支撑"的门直接红（2026-10-04 实测踩到）。
+   */
+  const importTails = (raw) => {
+    const s = String(raw || '');
+    const out = new Set();
+    const last = s.split(/[/\\]/).filter(Boolean).pop();
+    if (last) {
+      out.add(last);
+      const stem = last.replace(/\.[^.]+$/, '');
+      if (stem && stem !== last) out.add(stem);
+    }
+    if (!/[/\\]/.test(s)) {
+      const seg = s.split(/[.:]+/).filter(Boolean).pop();
+      if (seg) out.add(seg);
+    }
+    return out;
+  };
+
+  /**
    * **同一个编译单元的 `.ml` / `.mli` 两个节点，在解析时算同一个符号。**
    *
    * OCaml 里 `foo.ml` 与 `foo.mli` 是**同一个编译单元** `Foo` 的两面（实现 / 接口），
@@ -3229,6 +3285,9 @@ export async function scan(opts) {
       const t = allTypes[id];
       if (!t || !sameFamily(fileRecs[t.file]?.lang, fromLang)) return false;
       if (isLocalName && t.file !== fromFile?.id) return false;
+      // **合成文件 module 节点不参与裸名匹配**，除非引用方真有一条以它命名的 import（候选①，2026-10-04）。
+      // 它俩的名字就是文件名主干 —— 不挡的话裸名撞文件名就成边（numpy 28.8% / tokio 40% 的边是这么来的）。
+      if (t.synthModule && !importNamesModule(fromFile, t)) return false;
       return true;
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
