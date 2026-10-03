@@ -313,9 +313,21 @@ function evidenceRecomputed(idx, e) {
         ? { packages: src0.packages || [], aliases: src0.aliases || [] }
         : null;
     }
-    for (const raw of f.imports || []) if (importMatchesTarget(raw, target, idx._pkgCtx)) return 'import';
+    // 读期与扫描期必须同一套口径（项目里那条"自相矛盾"的教训）：相对导入要带上**引用方路径**才能解析
+    const ctxFor = { ...(idx._pkgCtx || {}), fromPath: f.path };
+    // 符号名要对得上（与扫描期 hasImportBacking 同一口径，见那里的说明）：
+    // 这个名字是被**哪条** import 引进来的 → 依据只能来自那一条
+    const boundBy = (f.importBinds && target.name) ? f.importBinds[target.name] : null;
+    const nameGated = Boolean(boundBy && !f.importBindsAll);
+    for (const raw of f.imports || []) {
+      if (!importMatchesTarget(raw, target, ctxFor)) continue;
+      if (nameGated && !boundBy.includes(raw)) continue;
+      return 'import';
+    }
     // Dart 的 part 文件：库文件的 import 对它可见（part 文件自己不能写 import，这是语言语义）
-    for (const raw of f.libImports || []) if (importMatchesTarget(raw, target, idx._pkgCtx)) return 'import';
+    for (const raw of f.libImports || []) {
+      if (importMatchesTarget(raw, target, ctxFor)) return 'import';
+    }
     // C/C++ 的 include 闭包（≤2 跳）：A include 的 B 又 include 了 C → A 也能撑住 C 里的引用
     //（实测 redis / fmt / ocaml：类型全在被“间接 include”的内部头文件里）
     if (idx._closure === undefined) {

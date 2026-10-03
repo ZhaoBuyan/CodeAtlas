@@ -860,6 +860,23 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **符号名的依据必须来自"引进了这个名字的那条 import"**（精度轮 9，2026-10-05）。
+    // 关键场景：`render` 从**外部包**引入，而 `./alpha` **同目录里也有个 `render`** ——
+    // 相对导入现在会（正确地）路径匹配上 alpha.ts，但不许拿它给 `render` 做依据 ✗。
+    // 第 8 轮撤掉这条加严，就是因为当时相对目录导入解析不到、一严就误砍真边；
+    // 第 9 轮把相对路径导入按引用方目录解析补进 importMatchesTarget 之后才敢开（读期同口径）。
+    dir: 'ts-import-strict',
+    lang: 'typescript',
+    types: 3,
+    names: ['render', 'Plain', 'use'],
+    importsMin: 2,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['use', 'render', false], ['use', 'Plain', true]],
+    refTiers: [['use', 'Plain', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

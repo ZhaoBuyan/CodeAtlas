@@ -3022,7 +3022,22 @@ export async function scan(opts) {
    * 早先只在多候选分支里查，等于把单候选边的 import 证据整片丢掉（实测：一条 C# 的
    * `using Demo.A;` 引过去的边会被记成"名字唯一"，跟"没有任何依据"挤在同一档）。
    */
+  /**
+   * **带缓存的进口依据判定**（2026-10-05 第 9 轮，性能）。
+   *
+   * 同一对 (from,to) 在一次解析里会被问很多次（裸名候选池的几道闸 + 分档 + 消歧分支都要问），
+   * 而它内部要按候选方的 import 逐条调 `importMatchesTarget`（第 9 轮还多了相对路径解析）。
+   * 判定是**纯函数**（只读 allTypes/fileRecs/packages/aliases，不改图），所以按对缓存是安全的。
+   */
+  const importBackingCache = new Map();
   const hasImportBacking = (fromTypeId, toTypeId) => {
+    const key = `${fromTypeId}|${toTypeId}`;
+    if (importBackingCache.has(key)) return importBackingCache.get(key);
+    const v = computeImportBacking(fromTypeId, toTypeId);
+    importBackingCache.set(key, v);
+    return v;
+  };
+  const computeImportBacking = (fromTypeId, toTypeId) => {
     const fromType = allTypes[fromTypeId], cand = allTypes[toTypeId];
     if (!fromType || !cand) return false;
     const fromFile = fileRecs[fromType.file], candFile = fileRecs[cand.file];
@@ -3030,19 +3045,27 @@ export async function scan(opts) {
     // `name` 也带上：Rust 的 `::` 那档要按"导入最后一段 == 目标名"卡一道（见 modules.mjs 的说明）
     const target = { ns: cand.ns, fqn: cand.fqn, name: cand.name, path: candFile.path };
     /**
-     * ⚠ **这里暂时不做"符号名要对得上"的加严**（2026-10-05 第 8 轮的实测结论）。
+     * **符号名要对得上**（2026-10-05 第 8/9 轮）：JS/TS/Python 的 import 带着明确的符号名
+     * （`import { Plain } from './alpha'` / `from .models import DTModel`）。
+     * 判据只在**这个目标名确实被某条 import 引进来**时才生效：那时"依据"必须来自**引进了这个名字的那条 import**。
+     *   · `render`（来自外部包）→ 不该用别的路径匹配（相对 / 包名）给它做依据 ✗；
+     *   · 目标名没被任何 import 绑定时不动（包级导入本来就该给包下所有节点做依据）。
+     * `from x import *`（`importBindsAll`）例外。
      *
-     * 试过两版都在**误砍真边**：ant-design 的 `UploadProps` 是从 barrel `..` 引入的，
-     * 而路径规则匹配到的是**包名**那条 → 加严后真边被砍（`uploadlist.test.tsx → interface.ts::UploadProps` ×32）。
-     * 根因是**相对目录导入（`..` / `.` / `./dir`）解析不到**（barrel 重导出），
-     * 得先把这一档补进 `importMatchesTarget`（带上引用方路径才能解析），再回来加严。
-     * 本轮只保留"importBinds 记账 + 绑定规则"那一半（见 importBindsName）——
-     * 那半边的好处是：被 import 绑定的名字不再回落到"随便撞一个同名"，
-     * 而它的**依据判断仍走原有的路径 / 包规则**（保守，不误砍）。
+     * ⚠ 第 8 轮试过但**撤了**，因为当时相对目录导入解析不到 → 真边被误砍（ant-design `UploadProps` ×32）。
+     *   第 9 轮把**相对路径导入按引用方目录解析**补进 `importMatchesTarget` 之后，这一档才敢开。
      */
-    for (const raw of fromFile.imports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
+    const boundBy = (fromFile.importBinds && cand.name) ? fromFile.importBinds[cand.name] : null;
+    const nameGated = Boolean(boundBy && !fromFile.importBindsAll);
+    for (const raw of fromFile.imports || []) {
+      if (!importMatchesTarget(raw, target, { packages, aliases, fromPath: fromFile.path })) continue;
+      if (nameGated && !boundBy.includes(raw)) continue;
+      return true;
+    }
     // Dart 的 part 文件：库文件的 import 对它可见（part 文件自己不能写 import，这是语言语义）
-    for (const raw of fromFile.libImports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
+    for (const raw of fromFile.libImports || []) {
+      if (importMatchesTarget(raw, target, { packages, aliases, fromPath: fromFile.path })) return true;
+    }
     // C/C++ 的 include 闭包（≤2 跳）
     if (Array.isArray(fromFile.closure) && fromFile.closure.includes(cand.file)) return true;
     // Dart：同一个 part 库组里的文件同作用域
@@ -3542,8 +3565,11 @@ export async function scan(opts) {
       if (bindsName && t.file !== fromFile?.id && !hasImportBacking(fromTypeId, id)) return false;
       // **裸名必须在作用域里**（C# / Java，见 nsInScope）：跨命名空间、又没有任何 import 覆盖的裸名匹配
       // 只能是名字巧合（实测 efcore/aspnetcore 上这类有 9 千多条、抽样全是错边）。同文件候选豁免。
-      if (scopeMode && t.file !== fromFile?.id && !hasImportBacking(fromTypeId, id)
-        && !nsInScope(allTypes[fromTypeId], t, scopeMode)) return false;
+      // ⚠ 判定顺序**有意先判便宜的**：`nsInScope` 是纯字符串比较，`hasImportBacking` 要按 import 循环
+      //   （第 9 轮量到的 10–15% 性能回退主要来自这里，别调换）。
+      if (scopeMode && t.file !== fromFile?.id
+        && !nsInScope(allTypes[fromTypeId], t, scopeMode)
+        && !hasImportBacking(fromTypeId, id)) return false;
       return true;
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）

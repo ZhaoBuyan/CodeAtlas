@@ -59,6 +59,36 @@ export function importMatchesTarget(rawImport, target, ctx) {
   }
   // 相对路径那种 import（'./f1.js' / '../util'）走模块名这条路：比目标文件的模块名
   if (target.path && moduleKey(imp) === moduleKey(target.path)) return true;
+  /**
+   * **相对路径导入按"引用方目录"解析**（2026-10-05 第 9 轮）。
+   *
+   * 为什么需要：JS/TS/Python 里最常见的形态就是相对导入，而 **barrel**（`import { X } from '..'` /
+   * `from .models import Y`）以前**解析不到**任何东西 —— 于是"符号名的依据必须来自引进它的那条 import"
+   * 这条加严无从落地（第 8 轮实测：一加严就把 ant-design 的 `UploadProps` 这类真边砍了 ×32 ✗）。
+   * 判据：把 import 按引用方文件所在目录拼成仓库内路径，目标**落在它下面**（目录导入＝barrel）、
+   * **就是它**（同名文件，省略扩展名）、或是它的 **index 入口**都算指到。
+   * `ctx.fromPath` 缺席时这一档不生效（老调用方行为不变）。
+   */
+  if (ctx?.fromPath && /^\.\.?(?:\/|$)/.test(imp)) {
+    // ⚠ 这里用自己算的 `tpath`：下面那行 `const tPath = …` 还没声明（TDZ），不能提前用
+    const tpath = String(target.path || '').replace(/\\/g, '/');
+    const fromDir = String(ctx.fromPath).replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+    const stack = [];
+    for (const seg of `${fromDir}/${imp}`.split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') { stack.pop(); continue; }
+      stack.push(seg);
+    }
+    const base = stack.join('/');
+    if (base && tpath) {
+      if (tpath === base || tpath.startsWith(`${base}/`)) return true;          // 目录（barrel）
+      for (const ext of SRC_EXT) {
+        if (tpath === `${base}.${ext}`) return true;                            // 同名文件（省略扩展名）
+        if (tpath === `${base}/index.${ext}`) return true;                      // 目录入口 index
+      }
+      if (base.split('/').length >= 2 && tpath.endsWith(`/${base}`)) return true;
+    }
+  }
   // Elixir：模块名是 CamelCase（`Phoenix.Controller`）、文件名是 snake_case（controller.ex）——
   // 对 .ex/.exs 目标做一次**大小写不敏感**的模块名比对（只对 Elixir 开：别的语言里大小写是有意义的）
   if (target.path && /\.exs?$/i.test(String(target.path))) {
