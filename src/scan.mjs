@@ -3041,6 +3041,37 @@ export async function scan(opts) {
     return false;
   };
   /**
+   * **这个裸名在语义上到底指不指得到那个目标**（2026-10-05 精度轮，只对 profile 声明了
+   * `bareNameScope` 的语言生效：C# / Java）。
+   *
+   * 语义：C# / Java 里一个**不带限定的**类型名，要么在**当前命名空间/包里**，要么被某条
+   * `using` / `import` 引进来（含 C# 的项目级 global usings，见 projectUsingsFor），
+   * 要么（只 C#）在**外层命名空间**里 —— 否则编译器根本解析不到这个名字。
+   * 所以"跨文件、跨命名空间、又没有任何 import 覆盖"的裸名匹配，**只能是名字巧合**。
+   *
+   * 为什么不砍真边：C# 的 `using`（含 csproj 的项目级 `<Using>`）与 Java 的 `import`
+   * 都被 `hasImportBacking` 认到了；同一个命名空间的也认（那条本来就算 import 档）。
+   * 实测（`probe-ns-scope2.mjs`）：efcore 13,355 条 unique 里 **13,133 条被项目级 using 覆盖**
+   * （真边，不砍），真正越界只 222 条 —— 都是在别的命名空间里撞同名的测试类。
+   *
+   * ⚠ 目标没有命名空间时（全局命名空间）**保守保留** —— 那是"判断不了"，不是"不在作用域"。
+   * ⚠ 已知没覆盖的形态：`using static X;` / 别名 `using A = B.C;`（efcore 里没有这两种）。
+   */
+  const nsInScope = (fromType, t, mode) => {
+    const toNs = String(t.ns || '').trim();
+    if (!toNs) return true;
+    const fromNs = String(fromType?.ns || '').trim();
+    if (fromNs === toNs) return true;
+    if (mode === 'ns+ancestors') {
+      // C#：由内向外逐级找 —— 在 `A.B.C` 里可以直接用 `A.B` / `A` 里的类型（不用 using）
+      for (let p = fromNs; p.includes('.'); ) {
+        p = p.slice(0, p.lastIndexOf('.'));
+        if (p === toNs) return true;
+      }
+    }
+    return false;
+  };
+  /**
    * 一条 import 的"尾巴"候选。
    *   · **路径形态**（含 `/` 或 `\`）：取最后一段，并附带"去掉扩展名"的那份 ——
    *     `./lib/helper.sh` → `helper.sh` / `helper`（分别对得上合成节点的文件名与 name）；
@@ -3419,6 +3450,8 @@ export async function scan(opts) {
     );
     /** 这个裸名是不是已被某条 import 绑定（见 importBindsName：绑定了就不许回落到同名匹配） */
     const bindsName = importBindsName(fromFile, name);
+    /** 这门语言要不要按"裸名必须在作用域里"否决（见 nsInScope）：C# / Java 声明了才生效 */
+    const scopeMode = (LANGUAGES[fromLang] || {}).bareNameScope || null;
     const hit = collapseUnits((bySimpleName.get(name) || []).filter((id) => {
       const t = allTypes[id];
       if (!t || !sameFamily(fileRecs[t.file]?.lang, fromLang)) return false;
@@ -3430,6 +3463,10 @@ export async function scan(opts) {
       // 只有"这条候选确实被 import 指向"（hasImportBacking）才活下来；同文件候选不受影响（那是最近的一档，
       // 与上面"局部名"那条一样豁免 —— "宁缺勿错"要的是别接错，不是砍真边）。
       if (bindsName && t.file !== fromFile?.id && !hasImportBacking(fromTypeId, id)) return false;
+      // **裸名必须在作用域里**（C# / Java，见 nsInScope）：跨命名空间、又没有任何 import 覆盖的裸名匹配
+      // 只能是名字巧合（实测 efcore/aspnetcore 上这类有 9 千多条、抽样全是错边）。同文件候选豁免。
+      if (scopeMode && t.file !== fromFile?.id && !hasImportBacking(fromTypeId, id)
+        && !nsInScope(allTypes[fromTypeId], t, scopeMode)) return false;
       return true;
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）

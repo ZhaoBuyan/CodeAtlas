@@ -781,6 +781,23 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **裸名必须在作用域里**（精度轮 6，2026-10-05，C#/Java）：跨命名空间、又没有任何 import 覆盖的裸名
+    // 在语义上根本指不到目标（编译都过不去）→ 只能是名字巧合。
+    // 夹具两头钉：`gamma.User`（**无 import**）→ 不许接；`gamma.User2`（有 `import alpha.beta.Widget`）→ 必须接、且是 import 档。
+    // 反向对照过：旧引擎上 `gamma.User → alpha.beta.Widget` 是 unique 档、**存在**。
+    // 实测收益：aspnetcore 一个样本砍掉 11,034 条（`Assert` 2781 · `Compiler` 627 · `IServiceCollection` 568 …全是框架名撞测试类）。
+    dir: 'java-ns-scope',
+    lang: 'java',
+    types: 3,
+    names: ['ScopeWidget', 'ScopeUser', 'ScopeUser2'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['gamma.ScopeUser', 'alpha.beta.ScopeWidget', false], ['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', true]],
+    refTiers: [['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

@@ -934,6 +934,15 @@ export const LANGUAGES = {
       enum_member_declaration: 'enumValue',
     },
     imports: { using_directive: 1 },
+    /**
+     * **裸名必须在作用域里才认**（C#，2026-10-05 精度轮）：不带限定的类型名要么在当前命名空间、
+     * 要么被 `using`（含 csproj 的项目级 `<Using Include>`，见 scan.mjs 的 projectUsingsFor）引进来、
+     * 要么在**外层命名空间**里 —— 否则编译器解析不到。`'ns+ancestors'` 就是"再加上外层命名空间"那一档。
+     * 实测：efcore/aspnetcore 上"跨命名空间 + 无 import 覆盖"的裸名边有 9 千多条，抽样**全是错边**
+     * （别的命名空间里的同名测试类）；而 13,133 条被项目级 using 覆盖的**真边**因为有依据而不受影响。
+     * ⚠ 已知没覆盖：`using static X;` / 别名 `using A = B.C;`（efcore 里没有这两种）。
+     */
+    bareNameScope: 'ns+ancestors',
     // 旧语法包把继承列表放在 base_list 字段里；换成 tree-sitter-wasm@2.0.1 的 C# 语法后
     // base_list 变成普通子节点（childForFieldName('bases') 取不到了），改走 baseNodes。
     baseFields: [],
@@ -1050,6 +1059,12 @@ export const LANGUAGES = {
       enum_constant: 'enumValue',
     },
     imports: { import_declaration: 1 },
+    /**
+     * **裸名必须在作用域里才认**（Java）：不带限定的类型名要么在**同一个包**里、要么被
+     * `import a.b.C;` 引进来 —— Java 没有"外层包自动可见"这回事，所以**不带 ancestors 那一档**
+     * （同包与 import 覆盖两条已在 hasImportBacking 里）。实测 netty 23 条 / spring-boot 471 条越界裸名边。
+     */
+    bareNameScope: 'ns',
     baseFields: ['superclass', 'interfaces'],
     baseNodes: [],
     skipNameNodes: { formal_parameter: 'name', spread_parameter: 'name' },
