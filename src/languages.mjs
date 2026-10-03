@@ -1532,7 +1532,38 @@ export const LANGUAGES = {
     // 当时判断真正待解决的是**限定名的解析歧义**：`X.t` 里的 `X` 属于哪个作用域 ——
     // 同名模块在图上有很多个，那时候"精确匹配"会从里面挑中一个（宁缺勿错还没落地）。
     // **这一条后来落地了**：resolveName 的三档优先级 + fileModuleNamespace，残留见上面"已知残留"。
-    imports: {},
+    /**
+     * **`open M` 就是 OCaml 的 import**（2026-10-04 精度轮补的）。
+     *
+     * 以前这里是 `imports: {}` —— 结果 OCaml **一个 import 都记不到**，于是它 34,000+ 条跨文件边
+     * 全部落在 `unique` 档（0% import 口径，见 `工作文档\成员名-2026-10-04.md` 第 1.1 节）：
+     * 档位分不出"有 `open` 撑着"和"纯按名字猜"，读侧（impact / refs）也就无从判断可信度。
+     * 而 `open M` 的语义正是"把 M 的成员引进当前作用域" —— 与 Java 的 `import` 同级。
+     * 加完之后 ocaml 样本上 **930 → 2,835 条边**从 unique 升到 import（有据）。
+     *
+     * ⚠ **`include` 故意不认**（2026-10-04 实测踩到）：OCaml 的 `include Identifiable.Make (struct … end)`
+     * 也是 `include_module` 节点，而识别成 import 后 walk 会**早退、不走进它的子树** ——
+     * 于是 `struct … end` 里的 `let compare/equal/print/output/hash` **全部消失**
+     * （实测 ocaml 样本掉了 64 个值节点，`Compilation_unit.print` 那 27 条入边整批没）。
+     * `open` 没这个风险（右边只能是模块路径），而且是更常见的形态。
+     *
+     * 语法树（probe 实测）：`open_module → module_path → module_name`；
+     * `open Stdlib.List` 是 `extended_module_path`。`importTextOf` 取**模块路径那一段**，
+     * 不能直接用 `node.text`（那会带上 `open` 关键字）。
+     */
+    imports: { open_module: 1 },
+    // 防御式再一道闸：只有 `open_module` 且"右边是模块路径"才算 import —— 将来语法包若把
+    // `open struct … end` 之类也认成同一个节点，也不会把子树整块跳过。
+    // ⚠ `importKindOf` 是**对每个节点**都会调用的（不是只对 imports 表里那些）—— 忘了判 `node.type`
+    //   就会把 `module_definition` / 整个 compilation_unit 都当 import 早退，图直接崩（实测踩过）。
+    importKindOf: (node) => (
+      node.type === 'open_module'
+      && node.namedChildren.some((c) => c.type === 'module_path' || c.type === 'extended_module_path') ? 1 : null
+    ),
+    importTextOf: (node) => {
+      const p = node.namedChildren.find((c) => c.type === 'module_path' || c.type === 'extended_module_path');
+      return p ? p.text : node.text;
+    },
     /**
      * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
      *   · `parameter`：`let render radius label = …` 与 `fun item -> …` 的参数（`pattern` 字段，

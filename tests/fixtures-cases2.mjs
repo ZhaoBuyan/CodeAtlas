@@ -730,6 +730,22 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **OCaml 的 `open M` 记成 import**（精度轮 3，2026-10-04）：以前 `imports: {}` → `open` 一个都不记，
+    // 于是 OCaml 的 34,000+ 条跨文件边**全落在 unique 档**（0% import 口径）——
+    // 档位分不出"有 open 撑着"和"纯按名字猜"。
+    // 两头钉：边照样在（refEdges），档位必须是 **import**（refTiers）—— 改前实测是 unique（反向对照过）。
+    dir: 'ocaml-open',
+    lang: 'ocaml',
+    types: 3,
+    names: ['value', 'alpha', 'beta'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['beta.ml', 'Alpha.value', true]],
+    refTiers: [['beta.ml', 'Alpha.value', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

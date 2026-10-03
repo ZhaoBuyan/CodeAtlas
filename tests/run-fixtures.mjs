@@ -559,6 +559,21 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
       else push(!e, `${what} ${e ? `不该存在，实际权重 ${e.w}` : '不存在（对）'}`);
     }
   }
+  /**
+   * 按**档位**断同一条边（2026-10-04 加的）：`refEdges` 只能断"在不在"，
+   * 而"有据（import）还是猜的（unique/name）"是另一件必须钉住的事 ——
+   * 例：OCaml 的 `open Foo` 记成 import 之后，`Foo.bar` 那条边应当从 unique **升到 import**。
+   *   refTiers: [['use', 'Foo.bar', 'import']]
+   */
+  if (c.refTiers) {
+    for (const [from, to, tier] of c.refTiers) {
+      const fromIds = b.types.filter((x) => (x.fqn || x.name) === from).map((x) => x.id);
+      const toIds = b.types.filter((x) => (x.fqn || x.name) === to).map((x) => x.id);
+      const e = b.edges.find((x) => fromIds.includes(x.from) && toIds.includes(x.to) && x.kind === 'ref');
+      push(Boolean(e) && e.tier === tier,
+        `${from} → ${to} 的证据档 = ${e ? e.tier : '（没这条边）'}（期望 ${tier}）`);
+    }
+  }
   // 成员分档与列表必须一致：以前取不到名字的成员**只进分档、不进 memberList**，
   // 于是 symbol / map 里整块消失（1.4.0 复测报告 P1）。名字取不到时要逐层兜底，
   // 最后宁可拿源码那一行截取当名字，也不能让它无声消失。
