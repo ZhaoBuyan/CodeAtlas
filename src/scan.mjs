@@ -2819,6 +2819,23 @@ export async function scan(opts) {
       if (set.size) direct.set(i, set);
     });
     for (const [i, set] of direct) {
+      /**
+       * ⚠ **闭包只做 2 跳，这是量过之后的选择**（2026-10-05 第 12 轮试过传递闭包，**驳回**）：
+       *
+       * 动机：jemalloc 的 `deps/jemalloc/src/extent.c` 只 include `jemalloc_internal_includes.h`，
+       * 而 `edata_t` 定义在 `edata.h`（**3 跳以外**）→ 真依赖被记成"猜的"。
+       * 直觉上"C/C++ 经过任意层 include 都可见" ⇒ 做完整传递闭包应该是纯升档。
+       *
+       * **实测结果（A/B）**：redis `import` **+354** ✓ 看着很美，但同时**丢边**：
+       *   · sqlite 丢掉 `src/btree.c → src/btreeInt.h::BtShared` ×95、`BtCursor` ×93、`Btree` ×69
+       *     —— 这些是 **直接 include** 的真边 ✗✗；
+       *   · redis 丢掉 `src/functions.c → src/server.h::client` ×16 等 11 条 import 档真边 ✗。
+       * 机制：闭包变大 ⇒ **有依据的候选变多** ⇒ 解析器在"多个候选都有据"时**弃权**（宁可少接，
+       * 这是项目一贯的取舍）⇒ 真边消失。sqlite 那种**聚合文件**（`sqlite3.c` 把一切都包含进去）尤其严重。
+       *
+       * 结论：**按"精度优先、不牺牲召回"驳回**。要拿那 +354 条升档，得先解决
+       * "多个候选都有依据时如何选近的那个"（按证据距离消歧），那是另一件事。
+       */
       const out = new Set(set);
       for (const j of set) for (const k2 of direct.get(j) || []) if (k2 !== i) out.add(k2);
       if (out.size && out.size <= 120) fileRecs[i].closure = [...out];
