@@ -2114,6 +2114,12 @@ async function extractFiles(files) {
       types: typeIds,
     };
     if (facts.reexports.length) part.file.reexports = facts.reexports;
+    // 项目级 global usings（C# 的 csproj / Directory.Build.*）—— 见 projectUsingsFor 的说明。
+    // 与 Dart 的 libImports 是同一套语义（"这些 import 对本文件可见"），所以挂同一个字段。
+    if (f.lang.id === 'csharp') {
+      const pus = projectUsingsFor(f);
+      if (pus.length) part.file.libImports = [...(part.file.libImports || []), ...pus];
+    }
     if (facts.partOf) part.file.partOf = facts.partOf;
     if (facts.fileDoc) part.file.doc = facts.fileDoc;
     // 模块别名表（OCaml 的 `module B = Bytes`）：解析限定名时要用（见 aliases 的说明）。
@@ -2165,6 +2171,55 @@ function isTestPath(rel) {
   //（`component.test.mjs` / `handler_test.go` / `foo_spec.rb` 都对）
   const stem = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
   return /[._](test|spec)$/i.test(stem) || /^test_/i.test(stem);
+}
+
+/**
+ * **项目级 global usings**（2026-10-04 精度轮）：C# 的 `using` 不只写在文件里 ——
+ *   · `*.csproj` 里的 `<Using Include="X" />`（EF Core 全仓都这么写）
+ *   · `Directory.Build.props` / `Directory.Build.targets`（msbuild 逐级往上找最近的那层）
+ * 这些对整个项目可见，所以文件里可以裸写类型名而不自己 `using`。
+ *
+ * 不认它们的代价（实测 efcore 一个样本）：**13,133 条**跨命名空间的裸名引用被判成"没依据"
+ * —— 例：`test/EFCore.Specification.Tests/GraphUpdates/GraphUpdatesTestBaseOneToOne.cs` 里裸写
+ * `CascadeTiming.OnSaveChanges`，而该文件**一条 using 都没有**，全靠 csproj 的
+ * `<Using Include="Microsoft.EntityFrameworkCore.ChangeTracking" />`。
+ * 认了之后这些边就有了真实依据（升到 import 档），**而不是被后面的"越界"规则误砍**。
+ *
+ * 做法：从一个文件往上走到**扫描根**为止（不越出根，免得把仓库外的 props 吸进来），
+ * 逐级读 csproj / Directory.Build.*，带缓存（同一目录只读一次）。
+ */
+const projectUsingCache = new Map();          // 目录绝对路径 → Set<命名空间>
+function projectUsingsInDir(dir) {
+  if (projectUsingCache.has(dir)) return projectUsingCache.get(dir);
+  const out = new Set();
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { /* 读不到就算了 */ }
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    if (!/\.csproj$/i.test(e.name) && !/^Directory\.Build\.(props|targets)$/i.test(e.name)) continue;
+    try {
+      const txt = fs.readFileSync(path.join(dir, e.name), 'utf8');
+      for (const m of txt.matchAll(/<Using\s+Include="([^"]+)"\s*\/?>/gi)) {
+        const ns = m[1].trim();
+        if (ns) out.add(ns);
+      }
+    } catch { /* 读不到就算了 */ }
+  }
+  projectUsingCache.set(dir, out);
+  return out;
+}
+function projectUsingsFor(file) {
+  const out = new Set();
+  const rootAbs = path.resolve(file.root || '.');
+  let dir = path.dirname(path.resolve(file.abs));
+  for (let guard = 0; guard < 32; guard++) {
+    for (const ns of projectUsingsInDir(dir)) out.add(ns);
+    if (dir === rootAbs) break;
+    const up = path.dirname(dir);
+    if (up === dir || !up.startsWith(rootAbs)) break;   // 到根 / 出根就停
+    dir = up;
+  }
+  return [...out];
 }
 
 /** 合并各子进程/缓存的产出：把局部 id 平移到全局 id（文件、类型、parent、refs.owner 都要移） */

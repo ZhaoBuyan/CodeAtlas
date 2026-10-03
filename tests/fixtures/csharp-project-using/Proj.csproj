@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 夹具：项目级 global using（EF Core 全仓都这么写）—— use.cs 里裸写 Widget 全靠它 -->
+    <Using Include="Alpha.Beta" />
+  </ItemGroup>
+</Project>

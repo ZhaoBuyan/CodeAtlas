@@ -763,6 +763,24 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **项目级 global usings 也是依据**（精度轮 5，2026-10-04）：C# 的 `using` 不只在文件里 ——
+    // `*.csproj` 的 `<Using Include="X" />`（EF Core 全仓都这么写）与 `Directory.Build.props` 对**整个项目**可见。
+    // 夹具：`use.cs`（ns `Gamma`）**故意不写 using**，裸写 `Widget`（在 `Alpha.Beta`）——
+    // 全靠同目录 `Proj.csproj` 里那行 `<Using Include="Alpha.Beta" />`。
+    // 改前实测是 unique 档（反向对照过），改后必须是 **import**。
+    // 实测代价：不认它的话 efcore 一个样本有 **13,133 条**真实引用被当成"没依据"。
+    dir: 'csharp-project-using',
+    lang: 'csharp',
+    types: 2,
+    names: ['Widget', 'User'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Gamma.User', 'Alpha.Beta.Widget', true]],
+    refTiers: [['Gamma.User', 'Alpha.Beta.Widget', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
