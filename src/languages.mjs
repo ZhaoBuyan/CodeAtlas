@@ -1279,6 +1279,13 @@ export const LANGUAGES = {
     imports: { import_or_export: 1 },
     importKindOf: dartImportKind,
     importTextOf: dartImportText,
+    /**
+     * **裸名跨文件必须有 `import`**（Dart，2026-10-05 第 11 轮）：Dart 没有"同包自动可见"——
+     * 用别的文件里的东西必须 `import`（或它是同一个库的 `part`，那条由 `hasImportBacking` 的
+     * lib 组判定放行 ✓）。所以"跨文件 + 零依据"的裸名匹配只能是同名巧合 ✗（与 Rust 同档）。
+     * 实测：riverpod 上 843 条 unique、bloc 上 484 条，抽样都是跨库的同名 ✗。
+     */
+    bareNameScope: 'import-only',
     partOfOf: dartPartOfOf,
     baseFields: ['superclass'],
     baseNodes: [],
@@ -1814,6 +1821,14 @@ export const LANGUAGES = {
       var_declaration: 'var',
     },
     imports: { import_declaration: 1 },
+    /**
+     * **裸名必须在作用域里**（Go，2026-10-05 第 11 轮）：Go 里**跨包必须写限定名**（`pkg.Name`）——
+     * 一个光秃秃的裸名只可能指**同包**的声明（或内建 / `import . "pkg"` 那种点导入，它也有 import 依据）。
+     * 所以"跨包 + 零依据"的裸名匹配只能是同名巧合 ✗（与 Java/Kotlin 同档：`ns`，Go 没有包嵌套）。
+     * 实测：etcd 上 `Message`（引用方 `etcdserverpb` → 目标 `snap`）、grpc-go 上 `Listener`
+     * （`xdsresource` → `bufconn`）这类边全是跨包的 ✗。
+     */
+    bareNameScope: 'ns',
     baseFields: [],
     baseNodes: [],
     decisions: ['if_statement', 'for_statement', 'expression_switch_statement', 'type_switch_statement', 'select_statement', 'expression_case', 'type_case', 'communication_case', 'default_case', 'binary_expression'],

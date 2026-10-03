@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 第二批语言的 fixture 期望值（由 tests/.dump-expect.mjs 实测得出，不是我猜的）。
  * 单独放一个文件：run-fixtures.mjs 里那批是第一二批混着的，这样加语言只动这里。
  *
@@ -906,6 +906,36 @@ export const EXTRA_CASES = [
     membersMin: 0,
     refEdges: [['gamma.ScopeUser', 'alpha.beta.ScopeWidget', false], ['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', true]],
     refTiers: [['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', 'import']],
+    errorsMax: 0,
+  },
+  {
+    // **Go：跨包必须写限定名**（精度轮 11，2026-10-05）—— 裸名只可能指**同包**的声明（或点导入，那也有 import 依据），
+    // 所以"跨包 + 零依据"的裸名匹配只能是同名巧合 ✗（档位与 Java/Kotlin 同：`ns`）。
+    // 两头钉：同包跨文件的 `gamma.Helper` **必须在**（证明没把 Go 的真边一起砍），
+    // 跨包的 `alpha.ScopeWidget` **必须不在**。实测：etcd −564 · grpc-go −419 · prometheus −378 · caddy −46。
+    dir: 'go-ns-scope',
+    lang: 'go',
+    types: 3,
+    names: ['ScopeWidget', 'Helper'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['gamma/user.go', 'alpha.ScopeWidget', false], ['gamma/user.go', 'gamma.Helper', true]],
+    errorsMax: 0,
+  },
+  {
+    // **Dart：裸名跨文件必须有 `import`**（精度轮 11）—— Dart 没有"同包自动可见"，
+    // 同一个库的 `part` 那条由 hasImportBacking 的 lib 组判定放行 ✓。档位与 Rust 同（`import-only`）。
+    // 实测：riverpod −842 · bloc −325，全是跨库同名 ✗。
+    dir: 'dart-import-scope',
+    lang: 'dart',
+    types: 3,
+    names: ['ScopeWidget', 'Use', 'Use2'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Use', 'ScopeWidget', true], ['Use2', 'ScopeWidget', false]],
+    refTiers: [['Use', 'ScopeWidget', 'import']],
     errorsMax: 0,
   },
   {
