@@ -699,6 +699,22 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **名字已被 import 绑定 → 不许回落到同名匹配**（精度轮，2026-10-04）。
+    // `import org.junit.jupiter.api.alpha;` 之后裸名 `alpha` **已经有主**（绑给了那条 import，而图里没有它
+    // 指向的类）→ 不该再接到 alpha.java 的类上。实测这正是 spring-boot 上 **10,751 条**错边的形状：
+    // `@Test`（`import org.junit.jupiter.api.Test`）被接到另一个模块里叫 `Test` 的测试夹具类上。
+    // 两头钉：`alpha` 不许接；`gamma`（没被任何 import 绑定）照旧接得上。
+    dir: 'import-bound-name',
+    lang: 'java',
+    types: 3,
+    names: ['alpha', 'gamma', 'Beta'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Beta', 'alpha', false], ['Beta', 'gamma', true]],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

@@ -2919,6 +2919,36 @@ export async function scan(opts) {
     return false;
   };
   /**
+   * **这个裸名是不是已经被某条 import 绑定了**（2026-10-04，精度轮）。
+   *
+   * 公理：`import java.util.logging.Level;` 之后，文件里的裸名 `Level` 就**绑给了那条 import**；
+   * 图里另一个同名的 `Level` 与它无关，**不许**再回落到"同名匹配"。
+   *
+   * 实测这条有多大（67 样本 + 78 目录，见 `工作文档\验证\_smoke\probe-import-bound.mjs`）：
+   * `unique` 档 113,659 条里有 **16,342 条（14.0%）** 是这类；其中
+   * **`spring-boot` 一个样本就 10,751 条（占它 unique 档 95.8%）** —— 全是 `@Test`
+   * （`import org.junit.jupiter.api.Test`）被接到另一个模块里叫 `Test` 的测试夹具类上：
+   * `ConfigurationPropertiesTests → …generic.ComplexGenericProperties.java::Test ×117`。
+   * 反向看：这类边的"依据"只有"名字在族内唯一"，而名字其实**已经有主**了。
+   */
+  const importBindsName = (fromFile, name) => {
+    if (!fromFile || !name) return false;
+    for (const raw of [...(fromFile.imports || []), ...(fromFile.libImports || [])]) {
+      if (!importTails(raw).has(name)) continue;
+      // ⚠ **项目内相对 import 不算**（2026-10-04 实测补的豁免）：
+      //   `use crate::AssistContext;` 这种**引擎不一定解析得到它指向哪个节点**（Rust 的 `crate::` 路径
+      //   没有 crate 名，比不到 fqn 上）→ 把它当"名字绑到图外"会把**真边**一起删掉。
+      //   实测 rust-analyzer 上删掉的 1,377 条里 **813 条（59%）** 是这种形状
+      //   （`crate::AssistContext` → `ide-assists/src/assist_context.rs::AssistContext`，那条本来是对的）；
+      //   同一口径下 spring-boot 10,739 条、netty 204 条里这种形状是 **0 条**（纯收益）。
+      //   所以只在"这名字被一条**能指到项目外的** import 绑走"时才不许回落 —— 保守，宁可留边。
+      if (/^(crate|self|super)::/.test(raw) || /^\.{1,2}[/\\]/.test(raw)) continue;
+      if (!/[.:/\\]/.test(raw)) continue;   // 单个词（`import gamma`）：同样可能指项目内，不算
+      return true;
+    }
+    return false;
+  };
+  /**
    * 一条 import 的"尾巴"候选。
    *   · **路径形态**（含 `/` 或 `\`）：取最后一段，并附带"去掉扩展名"的那份 ——
    *     `./lib/helper.sh` → `helper.sh` / `helper`（分别对得上合成节点的文件名与 name）；
@@ -3281,6 +3311,8 @@ export async function scan(opts) {
       (fromFile?.locals && fromFile.locals.includes(name))
       || (fromFile?.localOwners && fromFile.localOwners[fromTypeId]?.includes(name)),
     );
+    /** 这个裸名是不是已被某条 import 绑定（见 importBindsName：绑定了就不许回落到同名匹配） */
+    const bindsName = importBindsName(fromFile, name);
     const hit = collapseUnits((bySimpleName.get(name) || []).filter((id) => {
       const t = allTypes[id];
       if (!t || !sameFamily(fileRecs[t.file]?.lang, fromLang)) return false;
@@ -3288,6 +3320,10 @@ export async function scan(opts) {
       // **合成文件 module 节点不参与裸名匹配**，除非引用方真有一条以它命名的 import（候选①，2026-10-04）。
       // 它俩的名字就是文件名主干 —— 不挡的话裸名撞文件名就成边（numpy 28.8% / tokio 40% 的边是这么来的）。
       if (t.synthModule && !importNamesModule(fromFile, t)) return false;
+      // **名字已被 import 绑定 → 不许回落到同名匹配**（2026-10-04 精度轮，见 importBindsName 的说明）。
+      // 只有"这条候选确实被 import 指向"（hasImportBacking）才活下来；同文件候选不受影响（那是最近的一档，
+      // 与上面"局部名"那条一样豁免 —— "宁缺勿错"要的是别接错，不是砍真边）。
+      if (bindsName && t.file !== fromFile?.id && !hasImportBacking(fromTypeId, id)) return false;
       return true;
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）
