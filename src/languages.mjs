@@ -365,6 +365,13 @@ const TS_SHAPE = {
    *   现在由夹具 `tests/fixtures/a3-locals-javascript/` 钉住（`shadowed` 不该成边、`genuine` 必须成边）。
    */
   localBindings: {
+      // 泛型（类型）参数：`class Foo[T]` / `fn f<T>()` 里的那个 T —— 它是**类型**参数，
+      // 不是别处那个同名类型（不登记的话，`Flow[In, Out, Mat]` 的 `Out` 会接到另一个文件的 `Out`）。
+      // ⚠ 用 `auto` 而不是 `'name'`：实测 **Java 的 `type_parameter` 没有 name 字段**（名字是直接子节点
+      //   `type_identifier`），而 **Rust 有**（`type_parameter [name="T"]`）—— `auto` 两种形状都收。
+      //   这类声明 `probe:profile` 查不出来（它只问"这门语法里有没有这个字段名"、不查"这个节点上有没有"），
+      //   必须靠夹具钉：tests/fixtures/typeparam-java/。
+      type_parameter: 'auto',
     variable_declarator: 'name',
     required_parameter: 'pattern',
     optional_parameter: 'pattern',
@@ -890,6 +897,13 @@ export const LANGUAGES = {
     skipNameNodes: { parameter: 'name' },
     // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 + 本地变量声明
     localBindings: {
+      // 泛型（类型）参数：`class Foo[T]` / `fn f<T>()` 里的那个 T —— 它是**类型**参数，
+      // 不是别处那个同名类型（不登记的话，`Flow[In, Out, Mat]` 的 `Out` 会接到另一个文件的 `Out`）。
+      // ⚠ 用 `auto` 而不是 `'name'`：实测 **Java 的 `type_parameter` 没有 name 字段**（名字是直接子节点
+      //   `type_identifier`），而 **Rust 有**（`type_parameter [name="T"]`）—— `auto` 两种形状都收。
+      //   这类声明 `probe:profile` 查不出来（它只问"这门语法里有没有这个字段名"、不查"这个节点上有没有"），
+      //   必须靠夹具钉：tests/fixtures/typeparam-java/。
+      type_parameter: 'auto',
       parameter: 'name',
       variable_declarator: 'name',
       foreach_statement: 'left',
@@ -1009,6 +1023,13 @@ export const LANGUAGES = {
     namespaceScope: 'file',
     // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 + 本地变量声明 + 增强 for 的变量
     localBindings: {
+      // 泛型（类型）参数：`class Foo[T]` / `fn f<T>()` 里的那个 T —— 它是**类型**参数，
+      // 不是别处那个同名类型（不登记的话，`Flow[In, Out, Mat]` 的 `Out` 会接到另一个文件的 `Out`）。
+      // ⚠ 用 `auto` 而不是 `'name'`：实测 **Java 的 `type_parameter` 没有 name 字段**（名字是直接子节点
+      //   `type_identifier`），而 **Rust 有**（`type_parameter [name="T"]`）—— `auto` 两种形状都收。
+      //   这类声明 `probe:profile` 查不出来（它只问"这门语法里有没有这个字段名"、不查"这个节点上有没有"），
+      //   必须靠夹具钉：tests/fixtures/typeparam-java/。
+      type_parameter: 'auto',
       formal_parameter: 'name',
       spread_parameter: 'name',
       variable_declarator: 'name',
@@ -1117,6 +1138,8 @@ export const LANGUAGES = {
      * 类属性的裸名引用是**合法**的跨文件引用，所以只认"在函数体里"的那种（`only` 闸）。
      */
     localBindings: {
+      // Kotlin 的 `type_parameter` **没有 name 字段**（实测：语法包 359 个节点名里没有这个字段）→ 用 `auto`
+      type_parameter: 'auto',
       parameter: 'auto',
       catch_block: 'auto',
       lambda_parameters: 'auto',
@@ -1694,6 +1717,13 @@ export const LANGUAGES = {
     nameFromField: { impl_item: 'type' },
     // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 / `let x` / 闭包参数 / 匹配绑定
     localBindings: {
+      // 泛型（类型）参数：`class Foo[T]` / `fn f<T>()` 里的那个 T —— 它是**类型**参数，
+      // 不是别处那个同名类型（不登记的话，`Flow[In, Out, Mat]` 的 `Out` 会接到另一个文件的 `Out`）。
+      // ⚠ 用 `auto` 而不是 `'name'`：实测 **Java 的 `type_parameter` 没有 name 字段**（名字是直接子节点
+      //   `type_identifier`），而 **Rust 有**（`type_parameter [name="T"]`）—— `auto` 两种形状都收。
+      //   这类声明 `probe:profile` 查不出来（它只问"这门语法里有没有这个字段名"、不查"这个节点上有没有"），
+      //   必须靠夹具钉：tests/fixtures/typeparam-java/。
+      type_parameter: 'auto',
       parameter: 'pattern',
       let_declaration: 'pattern',
       closure_parameters: 'pattern',
@@ -1752,6 +1782,9 @@ export const LANGUAGES = {
     typeSkipParent: { struct_specifier: ['type_definition', 'class_specifier'], enum_specifier: ['type_definition'], union_specifier: ['type_definition'] },
     members: { function_definition: 'function', field_declaration: 'field', declaration: 'field', enumerator: 'enumValue' },
     // 局部绑定：与 C 同形（见 c profile 里那份说明）
+    // ⚠ C++ **不登记泛型参数**：实测这门语法包在本仓库的 C++ 样本上**解析不出模板结构** ——
+    //   `template <class InputIt1, …>` 整段落在 `expression_statement` 里（abseil 一个样本 4,042 个异常），
+    //   没有 `type_parameter*` 节点可挂。等 C++ 语法包换新了再说（见"已知局限"里那条 C/C++ 不做名字解析）。
     localBindings: {
       parameter_declaration: 'declarator',
       init_declarator: 'declarator',
@@ -1873,6 +1906,13 @@ export const LANGUAGES = {
      *   **引用** `flag` 当成本地声明（更坏），所以宁可不收。
      */
     localBindings: {
+      // 泛型（类型）参数：`class Foo[T]` / `fn f<T>()` 里的那个 T —— 它是**类型**参数，
+      // 不是别处那个同名类型（不登记的话，`Flow[In, Out, Mat]` 的 `Out` 会接到另一个文件的 `Out`）。
+      // ⚠ 用 `auto` 而不是 `'name'`：实测 **Java 的 `type_parameter` 没有 name 字段**（名字是直接子节点
+      //   `type_identifier`），而 **Rust 有**（`type_parameter [name="T"]`）—— `auto` 两种形状都收。
+      //   这类声明 `probe:profile` 查不出来（它只问"这门语法里有没有这个字段名"、不查"这个节点上有没有"），
+      //   必须靠夹具钉：tests/fixtures/typeparam-java/。
+      type_parameter: 'auto',
       parameter: 'name',
       lambda_parameter: 'name',
       property_declaration: { field: 'name', only: localNotMember(['function_body', 'lambda_literal'], ['class_body', 'protocol_body']) },
@@ -1910,6 +1950,23 @@ export const LANGUAGES = {
      * `typed_pattern` 同理（`val x: Int = …` 的 pattern 就是它）。
      */
     localBindings: {
+      /**
+       * Scala 的泛型参数形状（`probe:tree` 实测）：`type_parameters` 这个**容器自己带 `name`**
+       * （`[T]` → name="T"），多个 / 带型变时其余在子节点里
+       * （`[In, Out, Mat]` → 两个 `identifier`；`[+Mat]` → `covariant_type_parameter` 带 name）。
+       * 没有单独的 `type_parameter` 节点（语法包里查无此名）→ 只能按容器写函数规格。
+       */
+      type_parameters: (node) => {
+        const out = [];
+        const first = node.childForFieldName('name');
+        if (first && first.text) out.push(first.text);
+        for (const c of node.namedChildren) {
+          if (c.type === 'identifier' || c.type === 'type_identifier') { out.push(c.text); continue; }
+          const nm = c.childForFieldName('name');
+          if (nm && nm.text) out.push(nm.text);
+        }
+        return out;
+      },
       parameter: 'name',
       enumerator: 'auto',
       val_definition: { field: 'pattern', only: localNotMember(['function_definition', 'lambda_expression', 'block'], ['template_body']) },

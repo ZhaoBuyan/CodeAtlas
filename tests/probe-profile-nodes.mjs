@@ -59,12 +59,28 @@ let checked = 0, badLangs = 0, failedLoad = 0, fieldsChecked = 0;
 const allMiss = [];
 for (const [id, prof] of Object.entries(LANGUAGES)) {
   if (!prof.wasm) continue;
-  let names, language;
+  let names, language, fieldsOf;
   try {
     language = await Language.load(resolveWasm(prof));
     names = new Set();
+    /**
+     * **按节点**记它有哪些字段（2026-10-04 补）。
+     *
+     * 为什么要这一层：老的字段审计只问 `language.fieldIdForName(f) == null` —— 那是"这门语法里
+     * 有没有这个字段名"，**不是**"这个节点上有没有这个字段"。于是 `type_parameter: 'name'` 在
+     * Java 上照样通过（`name` 是别处节点的字段），可 Java 的 `type_parameter` **根本没有 name 字段**
+     * （名字是直接子节点 `type_identifier`）→ 声明静默失效、类型参数一个都没登记。
+     * 现在改成逐节点查 `nodeType.fields`；拿不到 fields 的运行时再退化成老口径。
+     */
+    fieldsOf = new Map();
     for (let i = 0; i < language.nodeTypeCount; i++) {
-      try { names.add(language.nodeTypeForId(i)); } catch { /* 个别 id 取不到名字，跳过 */ }
+      let nt;
+      try { nt = language.nodeTypeForId(i); } catch { /* 个别 id 取不到，跳过 */ continue; }
+      const nm = typeof nt === 'string' ? nt : nt.type;
+      if (!nm) continue;
+      names.add(nm);
+      const fs = (typeof nt === 'object' && nt && nt.fields) ? Object.keys(nt.fields) : null;
+      if (fs && fs.length) fieldsOf.set(nm, new Set(fs));
     }
   } catch (e) {
     failedLoad++;
@@ -79,12 +95,14 @@ for (const [id, prof] of Object.entries(LANGUAGES)) {
       if (!names.has(nm)) miss.push(`${slot}:${nm}`);
     }
   }
-  // 字段名：`fieldIdForName` 返回 null 就是这门语法里根本没有这个字段名（写错了）
+  // 字段名：优先按**该节点自己的**字段表查；拿不到就退化成"这门语法里有没有这个字段名"
   for (const [type, spec] of Object.entries(prof.localBindings || {})) {
     for (const f of fieldNamesOf(spec)) {
       if (!f || typeof f !== 'string') continue;
       fieldsChecked++;
-      if (language.fieldIdForName(f) == null) miss.push(`localBindings.${type}.field:${f}`);
+      const own = fieldsOf.get(type);
+      if (own) { if (!own.has(f)) miss.push(`localBindings.${type}.field:${f}`); }
+      else if (language.fieldIdForName(f) == null) miss.push(`localBindings.${type}.field:${f}`);
     }
   }
   if (miss.length) {

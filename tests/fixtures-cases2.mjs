@@ -684,6 +684,21 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **泛型（类型）参数不当跨文件引用**（2026-10-04）：A3 管的是**值**局部名（参数 / 变量），
+    // 类型参数漏了 —— 实测 akka 上 `class Flow[In, Out, Mat]` 的 `Out` 被接到另一个测试文件里的
+    // `case class Out`（权重 292/289/237…全是错边）、netty 的 `<K, V, T>` 同形。
+    // 两头钉：`Beta<alpha>` 里的 `alpha` **不该**接到 a.java 的类 `alpha`；`gamma` 照旧接得上。
+    dir: 'typeparam-java',
+    lang: 'java',
+    types: 3,
+    names: ['alpha', 'gamma', 'Beta'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Beta', 'alpha', false], ['Beta', 'gamma', true]],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
