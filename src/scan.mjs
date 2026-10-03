@@ -463,6 +463,16 @@ function sourceUseKind(lines, node) {
  */
 const USE_ID_TYPES = new Set(['property_identifier', 'field_identifier']);
 
+/**
+ * 成员访问的**分隔符**（`a.b` / `A::b` / `p->b` / `a?.b`）。
+ *
+ * 用法见 `walk` 里的 `memberOfLocalValue`：这些分隔符**右边**那个标识符是"成员名"，它在语法树上是
+ * 一个普通 `identifier` —— 于是 C#/Java/TS 会把它当一次跨文件引用记下来，去撞图里同名的类。
+ * 实测（6 门语言一致，见 `工作文档\验证\_smoke\probe-member-pos.mjs`）：成员名的**前一个兄弟节点**
+ * 就是这些分隔符之一，而限定符/普通引用都不是 —— 这是可靠的语法信号。
+ */
+const MEMBER_SEPS = new Set(['.', '::', '->', '?.']);
+
 function nameOf(node, lang) {
   // Rust impl 块：名字取它实现的类型（field 'type'），让方法挂到同名节点上
   // 有专用取名钩子的语言（例如 Elixir）以它为准；**它没给出名字时继续往下走通用兜底**——
@@ -996,6 +1006,32 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   const namespaces = new Set();
   const nsStack = [];
   /**
+   * 这一处标识符是不是"**局部变量身上的成员**"（`principalEntityBuilder.Metadata` 里的 `Metadata`）。
+   *
+   * 为什么要挡（2026-10-04 精度轮）：C#/Java/TS/Python 的引用是按**单段 identifier** 记的 ——
+   * `a.Metadata` 里的 `Metadata` 也会记成一次引用，于是它去撞图里同名的类。实测 efcore 上
+   * `InternalEntityTypeBuilderTest → …Query.Metadata ×597`、`ManyTypesEntityType → …Query.List ×662`，
+   * 逐条回源码看**全是错的**（源码里是 `principalEntityBuilder.Metadata` 这种**属性访问**）。
+   *
+   * 判据只用两个信号，都是实测可靠的：
+   *   · **语法位置**：这个标识符的前一个兄弟节点是 `.` / `::` / `->` / `?.`（见 MEMBER_SEPS 的说明）；
+   *   · **限定符是局部绑定**：分隔符**前面**那个名字在本 owner / 本文件里是变量或参数。
+   *     —— 只挡这一种。`Foo.Bar()` / `crate::foo()` 这种"限定符可能是类型/模块"的**照旧算引用**
+   *     （`Foo` 自己还会作为引用留下，文件级依赖不断）。
+   * ⚠ 已知的代价：`let p = get_parser(); p.parse();` 这种"局部变量身上的方法调用"不再算引用 ——
+   *   依赖只剩 `get_parser`。这是本轮用 A/B 量过之后接受的取舍（见报告第 3 节）。
+   */
+  const memberOfLocalValue = (node) => {
+    const sep = node.previousSibling;
+    if (!sep || !MEMBER_SEPS.has(sep.type)) return false;
+    const qual = sep.previousSibling;
+    if (!qual) return false;
+    const qn = qual.text;
+    if (!qn || qn.length > 64) return false;
+    const owner = currentType();
+    return Boolean(localNames.has(qn) || (owner && localByOwner.get(owner.index)?.has(qn)));
+  };
+  /**
    * **函子参数**作用域（OCaml）：`module Make (Ord : OrderedType) = struct … end` 里的 `Ord`
    * 是**抽象**的 —— 它是调用方传进来的模块，源码里没有实现。
    *
@@ -1450,7 +1486,8 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
       // 跨文件引用（`Mach.fundecl`），裸名字时是局部变量/内置类型（`n`、`int`），
       // 而这两者在语法树上**类型相同、父节点也区分不了**。钩子返回 false 表示"这条不算引用"。
       if (!lang.refFilter || lang.refFilter(node)) {
-        addRef(node);
+        // **局部变量身上的成员名不算跨文件引用**（精度轮，见 memberOfLocalValue）。
+        if (!memberOfLocalValue(node)) addRef(node);
         noteUse(node);     // ① 同一处标识符：顺手记下“这个名字在这一行是调用还是成员访问”
       }
     } else if (USE_ID_TYPES.has(type)) {

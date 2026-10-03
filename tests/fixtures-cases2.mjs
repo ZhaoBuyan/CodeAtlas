@@ -715,6 +715,21 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **局部变量身上的成员名不算跨文件引用**（精度轮，2026-10-04）：`holder.Metadata()` 里的 `Metadata`
+    // 是**成员名**、不是类型引用。实测这是 efcore 上最大的一类错边（`… → Query.Metadata ×597`、
+    // `→ Query.List ×662`，回源码看全是 `principalEntityBuilder.Metadata` 这种属性访问）。
+    // 两头钉：`Metadata` 不许接；`gamma`（普通类型引用，前面不是点号）必须接得上。
+    dir: 'member-of-local',
+    lang: 'java',
+    types: 3,
+    names: ['Metadata', 'gamma', 'User'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['User', 'Metadata', false], ['User', 'gamma', true]],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
