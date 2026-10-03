@@ -250,6 +250,71 @@ function isFunctionAssignment(node) {
  * 只认“函数名就是 `require`、且首个实参是字符串字面量”的调用，别的同名调用不碰
  *（实测 axios：不认这一档时 lib/ 里一堆 require 一条也进不来）。
  */
+/**
+ * **一条 import 把哪些名字引进了当前作用域**（2026-10-05 第 8 轮）。
+ *
+ * 为什么需要：以前只记 import 的**模块路径**（`@testing-library/react`、`./alpha`），
+ * 于是"名字已被 import 绑定 → 不许回落到同名匹配"那条闸（第 1 轮）对 JS/TS/Python **完全不生效** ——
+ * 实测 ant-design 上 `Table.filter.test.tsx → scripts/check-site.ts::render`（×92）、
+ * `uploadlist.test.tsx → delay-timer.test.tsx::button`（×68）这类错边全留着：
+ * 源码里 `render` / `button` 都是 **import 进来的符号名**（或本地函数），不是跨文件的类型名。
+ *
+ * 返回**绑定后的本地名**（别名优先）：`import { A as B } from 'x'` → `B`；
+ * `import X from 'x'` / `import * as X` → `X`；Python 的 `from x import A as B` → `B`。
+ * 只影响"绑定"判断（砍错边），**不改变**已记录的 import 路径。
+ */
+const jsImportedBindings = (node) => {
+  if (node.type !== 'import_statement') return [];
+  const out = [];
+  const clause = node.namedChildren.find((c) => c.type === 'import_clause');
+  if (!clause) return [];
+  for (const c of clause.namedChildren) {
+    if (c.type === 'identifier') { out.push(c.text); continue; }               // 默认导入
+    if (c.type === 'namespace_import') {                                      // `import * as X`
+      const id = c.namedChildren.find((x) => x.type === 'identifier');
+      if (id) out.push(id.text);
+      continue;
+    }
+    if (c.type === 'named_imports') {                                         // `import { A, B as C }`
+      for (const s of c.namedChildren) {
+        if (s.type !== 'import_specifier') continue;
+        const use = s.childForFieldName('alias') || s.childForFieldName('name') || s.namedChildren[0];
+        if (use?.text) out.push(use.text);
+      }
+    }
+  }
+  return out;
+};
+
+/** Python 的同名钩子：`from x import A, B as C` → A / C；`import a.b as c` → c */
+const pyImportedBindings = (node) => {
+  const out = [];
+  if (node.type === 'import_from_statement') {
+    for (const c of node.childrenForFieldName?.('name') || []) {
+      if (c.type === 'aliased_import') {
+        const a = c.childForFieldName('alias');
+        if (a?.text) out.push(a.text);
+      } else if (c.text && c.text !== '*') {
+        out.push(c.text.split('.').pop());
+      }
+    }
+  } else if (node.type === 'import_statement') {
+    for (const c of node.namedChildren) {
+      if (c.type === 'aliased_import') {
+        const a = c.childForFieldName('alias');
+        if (a?.text) out.push(a.text);
+      } else if (c.type === 'dotted_name') {
+        out.push(c.text.split('.')[0]);                                       // `import a.b` 绑的是 a
+      }
+    }
+  }
+  return out;
+};
+
+/** Python 的 `from x import *`：它把**所有**名字引进来了 → 那一档不能按"符号名要对得上"卡（见 scan.mjs） */
+const pyImportBindsAll = (node) => node.type === 'import_from_statement'
+  && node.namedChildren.some((c) => c.type === 'wildcard_import');
+
 const jsImportKind = (node) => {
   if (node.type === 'import_statement') return 'import';
   if (node.type === 'call_expression') {
@@ -334,6 +399,8 @@ const isRequireDeclaration = (decl) => Boolean(decl) && (decl.namedChildren || [
 // TS 与 TSX 的语法节点名完全一致（tsx 只是多了 JSX），共用一份
 const TS_SHAPE = {
   importKindOf: jsImportKind,
+  // 被 import 引进来的**名字**（见 jsImportedBindings 的说明）：让"名字已被 import 绑定"那条闸对 TS/TSX/Vue 生效
+  importedBindingsOf: jsImportedBindings,
   // 语言"族"：族**内**按名字互相解析（见 scan.mjs 的 langFamily）。JS / TS / TSX / Vue 是同一套
   // 模块系统里的东西 —— `.vue` 的 script 就是 TS、`.tsx` 只是带 JSX 的 TS，同一个项目里互相引用
   // 是常态。实测（ant-design，3,012 文件）不认这条会丢 **3,086 条**跨文件边：
@@ -1008,6 +1075,8 @@ export const LANGUAGES = {
     },
     imports: { import_statement: 1 },
     importKindOf: jsImportKind,
+    // 被 import 引进来的**名字**（见 jsImportedBindings 的说明）：让"名字已被 import 绑定"那条闸对 JS 生效
+    importedBindingsOf: jsImportedBindings,
     baseFields: [],
     baseNodes: ['class_heritage'],
     decisions: [
@@ -1099,6 +1168,11 @@ export const LANGUAGES = {
       typed_default_parameter: 'name',
     },
     imports: { import_statement: 1, import_from_statement: 1 },
+    // 被 import 引进来的**名字**（见 jsImportedBindings / pyImportedBindings 的说明）：
+    // 实测 django 上 `class DateFunctionTests → tests/db_functions/models.py::DTModel`（×142）这类
+    // 真引用其实来自 `from .models import DTModel` —— 以前只记路径、不记符号名，于是既没依据、也挡不住同名巧合。
+    importedBindingsOf: pyImportedBindings,
+    importBindsAllOf: pyImportBindsAll,
     baseFields: ['superclasses'],
     baseNodes: [],
     skipNameNodes: { typed_parameter: 'name', default_parameter: 'name', parameters: 'identifier' },

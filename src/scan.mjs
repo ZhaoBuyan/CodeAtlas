@@ -984,6 +984,17 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   const mask = new Uint8Array(lines.length);
   const types = [];
   const imports = [];
+  /**
+   * 本文件里**被 import 引进来的名字**（`import { A as B } from 'x'` → `B`）。
+   *
+   * 以前只记 import 的**路径**，于是"名字已被 import 绑定 → 不许回落到同名匹配"那条闸（第 1 轮）
+   * 对 JS/TS/Python **形同虚设** —— 实测 ant-design 的 `render`（×92）· `button`（×68）、
+   * django 的 `DTModel`（×142）都是被 import 进来的符号名，却一直在跟同名类/函数撞。
+   * 钩子见 languages.mjs 的 jsImportedBindings / pyImportedBindings。
+   */
+  const importBinds = new Map();       // 名字 → 绑定它的 import 路径集合（见下面那段说明）
+  /** 本文件有 `from x import *`（Python）—— 它把**所有**名字引进来，不能按"符号名对不对得上"卡 */
+  let importBindsAll = false;
   const refs = [];
   const comments = [];
   // Dart 的 export 转出的**包名**（父进程据此建包级重导出图，多跳 barrel）
@@ -1371,6 +1382,19 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
         // Dart：export 'package:Y/…'（impKind === 'export'）→ 记下 Y，父进程会算成包级重导出（多跳 barrel）
         if (impKind === 'export' && target.startsWith('package:')) reexports.push(target.slice(8).split('/')[0]);
       }
+      // 这个 import 把哪些**名字**引进了本文件（`import { A as B }` → B），以及**是哪条路径引进来的** ——
+      // 只给"名字绑定"那条闸用。必须按名字→路径记账：扁平的集合会让 `render`（来自外部包）
+      // 也放行 `./alpha` 那条路径的匹配（夹具实测踩到）。
+      if (lang.importedBindingsOf) {
+        const names = (lang.importedBindingsOf(node) || []).filter(Boolean);
+        for (const nm of names) {
+          const set = importBinds.get(nm) || new Set();
+          for (const t of targets) if (t) set.add(t);
+          importBinds.set(nm, set);
+        }
+      }
+      // `from x import *`（Python）：它把**所有**名字引进来 → 记一笔，后面不能按"符号名对不对得上"卡
+      if (lang.importBindsAllOf && lang.importBindsAllOf(node)) importBindsAll = true;
       sweepComments(node);
       return;
     }
@@ -1562,7 +1586,7 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
     console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
   }
-  return { types, abstractScopes, aliases, localNames, localByOwner, imports, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  return { types, abstractScopes, aliases, localNames, localByOwner, imports, importBinds, importBindsAll, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -2140,6 +2164,12 @@ async function extractFiles(files) {
       nonUtf8,
       namespaces: facts.namespaces,
       imports: facts.imports,
+      // 被 import 引进来的名字 → 绑定它的 import 路径（见 facts.importBinds）：
+      // 只在这个文件真有的时候才写，别给每个文件加空对象
+      ...(facts.importBinds?.size
+        ? { importBinds: Object.fromEntries([...facts.importBinds].map(([n, s]) => [n, [...s]])) }
+        : null),
+      ...(facts.importBindsAll ? { importBindsAll: true } : null),
       types: typeIds,
     };
     if (facts.reexports.length) part.file.reexports = facts.reexports;
@@ -2999,6 +3029,17 @@ export async function scan(opts) {
     if (!fromFile || !candFile) return false;
     // `name` 也带上：Rust 的 `::` 那档要按"导入最后一段 == 目标名"卡一道（见 modules.mjs 的说明）
     const target = { ns: cand.ns, fqn: cand.fqn, name: cand.name, path: candFile.path };
+    /**
+     * ⚠ **这里暂时不做"符号名要对得上"的加严**（2026-10-05 第 8 轮的实测结论）。
+     *
+     * 试过两版都在**误砍真边**：ant-design 的 `UploadProps` 是从 barrel `..` 引入的，
+     * 而路径规则匹配到的是**包名**那条 → 加严后真边被砍（`uploadlist.test.tsx → interface.ts::UploadProps` ×32）。
+     * 根因是**相对目录导入（`..` / `.` / `./dir`）解析不到**（barrel 重导出），
+     * 得先把这一档补进 `importMatchesTarget`（带上引用方路径才能解析），再回来加严。
+     * 本轮只保留"importBinds 记账 + 绑定规则"那一半（见 importBindsName）——
+     * 那半边的好处是：被 import 绑定的名字不再回落到"随便撞一个同名"，
+     * 而它的**依据判断仍走原有的路径 / 包规则**（保守，不误砍）。
+     */
     for (const raw of fromFile.imports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
     // Dart 的 part 文件：库文件的 import 对它可见（part 文件自己不能写 import，这是语言语义）
     for (const raw of fromFile.libImports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
@@ -3055,6 +3096,9 @@ export async function scan(opts) {
    */
   const importBindsName = (fromFile, name) => {
     if (!fromFile || !name) return false;
+    // ① 被 import 引进来的**符号名**（`import { render } from '@testing-library/react'` → `render`）：
+    //    这条命中说明"这个名字已经有主了"，不该再回落到同名匹配（第 8 轮补的，见 importBinds 的说明）
+    if (fromFile.importBinds && fromFile.importBinds[name]) return true;
     for (const raw of [...(fromFile.imports || []), ...(fromFile.libImports || [])]) {
       if (!importTails(raw).has(name)) continue;
       // ⚠ **项目内相对 import 不算**（2026-10-04 实测补的豁免）：

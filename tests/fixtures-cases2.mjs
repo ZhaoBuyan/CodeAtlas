@@ -830,6 +830,36 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **import 进来的符号名也算"名字已经有主"**（精度轮 8，2026-10-05）：JS/TS/Python 以前只记 import 的
+    // **路径**，于是第 1 轮那条"名字被 import 绑定 → 不许回落同名匹配"的闸对它们形同虚设
+    // （实测 ant-design 的 `render` ×92 · `button` ×68、django 的 `DTModel` ×142）。
+    // 夹具两头钉：`render` 来自**外部包** → 不许接 `alpha.ts::render`；`Plain` 来自 `./alpha` → 必须接且 import 档。
+    dir: 'ts-import-binds',
+    lang: 'typescript',
+    types: 3,
+    names: ['Plain', 'use', 'render'],
+    importsMin: 2,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['use', 'render', false], ['use', 'Plain', true]],
+    refTiers: [['use', 'Plain', 'import']],
+    errorsMax: 0,
+  },
+  {
+    // Python 的同一条（`from elsewhere import render` / `from .alpha import Plain`）——
+    // 注意 Python 里只有**类/模块**成图节点，所以夹具用类而不是函数。
+    dir: 'py-import-binds',
+    lang: 'python',
+    types: 3,
+    names: ['Plain', 'beta', 'render'],
+    importsMin: 2,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['beta.py', 'render', false], ['beta.py', 'Plain', true]],
+    refTiers: [['beta.py', 'Plain', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
