@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 第二批语言的 fixture 期望值（由 tests/.dump-expect.mjs 实测得出，不是我猜的）。
  * 单独放一个文件：run-fixtures.mjs 里那批是第一二批混着的，这样加语言只动这里。
  *
@@ -874,6 +874,38 @@ export const EXTRA_CASES = [
     membersMin: 0,
     refEdges: [['use', 'render', false], ['use', 'Plain', true]],
     refTiers: [['use', 'Plain', 'import']],
+    errorsMax: 0,
+  },
+  {
+    // **Scala 的包嵌套可见**（精度轮 10，2026-10-05）：在 `package a.b.c` 里 `a.b.c.X` 与外层包直接可见，
+    // 别的包必须 `import` → 档位与 C# 相同（`ns+ancestors`）。
+    // 实测 akka：删掉 2,373 条（`Throwable` 531 · `config` 456 · `Map` 366 · `System` 216 ·
+    // `FiniteDuration` 154 —— 源码里 `import scala.concurrent.duration._`，说明它的 `FiniteDuration`
+    // 是标准库的、不是 `akka.remote` 那个 ✗）。
+    // 夹具两头钉：没 import 的 `gamma.ScopeUser` 不许接、有 import 的 `gamma.ScopeUser2` 必须接且 import 档。
+    dir: 'scala-ns-scope',
+    lang: 'scala',
+    types: 3,
+    names: ['ScopeWidget', 'ScopeUser', 'ScopeUser2'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['gamma.ScopeUser', 'alpha.beta.ScopeWidget', false], ['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', true]],
+    refTiers: [['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', 'import']],
+    errorsMax: 0,
+  },
+  {
+    // **Kotlin 没有外层包自动可见**（精度轮 10）：裸名只能同包或 import（外加 `kotlin.*` 默认导入，真身在图外）
+    // → 档位与 Java 相同（`ns`）。实测 ktor：删掉 594 条（`Map` 207 · `Deprecated` 200 · `Array` 50 ✗）。
+    dir: 'kotlin-ns-scope',
+    lang: 'kotlin',
+    types: 3,
+    names: ['ScopeWidget', 'ScopeUser', 'ScopeUser2'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['gamma.ScopeUser', 'alpha.beta.ScopeWidget', false], ['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', true]],
+    refTiers: [['gamma.ScopeUser2', 'alpha.beta.ScopeWidget', 'import']],
     errorsMax: 0,
   },
   {

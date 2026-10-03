@@ -1213,6 +1213,12 @@ export const LANGUAGES = {
     },
     imports: { import_header: 1 },
     /**
+     * **裸名必须在作用域里**（Kotlin，2026-10-05 第 10 轮）：Kotlin 没有 Java 那种"外层包自动可见" ——
+     * 裸名只能指**同包**或 **import 进来**的（外加 `kotlin.*` / `kotlin.collections.*` 这些**默认导入**，
+     * 真身都在图外）。所以档位与 Java 相同（`ns`，不带 ancestors）。
+     */
+    bareNameScope: 'ns',
+    /**
      * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
      *
      * Kotlin 的坑：**参数与 `val` / `var` 都没有 `name` 字段**（`probe-fields` 实测）——
@@ -2110,6 +2116,16 @@ export const LANGUAGES = {
       var_definition: 'field',
     },
     imports: { import_declaration: 1 },
+    /**
+     * **裸名必须在作用域里**（Scala，2026-10-05 第 10 轮）：Scala 的包**嵌套可见** ——
+     * 在 `package a.b.c` 里，`a.b.c.X` 与外层包 `a.b.X` / `a.X` 都直接可见，别的包必须 `import`；
+     * 所以档位与 C# 相同（`ns+ancestors`）。
+     * 实测依据：`oss3-akka` 的 `unique` 档 2,171 条里，目标是 `Throwable` 574 · `System` 221 ·
+     * `Deprecated` 200 · `Exception` 134 这类 **JDK / Scala 标准库名**（真身在图外的默认导入里），
+     * 却接到了图内同名的 Scala 类上 ✗。
+     * ⚠ Swift **不能**加这一档：它 `namespaces: {}`（模块内文件互相可见、不靠 import），加了会误砍真边。
+     */
+    bareNameScope: 'ns+ancestors',
     baseFields: [],
     baseNodes: ['extends_clause'],
     decisions: ['if_expression', 'match_expression', 'case_clause', 'for_expression', 'while_expression', 'try_expression', 'infix_expression'],
