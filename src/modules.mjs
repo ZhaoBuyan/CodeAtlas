@@ -91,8 +91,23 @@ export function importMatchesTarget(rawImport, target, ctx) {
     let impSegs = imp.split('::').join('/').split('/').filter(Boolean).map(low);
     if (impSegs[0] === 'crate') impSegs = impSegs.slice(1);      // `crate::x` → 相对那条路径比（crate 根不写在 import 里）
     const isSuffix = (a, b) => a.length > 0 && a.length <= b.length && a.every((x, i) => x === b[b.length - a.length + i]);
-    if (isSuffix(impSegs, pathL) || isSuffix(impSegs, pathL.slice(0, -1))
-      || isSuffix(impSegs.slice(0, -1), pathL) || isSuffix(impSegs.slice(0, -1), pathL.slice(0, -1))) return true;
+    /**
+     * ⚠ **名字要对得上**（2026-10-05 第 7 轮加）：`use crate::alpha::ScopePlain;` 只该给 alpha.rs 里
+     * **名叫 `ScopePlain`** 的节点做依据。
+     *
+     * 以前没有这一条："去掉导入最后一段再比"（`crate::alpha::ScopePlain` → `alpha` → `alpha.rs` ✓）
+     * 会把 **alpha.rs 里所有节点**都判成有依据 —— 实测 rust 夹具里 `lib.rs → ScopeWidget`（源码里**没写 use**）
+     * 因此拿到 import 档 ✗，而 Rust 里裸名跨文件**必须有 `use`**。
+     * 例外：`use crate::x::*;`（glob）—— 那个模块的**所有项**确实都在作用域里，照旧放行。
+     */
+    const raws = String(rawImport || '').replace(/[;,]+$/, '').trim();
+    const isGlob = /::\*$/.test(raws);
+    const lastSeg = impSegs[impSegs.length - 1];
+    const tName = String(target.name || target.fqn || '').split(/[.:]+/).filter(Boolean).pop() || '';
+    if (isGlob || (lastSeg && lastSeg === low(tName))) {
+      if (isSuffix(impSegs, pathL) || isSuffix(impSegs, pathL.slice(0, -1))
+        || isSuffix(impSegs.slice(0, -1), pathL) || isSuffix(impSegs.slice(0, -1), pathL.slice(0, -1))) return true;
+    }
   }
   // ③ 仓库内“包名自引用”（ant-design / ripgrep / gin 实测）：import 写的是**仓库自身某个包的名字** ——
   //   · `antd` / `@scope/pkg`（package.json）· `grep_matcher::Matcher`（Cargo.toml 的 crate 名）

@@ -1757,6 +1757,16 @@ export const LANGUAGES = {
       static_item: 'static',
     },
     imports: { use_declaration: 1 },
+    /**
+     * **裸名跨文件必须有 `use`**（Rust，2026-10-05 第 7 轮）：Rust 2018 起，一个模块里的裸名
+     * 只能指"本文件里声明的"或"`use` 进来的"（祖先模块的项要写 `super::` / `crate::`，那是**限定名**，
+     * 走另一条路）。所以"跨文件 + 零 import 依据"的裸名匹配**只能是名字巧合**。
+     * 实测：`rust-analyzer` 一个样本 9,049 条 unique 里 **7,218 条（80%）指向
+     * `crates/test-utils/src/minicore.rs`**（那个文件里是**假的标准库**），名字全是
+     * `Option`(1834) · `Formatter` · `Debug` · `From` · `Clone` · `PartialEq` · `Hash` · `Iterator` …
+     * —— 真身是 `std` 的 prelude 项，图里没有，也不该接到测试夹具上。
+     */
+    bareNameScope: 'import-only',
     baseFields: [],
     baseNodes: [],
     // impl_item 的名字取它实现的类型（field 'type'），这样方法就挂在同名节点下

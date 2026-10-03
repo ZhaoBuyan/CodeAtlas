@@ -798,6 +798,38 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **泛型方法调用里的成员名不算引用**（精度轮 7，2026-10-05）：`e.MemberName<int>()` 里 `MemberName`
+    // 包在 `generic_name` 里 —— 第 2 轮那道闸只看"前一个兄弟是不是 `.`"，于是漏了
+    // （实测 efcore 上 `e.Property<int>("Id")` 就是它）。两头钉：`MemberName` 不许接；普通类型引用 `PlainType` 必须接。
+    dir: 'csharp-generic-member',
+    lang: 'csharp',
+    types: 3,
+    names: ['MemberName', 'PlainType', 'User'],
+    importsMin: 0,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['Gamma.User', 'Gamma.MemberName', false], ['Gamma.User', 'Gamma.PlainType', true]],
+    errorsMax: 0,
+  },
+  {
+    // **Rust：裸名跨文件必须有 `use`**（精度轮 7）：`ScopeWidget` 没被 use（源码里故意不写）→ 不许接；
+    // `ScopePlain` 有 `use crate::alpha::ScopePlain;` → 必须接且是 import 档。
+    // 实测收益：rust-analyzer 一个样本砍掉 1 万多条（`Option`/`Debug`/`Clone` 撞 `test-utils/src/minicore.rs`
+    // 那份"假标准库"），tokio 1,632 条、ripgrep 148 条。
+    // 顺带修了共享匹配器里一条过宽的规则：以前 `use crate::alpha::ScopePlain;` 会给 **alpha.rs 里所有节点**
+    // 做依据（"去掉最后一段再比"）→ 现在要求"导入最后一段 == 目标名"（glob `::*` 例外）。
+    dir: 'rust-scope',
+    lang: 'rust',
+    types: 3,
+    names: ['ScopeWidget', 'ScopePlain', 'lib'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['lib.rs', 'ScopeWidget', false], ['lib.rs', 'ScopePlain', true]],
+    refTiers: [['lib.rs', 'ScopePlain', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

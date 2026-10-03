@@ -473,6 +473,18 @@ const USE_ID_TYPES = new Set(['property_identifier', 'field_identifier']);
  */
 const MEMBER_SEPS = new Set(['.', '::', '->', '?.']);
 
+/**
+ * 成员名**被包装一层**时的包装节点（第 7 轮补）：C# 的泛型方法调用 `e.Property<int>("Id")` 里，
+ * `Property` 在 `generic_name` 里，分隔符 `.` 在**包装节点**前面（probe 实测，见 memberOfLocalValue）。
+ */
+const MEMBER_WRAPPERS = new Set(['generic_name', 'generic_method_name']);
+
+/**
+ * 名字**前面**夹着的"类型实参"节点（第 7 轮补）：Java 的 `e.<String>property()` 是
+ * `e . <String> property` —— 名字的前一个兄弟是 `type_arguments`，得再往回一格才见到 `.`。
+ */
+const TYPEARG_BEFORE_NAME = new Set(['type_arguments', 'type_argument_list']);
+
 function nameOf(node, lang) {
   // Rust impl 块：名字取它实现的类型（field 'type'），让方法挂到同名节点上
   // 有专用取名钩子的语言（例如 Elixir）以它为准；**它没给出名字时继续往下走通用兜底**——
@@ -1020,10 +1032,27 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
    *     （`Foo` 自己还会作为引用留下，文件级依赖不断）。
    * ⚠ 已知的代价：`let p = get_parser(); p.parse();` 这种"局部变量身上的方法调用"不再算引用 ——
    *   依赖只剩 `get_parser`。这是本轮用 A/B 量过之后接受的取舍（见报告第 3 节）。
+   *
+   * ⚠⚠ **两种"名字被包了一层"的形状要额外认**（2026-10-05 第 7 轮补的，probe 实测）：
+   *   · **C# 的泛型方法调用** `e.Property<int>("Id")`：`Property` 包在 `generic_name` 里，
+   *     它自己的前一个兄弟是**空**，`. `在**包装节点**前面 → 得看 `node.parent.previousSibling`；
+   *   · **Java 的显式类型实参** `e.<String>property()`：名字前面是 `type_arguments` 节点、
+   *     点号还要再往前一格 → 允许跳过类型实参往回找。
+   *   （Kotlin 的 `navigation_suffix`、TS 的 `property_identifier` 本来就带 `.`，不用特殊处理。）
    */
   const memberOfLocalValue = (node) => {
-    const sep = node.previousSibling;
-    if (!sep || !MEMBER_SEPS.has(sep.type)) return false;
+    /** 找"成员分隔符"：本节点前面，或**包装节点**前面（允许跳过类型实参节点） */
+    const sepOf = (n) => {
+      let sib = n.previousSibling;
+      for (let skip = 0; sib && skip < 2 && TYPEARG_BEFORE_NAME.has(sib.type); skip++) sib = sib.previousSibling;
+      return sib && MEMBER_SEPS.has(sib.type) ? sib : null;
+    };
+    let sep = sepOf(node);
+    if (!sep) {
+      const par = node.parent;
+      if (par && MEMBER_WRAPPERS.has(par.type)) sep = sepOf(par);
+    }
+    if (!sep) return false;
     const qual = sep.previousSibling;
     if (!qual) return false;
     const qn = qual.text;
@@ -2968,7 +2997,8 @@ export async function scan(opts) {
     if (!fromType || !cand) return false;
     const fromFile = fileRecs[fromType.file], candFile = fileRecs[cand.file];
     if (!fromFile || !candFile) return false;
-    const target = { ns: cand.ns, fqn: cand.fqn, path: candFile.path };
+    // `name` 也带上：Rust 的 `::` 那档要按"导入最后一段 == 目标名"卡一道（见 modules.mjs 的说明）
+    const target = { ns: cand.ns, fqn: cand.fqn, name: cand.name, path: candFile.path };
     for (const raw of fromFile.imports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
     // Dart 的 part 文件：库文件的 import 对它可见（part 文件自己不能写 import，这是语言语义）
     for (const raw of fromFile.libImports || []) if (importMatchesTarget(raw, target, { packages, aliases })) return true;
@@ -3058,6 +3088,9 @@ export async function scan(opts) {
    * ⚠ 已知没覆盖的形态：`using static X;` / 别名 `using A = B.C;`（efcore 里没有这两种）。
    */
   const nsInScope = (fromType, t, mode) => {
+    // `'import-only'`（Rust）：这门语言里裸名跨文件**必须有 `use`** —— 没有"命名空间远近"这一说，
+    // 所以一律返回 false，闸就退化成"必须有 import 依据（或同文件）"。见 rust profile 的说明。
+    if (mode === 'import-only') return false;
     const toNs = String(t.ns || '').trim();
     if (!toNs) return true;
     const fromNs = String(fromType?.ns || '').trim();
