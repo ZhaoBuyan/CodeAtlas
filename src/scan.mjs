@@ -3259,7 +3259,7 @@ export async function scan(opts) {
   const nsInScope = (fromType, t, mode) => {
     // `'import-only'`（Rust）：这门语言里裸名跨文件**必须有 `use`** —— 没有"命名空间远近"这一说，
     // 所以一律返回 false，闸就退化成"必须有 import 依据（或同文件）"。见 rust profile 的说明。
-    if (mode === 'import-only') return false;
+    if (mode === 'import-only' || mode === 'import-only-module') return false;
     const toNs = String(t.ns || '').trim();
     if (!toNs) return true;
     const fromNs = String(fromType?.ns || '').trim();
@@ -3691,7 +3691,15 @@ export async function scan(opts) {
       // 只能是名字巧合（实测 efcore/aspnetcore 上这类有 9 千多条、抽样全是错边）。同文件候选豁免。
       // ⚠ 判定顺序**有意先判便宜的**：`nsInScope` 是纯字符串比较，`hasImportBacking` 要按 import 循环
       //   （第 9 轮量到的 10–15% 性能回退主要来自这里，别调换）。
-      if (scopeMode && t.file !== fromFile?.id
+      //
+      // `'import-only-module'`（`.js`，2026-10-05 第 16 轮）：**只对"是模块"的文件生效** ——
+      // JS 里**没有 import 的文件是全局脚本**（`<script>` 那类），脚本之间共享全局是**真语义**
+      // （jQuery 插件、`window.foo = …`），砍它就是砍真边 ✗。
+      // 实测：`.js` 的跨文件 `unique` 边里 **171 条在"有 import 的模块"里**（上闸安全 ✓）、
+      // **204 条在"没有 import 的脚本"里**（有风险 ⇒ 一律不判 ✓）。
+      // （同一把尺子量过 TS 组：模块 0 · 脚本 0 —— 说明第 14 轮的 TS 上闸**零风险** ✓。）
+      const isScriptFile = scopeMode === 'import-only-module' && !(fromFile?.imports?.length);
+      if (scopeMode && !isScriptFile && t.file !== fromFile?.id
         && !nsInScope(allTypes[fromTypeId], t, scopeMode)
         && !hasImportBacking(fromTypeId, id)) return false;
       return true;

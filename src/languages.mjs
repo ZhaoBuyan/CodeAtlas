@@ -1089,6 +1089,18 @@ export const LANGUAGES = {
     importKindOf: jsImportKind,
     // 被 import 引进来的**名字**（见 jsImportedBindings 的说明）：让"名字已被 import 绑定"那条闸对 JS 生效
     importedBindingsOf: jsImportedBindings,
+    /**
+     * **裸名跨文件必须有 `import` —— 但只对"是模块"的文件**（`.js`，2026-10-05 第 16 轮）。
+     *
+     * 与 TS/TSX/Vue 的 `'import-only'` 差在一个字：JS 里**没有 import 的文件是全局脚本**（`<script>` 那类），
+     * 脚本之间共享全局是**真语义**（jQuery 插件、`window.foo = …`、老式多文件脚本）——
+     * 对它上"必须有 import"的闸就是砍真边 ✗。所以这一档只判**有 import 的文件**（即模块）。
+     *
+     * **风险面量过**：`.js` 的跨文件 `unique` 边 375 条里，**171 条在"有 import 的模块"里**（上闸安全 ✓）、
+     * **204 条在"没有 import 的脚本"里**（有风险 ⇒ 一律不判 ✓）。
+     * 同一把尺子量过 TS 组（typescript/tsx/vue）：模块 0 · 脚本 0 —— 第 14 轮的 TS 上闸**零风险** ✓。
+     */
+    bareNameScope: 'import-only-module',
     baseFields: [],
     baseNodes: ['class_heritage'],
     decisions: [

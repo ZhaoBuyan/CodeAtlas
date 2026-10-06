@@ -996,6 +996,24 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **`.js` 上闸只对"是模块"的文件**（精度轮 16，2026-10-05）：JS 里**没有 import 的文件是全局脚本**，
+    // 脚本之间共享全局是**真语义**（jQuery 插件、`window.foo = …`）✗ 不能砍；
+    // 有 import 的文件就是模块，模块里裸名必须有 import ✓。
+    // 两头钉：`UseScript`（脚本，没 import）→ **必须接**；`UseModule`（模块，有 import 但没引它）→ **不许接**。
+    // **反向对照**：旧引擎上 `UseModule → shared.js::ScopeWidget` 是 `[unique]`（存在）✗。
+    // 风险面量过：`.js` 的跨文件 unique 边 375 条 = 模块内 **171**（上闸安全 ✓）+ 脚本内 **204**（有风险 ⇒ 不判 ✓）。
+    // 实测收益：rescript −78 · express −17 · graphql-js −15 · ant-design −1 · vuejs −1，**`import` 档一条没掉** ✓。
+    dir: 'js-script-global',
+    lang: 'javascript',
+    types: 3,
+    names: ['ScopeWidget', 'UseModule', 'UseScript'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 2,
+    refEdges: [['UseScript', 'ScopeWidget', true], ['UseModule', 'ScopeWidget', false]],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
