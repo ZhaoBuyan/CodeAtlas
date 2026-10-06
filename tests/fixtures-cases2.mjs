@@ -1014,6 +1014,27 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **PHP：裸类名只解析到当前命名空间**（精度轮 17，2026-10-05）：PHP 命名空间**不可嵌套**、
+    // 没有外层自动可见 ⇒ 用别的命名空间的类必须 `use` 或写全限定名（限定名走另一条路）。
+    // 档位与 Java/Kotlin 相同（`ns`）。
+    // 为什么 PHP 可上闸而不用担心"裸函数名回落全局"：本 profile 的 types **只发
+    // class/interface/trait/enum**（没有函数节点）✓。
+    // 两头钉：有 `use` 的必须接（import 档）；**同命名空间**的 `Gamma.Helper` 必须接（真边，不许砍）；
+    // 没 `use` 的跨命名空间 `Alpha\Beta.ScopeWidget` 不许接。
+    // **反向对照**：旧引擎上 `Gamma.ScopeUser2 → Alpha\Beta.ScopeWidget` 是 `[unique]`（存在）✗。
+    // 实测收益：symfony **−330**（删 328、加 0，全部 `unique` 档、**`import` 档 0 变化** ✓）· guzzle −15 · laravel 0。
+    dir: 'php-ns-scope',
+    lang: 'php',
+    types: 4,
+    names: ['ScopeWidget', 'ScopeUser', 'ScopeUser2', 'Helper'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 2,
+    refEdges: [['Gamma.ScopeUser', 'Alpha\\Beta.ScopeWidget', true], ['Gamma.ScopeUser2', 'Alpha\\Beta.ScopeWidget', false], ['Gamma.ScopeUser2', 'Gamma.Helper', true]],
+    refTiers: [['Gamma.ScopeUser', 'Alpha\\Beta.ScopeWidget', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
