@@ -957,6 +957,26 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **TS/TSX/Vue：裸名跨文件必须有 `import`**（精度轮 14，2026-10-05 —— 用户政策"猜的边不要"）。
+    // 依据：ES 模块里裸名只能是本文件声明的、或 `import` 进来的（全局只能来自 ambient 声明）。
+    // 两头钉：`beta.ts` 有 import → **必须接**；`gamma.ts` 没 import → **不许接**。
+    // **反向对照**：旧引擎上 `gamma.useWrong → alpha.ts::ScopeWidget` 是 `[unique]`（存在）。
+    // 风险面量过：TS/JS/Vue 的 2,248 条 unique 里目标落在 `.d.ts` 的是 **0 条** ✓。
+    // ⚠ `.js`（javascript profile）**故意不一起上**：非模块脚本之间共享全局是常见写法，风险另行量。
+    // 实测收益：ant-design **−871** · vuejs −513 · vuetify −285 · nest −140 · graphql-tools −38，
+    // 全部落在 `unique` 档、**`import` 档一条没掉** ✓。
+    dir: 'ts-scope-only',
+    lang: 'typescript',
+    types: 3,
+    names: ['ScopeWidget', 'use', 'useWrong'],
+    importsMin: 1,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['use', 'ScopeWidget', true], ['useWrong', 'ScopeWidget', false]],
+    refTiers: [['use', 'ScopeWidget', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

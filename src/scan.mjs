@@ -3335,6 +3335,28 @@ export async function scan(opts) {
 
   const unresolved = { ambiguous: 0, unknown: 0 };
   /**
+   * **"找不到就直接说"**（用户 2026-10-05 定的政策）：把"有引用、但**没有任何依据**、所以故意没接"的引用
+   * 记下来 —— 按语言计数 + Top 名字，写进 `bundle.stats.unresolved`。
+   *
+   * 以前这些数只活在 `CA_DEBUG_UNRESOLVED` 的调试日志里（产品里看不到）⇒
+   * "图里到底少了什么、为什么少"只能靠猜。用户要的是：**能找的尽量找，找不到的直接说出来**。
+   *   · `unknown`   —— 按名字一个候选都对不上（真身多半在图外：标准库 / 第三方）；
+   *   · `ambiguous` —— 有候选但**挑不出唯一解释**（"宁缺勿错"，故意不接）。
+   */
+  const unresolvedByLang = new Map();   // lang → { ambiguous, unknown }
+  const unresolvedNames = new Map();    // `${lang}\t${name}` → 次数
+  const noteUnresolved = (why, name, fromTypeId) => {
+    unresolved[why]++;
+    const lang = fileRecs[allTypes[fromTypeId]?.file]?.lang || '?';
+    const rec = unresolvedByLang.get(lang) || { ambiguous: 0, unknown: 0 };
+    rec[why]++;
+    unresolvedByLang.set(lang, rec);
+    if (name && unresolvedNames.size < 4000) {
+      const k = `${lang}\t${name}`;
+      unresolvedNames.set(k, (unresolvedNames.get(k) || 0) + 1);
+    }
+  };
+  /**
    * 诊断：`CA_DEBUG_UNRESOLVED=<文件>` 时，把每个**被放弃**的引用记成一行
    * （名字 / 叶子名候选数 / 原因 / 引用方文件），用来看"哪些名字在成批地接不上"。
    * 与 `CA_DEBUG_REF` 一样必须落盘（解析子进程的 stderr 被父进程管道收走）。
@@ -3398,7 +3420,7 @@ export async function scan(opts) {
           if (process.env.CA_DEBUG_ABSTRACT && fileRecs[from.file]?.lang === process.env.CA_DEBUG_ABSTRACT) {
             console.error(`[ABSTRACT] ${name} @ ${from.fqn || from.name} (${fileRecs[from.file]?.path}:${from.line})`);
           }
-          unresolved.unknown++;
+          noteUnresolved('unknown', name, fromTypeId);
           return null;
         }
       }
@@ -3584,7 +3606,7 @@ export async function scan(opts) {
         }
       }
       // 到这儿就是"限定名对不上 / 挑不出可信的" —— 计入 unknown 并放弃（宁可缺边，不要接错）
-      unresolved.unknown++;
+      noteUnresolved('unknown', refName, fromTypeId);
       dbgUnres(refName, fromTypeId, pool.length ? 'no-exact' : 'no-candidate', pool.length);
       return null;
     }
@@ -3679,7 +3701,7 @@ export async function scan(opts) {
           return { id, uniq: true, import: true };
         }
       }
-      unresolved.unknown++;
+      noteUnresolved('unknown', name, fromTypeId);
       dbgUnres(name, fromTypeId, 'simple-no-candidate', 0);
       if (isLocalName && process.env.CA_DEBUG_LOCAL) localLog.push(`${name}\tno-candidate\t-\t${fromFile?.path}`);
       return null;
@@ -3746,7 +3768,7 @@ export async function scan(opts) {
       });
       if (direct.length === 1) { localNote(direct[0], 'direct-import'); return { id: direct[0], import: true }; }
     }
-    unresolved.ambiguous++;
+    noteUnresolved('ambiguous', name, fromTypeId);
     dbgUnres(name, fromTypeId, 'simple-ambiguous', hit.length);
     if (isLocalName && process.env.CA_DEBUG_LOCAL) localNote(null, 'ambiguous');
     return null;
@@ -3983,6 +4005,18 @@ export async function scan(opts) {
     edgeKinds: edges.reduce((acc, e) => { acc[e.kind] = (acc[e.kind] || 0) + 1; return acc; }, {}),
     // 证据档分布（same / import / unique / name，见 TIER_RANK）：读侧直接报，不再重算一遍
     edgeTiers,
+    /**
+     * **"找不到就直接说"**（用户 2026-10-05 政策）：有引用、但**没有任何依据**、所以故意没接的那些引用 ——
+     * 按语言计数 + Top 名字。以前只活在 `CA_DEBUG_UNRESOLVED` 的调试日志里（产品里看不到）。
+     * `unknown` = 一个候选都对不上（真身多半在图外）；`ambiguous` = 有候选但挑不出唯一解释。
+     */
+    unresolved: {
+      ...unresolved,
+      byLang: Object.fromEntries([...unresolvedByLang].sort((a, b) =>
+        (b[1].ambiguous + b[1].unknown) - (a[1].ambiguous + a[1].unknown))),
+      topNames: [...unresolvedNames.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30)
+        .map(([k, n]) => { const [lang, nm] = k.split('\t'); return { lang, name: nm, n }; }),
+    },
     // 被跳过的文件：默认忽略目录 / 生成物、超限大小、以及“还不支持的语言”（后者要能看见，不能静静吞掉）
     skipped: {
       ignored: skipped.ignored || 0,

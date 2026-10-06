@@ -790,8 +790,25 @@ function toolOverview(idx, a) {
         'Edges carry no evidence tiers — this bundle was produced by an older engine (a rescan adds the same/import/unique/name breakdown)'));
     }
   }
-  if (b.totals.parseErrors) {
-    const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
+  /**
+   * **"找不到就直接说"**（用户 2026-10-05 政策）：有引用，但**没有任何依据**、所以**故意没接**的那些引用。
+   *
+   * 为什么必须摆在第一屏：`unique` / `name` 两档说的都是"接上了、只是依据强弱"，而这里说的是
+   * **"根本没接"** —— 不报出来，读者会把"图里没有"读成"代码里不存在"。两类的成因也不同：
+   *   · `ambiguous` = 有同名候选但**挑不出唯一解释**（"宁缺勿错"故意不接）；
+   *   · `unknown`   = 一个候选都对不上（真身多半在图外：标准库 / 第三方 / 宏展开）。
+   */
+  {
+    const un = b.stats?.unresolved;
+    const miss = un ? (un.ambiguous || 0) + (un.unknown || 0) : 0;
+    if (miss) {
+      const top = (un.topNames || []).slice(0, 5).map((x) => `${x.name}(${x.lang} ${fmt(x.n)})`).join(' · ');
+      lines.push(T(
+        `另有 ${fmt(miss)} 处引用**没有依据、故意没接**（挑不出唯一解释 ${fmt(un.ambiguous || 0)} · 图里找不到同名 ${fmt(un.unknown || 0)}）${top ? `；最多的名字：${top}` : ''}`,
+        `Plus ${fmt(miss)} references were **left out on purpose** (no evidence: ${fmt(un.ambiguous || 0)} ambiguous · ${fmt(un.unknown || 0)} no candidate)${top ? `; top names: ${top}` : ''}`));
+    }
+  }
+  if (b.totals.parseErrors) {    const bad = b.files.filter((f) => f.errors).sort((x, y) => y.errors - x.errors);
     const showBad = bad.slice(0, 8);
     const list = showBad.map((f) => `${f.path}(${f.errors})`).join(' · ');
     const tail = bad.length > showBad.length ? T(` …等 ${bad.length} 个文件`, ` … ${bad.length} files in total`) : '';

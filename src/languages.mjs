@@ -401,6 +401,18 @@ const TS_SHAPE = {
   importKindOf: jsImportKind,
   // 被 import 引进来的**名字**（见 jsImportedBindings 的说明）：让"名字已被 import 绑定"那条闸对 TS/TSX/Vue 生效
   importedBindingsOf: jsImportedBindings,
+  /**
+   * **裸名跨文件必须有 `import`**（TS / TSX / Vue，2026-10-05 第 14 轮，用户政策"猜的边不要"）。
+   *
+   * 依据：ES 模块里一个裸名要么是本文件声明的，要么是 `import` 进来的（全局只能来自 ambient 声明）。
+   * 所以"跨文件 + 零 import 依据"的裸名匹配只能是同名巧合 ✗ —— 实测 ant-design 上剩下的 873 条 `unique`
+   * 就是这个形状（`render` / `button` 这类被当作跨文件类型名，撞上别处的同名声明）。
+   *
+   * **风险面量过**：TS/JS/Vue 的 2,248 条 `unique` 里，目标落在 `.d.ts`（ambient 声明文件）的是 **0 条** ✓
+   * —— 也就是"砍到合法 ambient 全局引用"这个担心在这批样本上不存在。
+   * ⚠ `.js`（`javascript` profile）**故意不一起上**：非模块脚本之间共享全局是常见写法，风险另行量。
+   */
+  bareNameScope: 'import-only',
   // 语言"族"：族**内**按名字互相解析（见 scan.mjs 的 langFamily）。JS / TS / TSX / Vue 是同一套
   // 模块系统里的东西 —— `.vue` 的 script 就是 TS、`.tsx` 只是带 JSX 的 TS，同一个项目里互相引用
   // 是常态。实测（ant-design，3,012 文件）不认这条会丢 **3,086 条**跨文件边：

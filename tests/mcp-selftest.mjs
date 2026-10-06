@@ -89,6 +89,9 @@ const overview = await call('overview', {});
 check(/类型|types/.test(overview) && overview.length > 60, 'overview', overview.split('\n')[0].slice(0, 60));
 check(/扫描根|Scan root/.test(overview), 'overview 给扫描根（AI 才能拼绝对路径去读源文件）', (overview.split('\n').find((l) => /扫描根|Scan root/.test(l)) || '').slice(0, 60));
 check(/名字匹配|name match/i.test(overview), 'overview 交代可信度前提（依赖边是名字匹配）');
+// **"找不到就直接说"**（用户 2026-10-05 政策）：有引用、但没有任何依据、故意没接的那些引用必须报出来，
+// 否则读者会把"图里没有"读成"代码里不存在"。bundle.stats.unresolved 由扫描期记账（按语言 + Top 名字）。
+check(/故意没接|left out on purpose/.test(overview), 'overview 交代"没依据、故意没接"的引用数（找不到的直接说）');
 check(/数据快照|Snapshot/.test(overview), 'overview 给数据时效（生成时间/语言/上限）');
 
 const search = await call('search', { query: hottest.fqn.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))) });
