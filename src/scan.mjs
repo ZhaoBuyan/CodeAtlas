@@ -3054,7 +3054,60 @@ export async function scan(opts) {
     importBackingCache.set(key, v);
     return v;
   };
-  const computeImportBacking = (fromTypeId, toTypeId) => {
+  /**
+   * **"依据是不是直接来自引用方自己的 import 列表"**（2026-10-05 第 13 轮，"按证据距离消歧"的基础）。
+   *
+   * `hasImportBacking` 是个"有/没有"的布尔，它把**强弱很不一样的依据**混在一起：
+   *   · **直接**：引用方文件**自己**写了 `import` / `#include` / `using` 指向目标文件（最强，就是语言层面的显式依据）；
+   *   · **间接**：靠 C/C++ 的 **include 闭包**、Dart 的 part 同库组、C#/VB 的父命名空间这类**结构性**关系推出来的。
+   * 多个同名候选**都**有依据时，前者才是"最近的那个" —— 实测（第 12 轮传递闭包那次）：
+   *   sqlite 的 `src/btree.c → src/btreeInt.h::BtShared`（**直接 include** 的真边）会输给
+   *   聚合文件 `sqlite3.c` 里那份同名声明（只靠闭包推出来）→ 多候选都有据 → **弃权** ✗ 真边丢了。
+   */
+  const directImportCache = new Map();
+  const hasDirectImport = (fromTypeId, toTypeId) => {
+    const key = `${fromTypeId}|${toTypeId}`;
+    if (directImportCache.has(key)) return directImportCache.get(key);
+    const v = computeImportBacking(fromTypeId, toTypeId, true);
+    directImportCache.set(key, v);
+    return v;
+  };
+  /**
+   * **这条 import 是不是"点到了那个文件/模块"**（而不只是它所在的命名空间/包）—— 2026-10-05 第 13 轮。
+   *
+   * "证据距离消歧"第一版把"直接依据"定义成"引用方自己的 import 列表里有一条能匹配上"，
+   * **抽样发现对命名空间式导入的语言太宽** ✗：C# 的 `using AutoMapper.UnitTests.Projection;`、
+   * Scala 的 `import akka.stream.testkit._` 都是**命名空间级**依据，于是同一命名空间里任意同名候选
+   * 都算"直接" —— 实测 automapper 上拿回来的 4 条里 3 条是**跨测试文件的同名巧合** ✗
+   * （`MapObjectPropertyFromSubQuery.cs → UnitTests/Projection/ProjectionTests.cs::ProductModel` 这种）。
+   *
+   * 收紧后的判据：import 文本（去引号/尖括号后）的**模块名**要等于**目标文件的模块名** ——
+   * 也就是 `#include "direct.hpp"`、`import './alpha'`、`from .models import X` 这种**路径式**导入 ✓；
+   * `using X.Y;` / `import a.b._` 这种命名空间式导入不算 ✓（那就退回"弃权"的保守行为）。
+   * 代价：JVM/C# 侧拿不到这部分升档（那边抽到的错边率太高，按"宁缺勿错"放弃）。
+   */
+  const importNamesFile = (fromFile, candFile) => {
+    const mk = moduleKey(candFile.path).toLowerCase();
+    if (!mk) return false;
+    for (const raw of fromFile.imports || []) {
+      const s = String(raw).replace(/["'<>;]/g, '').trim();
+      if (!s) continue;
+      /**
+       * ⚠ 只认**真正点名了文件**的 import：带**源文件扩展名**（`#include "direct.hpp"` / `import './a.ts'`）
+       * 或**相对路径**（`./alpha`）。
+       * 第二版教训：放宽成"模块名相等"会误伤 **Go** —— Go 的 import 指的是**包目录**
+       * （`google.golang.org/grpc/resolver` 的模块名也是 `resolver`，恰好等于 `resolver/resolver.go`），
+       * 实测 etcd 上据回来的 `server/etcdserver/apply/auth_test.go → tests/robustness/model/types.go::model.TxnRequest`
+       * ×33 是**测试模型撞名** ✗（同批里 grpc 的 `resolver.Endpoint` ×113 是真的 ✓ —— 一半一半，
+       * 按"宁缺勿错"整批不要）。
+       */
+      const looksLikeFile = /\.[A-Za-z0-9]+$/.test(s) || /^\.{1,2}\//.test(s);
+      if (!looksLikeFile) continue;
+      if (moduleKey(s).toLowerCase() === mk) return true;
+    }
+    return false;
+  };
+  const computeImportBacking = (fromTypeId, toTypeId, directOnly = false) => {
     const fromType = allTypes[fromTypeId], cand = allTypes[toTypeId];
     if (!fromType || !cand) return false;
     const fromFile = fileRecs[fromType.file], candFile = fileRecs[cand.file];
@@ -3083,6 +3136,8 @@ export async function scan(opts) {
     for (const raw of fromFile.libImports || []) {
       if (importMatchesTarget(raw, target, { packages, aliases, fromPath: fromFile.path })) return true;
     }
+    // 到这里为止都是"**直接**依据"（引用方自己的 import 列表）—— `directOnly` 的问法就此打住
+    if (directOnly) return false;
     // C/C++ 的 include 闭包（≤2 跳）
     if (Array.isArray(fromFile.closure) && fromFile.closure.includes(cand.file)) return true;
     // Dart：同一个 part 库组里的文件同作用域
@@ -3664,6 +3719,33 @@ export async function scan(opts) {
       return a && a === b;
     });
     if (sameRoot.length === 1) { localNote(sameRoot[0], 'same-root'); return { id: sameRoot[0], evidenced: hasImportBacking(fromTypeId, sameRoot[0]) }; }
+    /**
+     * **按证据距离消歧**（2026-10-05 第 13 轮）：`sameNs` / `sameRoot` 都挑不出唯一的那个时，
+     * 再看候选里**谁的依据来自引用方自己的 import 列表**（直接 `import`/`#include`）——
+     * 与其像以前那样**直接弃权**，不如挑"依据最近的那一份"。
+     *
+     * 为什么需要（第 12 轮的实测反例）：sqlite 里 `src/btree.c` **直接 include** 了 `src/btreeInt.h`，
+     * 但同名声明在聚合文件 `sqlite3.c` 里也有一份（只靠 include 闭包推出来）→ 两个候选都有据 →
+     * 弃权 ✗ → `btree.c → btreeInt.h::BtShared` 这条**真边**消失（×95）；redis 的
+     * `functions.c → server.h::client` ×16 同理。加上这一步后：sqlite **+42** · redis **+98** ·
+     * abseil +62 · cpp-json +38 条真边回来了 ✓（新增边抽样判过，全是直接 include 的真依赖 ✓）。
+     *
+     * ⚠ **顺序很关键，这里踩过一次**：第一版把它放在 `sameNs` **之前**，结果 sqlite 的
+     * `ext/jni/.../wrapper1/Tester2.java → wrapper1/ValueHolder.java`（**Java 同包**才是真解 ✓）被
+     * `import org.sqlite.jni.capi.CApi` 的**目录前缀**依据顶掉 ✗✗ —— 同包/同根包是比"前缀依据"更近的语义，
+     * 必须排在前面（实测那 10 条 Java 边就是这么丢的）。
+     *
+     * 安全性：这一步只在**原本就要弃权**的路径上生效 ⇒ 只可能**加边**，不可能砍边 ✓。
+     */
+    if (viaImport.length > 1) {
+      // 两个条件都要：**有直接依据** 且 **那条依据点到了这个文件/模块**（不是只点到它所在的命名空间，
+      // 见 importNamesFile 里那段实测说明 —— 命名空间式的太宽，automapper 上 3/4 是错边）
+      const direct = viaImport.filter((id) => {
+        const cf = fileRecs[allTypes[id]?.file];
+        return cf && hasDirectImport(fromTypeId, id) && importNamesFile(fromFile, cf);
+      });
+      if (direct.length === 1) { localNote(direct[0], 'direct-import'); return { id: direct[0], import: true }; }
+    }
     unresolved.ambiguous++;
     dbgUnres(name, fromTypeId, 'simple-ambiguous', hit.length);
     if (isLocalName && process.env.CA_DEBUG_LOCAL) localNote(null, 'ambiguous');

@@ -939,6 +939,24 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **按证据距离消歧**（精度轮 13，2026-10-05）：裸名 `Widget` 有两个同名候选 ——
+    // 本文件**自己 include** 的 `nsa::Widget`（**直接**依据）与只在 include **闭包**里的 `nsb::Widget`（**间接**依据）。
+    // 以前"多候选都有依据"就**弃权**（旧引擎上这条边根本不存在 → 反向对照 ✓）；现在挑依据最近的那份。
+    // 实测来源：sqlite `src/btree.c → src/btreeInt.h::BtShared` ×95 被聚合文件 `sqlite3.c` 挤掉而消失。
+    // ⚠ 顺序教训也钉在这儿：这一步必须排在 `sameNs`/`sameRoot` **之后**（第一版放前面，
+    //   把 sqlite 那 10 条 Java **同包**真解顶掉了 ✗）。
+    dir: 'cpp-direct-import',
+    lang: 'cpp',
+    types: 4,
+    names: ['Widget'],
+    importsMin: 3,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['use.cpp', 'nsa.Widget', true], ['use.cpp', 'nsb.Widget', false]],
+    refTiers: [['use.cpp', 'nsa.Widget', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的
