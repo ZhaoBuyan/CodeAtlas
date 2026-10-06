@@ -336,6 +336,18 @@ function evidenceRecomputed(idx, e) {
     }
     const clo = idx._closure.get(src.file);
     if (clo && clo.has(dst.file)) return 'import';
+    /**
+     * **C/C++ 的传递 include 链 = 依据**（2026-10-05 第 15 轮）。扫描期 `tierOf` 用同一个判据
+     * （`hasImportBackingDeep`，读 `files[].closureDeep`）—— 两处口径必须一致，否则会出现
+     * "扫描说有、读侧说没有"的自相矛盾（本文件头记的就是这类事故）。
+     * 注意：这里只影响**判档**；解析期选候选仍用 ≤2 跳的 `closure`（换传递会丢真边，见 scan.mjs 的注释）。
+     */
+    if (idx._closureDeep === undefined) {
+      idx._closureDeep = new Map();
+      idx.b.files.forEach((x, i) => { if (x && Array.isArray(x.closureDeep) && x.closureDeep.length) idx._closureDeep.set(i, new Set(x.closureDeep)); });
+    }
+    const cloDeep = idx._closureDeep.get(src.file);
+    if (cloDeep && cloDeep.has(dst.file)) return 'import';
     // Dart：同一个库（part 组）里的文件同作用域，互相引用不需要 import（实测 riverpod 501 条）
     if (f.lib) {
       const dfile = idx.files.get(dst.file);

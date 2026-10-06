@@ -977,6 +977,25 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **传递 include 链算依据（只影响档位，不影响选边）**（精度轮 15，2026-10-05）：
+    // `nsa::Widget` 定义在 **3 跳以外**（use.cpp → mid1.hpp → mid2.hpp → deep.hpp），
+    // C/C++ 语义上"经过任意层 include 都可见" ⇒ 这条边该记 `import` 档，而不是"猜的"。
+    // **反向对照**：旧引擎上这条边**存在**、但档位是 `unique` ✗。
+    // ⚠ 解析仍按 ≤2 跳的闭包挑候选（换传递会丢真边：sqlite 曾丢 `btree.c → btreeInt.h::BtShared` ×95）
+    // ⇒ 本轮验收硬指标是"**边集加 0 删 0**"，实测 8 个样本全部满足 ✓。
+    // 实测收益：redis `import` **+366** · fmt +116 · abseil +22 · cpp-json +7 · sqlite +4（升档，抽样全是真的）。
+    dir: 'cpp-deep-include',
+    lang: 'cpp',
+    types: 2,
+    names: ['Widget'],
+    importsMin: 3,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['use.cpp', 'nsa.Widget', true]],
+    refTiers: [['use.cpp', 'nsa.Widget', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

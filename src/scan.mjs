@@ -2820,25 +2820,33 @@ export async function scan(opts) {
     });
     for (const [i, set] of direct) {
       /**
-       * ⚠ **闭包只做 2 跳，这是量过之后的选择**（2026-10-05 第 12 轮试过传递闭包，**驳回**）：
+       * **闭包分两层**（2026-10-05 第 15 轮）—— 这是量了两轮之后的结论：
        *
-       * 动机：jemalloc 的 `deps/jemalloc/src/extent.c` 只 include `jemalloc_internal_includes.h`，
-       * 而 `edata_t` 定义在 `edata.h`（**3 跳以外**）→ 真依赖被记成"猜的"。
-       * 直觉上"C/C++ 经过任意层 include 都可见" ⇒ 做完整传递闭包应该是纯升档。
-       *
-       * **实测结果（A/B）**：redis `import` **+354** ✓ 看着很美，但同时**丢边**：
-       *   · sqlite 丢掉 `src/btree.c → src/btreeInt.h::BtShared` ×95、`BtCursor` ×93、`Btree` ×69
-       *     —— 这些是 **直接 include** 的真边 ✗✗；
-       *   · redis 丢掉 `src/functions.c → src/server.h::client` ×16 等 11 条 import 档真边 ✗。
-       * 机制：闭包变大 ⇒ **有依据的候选变多** ⇒ 解析器在"多个候选都有据"时**弃权**（宁可少接，
-       * 这是项目一贯的取舍）⇒ 真边消失。sqlite 那种**聚合文件**（`sqlite3.c` 把一切都包含进去）尤其严重。
-       *
-       * 结论：**按"精度优先、不牺牲召回"驳回**。要拿那 +354 条升档，得先解决
-       * "多个候选都有依据时如何选近的那个"（按证据距离消歧），那是另一件事。
+       *   · `closure`（**≤2 跳**）：**解析用**。行为与以前完全一致 ⇒ **零召回损失** ✓。
+       *     为什么不敢让解析用传递闭包：12 轮试过 —— 闭包变大 ⇒ "有依据的候选"变多 ⇒
+       *     解析器在"多个候选都有据"时**弃权**（"宁缺勿错"）⇒ 真边消失 ✗：
+       *     sqlite 丢掉 `src/btree.c → src/btreeInt.h::BtShared` ×95（**直接 include** 的真边）、
+       *     redis 丢掉 `src/functions.c → src/server.h::client` ×16（那个文件有 **9 个**同名候选 ✓）。
+       *   · `closureDeep`（**传递**，BFS，上限 200 兜底病态图）：**只给档位用**（见 `tierOf` 与 mcp 的 evidenceOf）。
+       *     依据：C/C++ 的可见性语义就是"经过**任意层** include 都可见"——
+       *     实测 jemalloc 的 `src/extent.c` 只 include `jemalloc_internal_includes.h`，而 `edata_t` 定义在
+       *     `edata.h`（3 跳以外）✓ 那是**真依赖**；这类升档在 redis 上抽样全是真的
+       *     （`extent.c → edata.h::edata_t` ×101 · `ctl.c → tsd_types.h::tsd_t` ×69 · `arena.c → …::tsdn_t` ×59）。
+       *     分成两层之后：**边集合一条不变**，只有档位变准 ✓（这是本轮验收的硬指标）。
        */
       const out = new Set(set);
       for (const j of set) for (const k2 of direct.get(j) || []) if (k2 !== i) out.add(k2);
       if (out.size && out.size <= 120) fileRecs[i].closure = [...out];
+      const deep = new Set();
+      const queue = [...set];
+      while (queue.length) {
+        const j = queue.pop();
+        if (j === i || deep.has(j)) continue;
+        deep.add(j);
+        if (deep.size >= 200) break;
+        for (const k2 of direct.get(j) || []) if (k2 !== i && !deep.has(k2)) queue.push(k2);
+      }
+      if (deep.size && deep.size <= 200) fileRecs[i].closureDeep = [...deep];
     }
   }
   // Dart 的包级重导出图（多跳 barrel）：flutter_riverpod 转出 riverpod 的类型时，
@@ -3073,6 +3081,24 @@ export async function scan(opts) {
     return v;
   };
   /**
+   * **"传递 include 链可达"算不算 import 依据** —— 只给**档位**用（第 15 轮）。
+   *
+   * `hasImportBacking`（解析用）只认 ≤2 跳的 `closure` —— 让解析用传递闭包会**丢真边** ✗
+   * （闭包变大 ⇒ 有依据的候选变多 ⇒ 多候选时弃权；sqlite 因此丢掉直接 include 的真边 ×95）。
+   * 但**档位**不一样：C/C++ 里"经过任意层 include 可见"**就是**语言层面的依据 ✓ ——
+   * 实测 jemalloc 的 `extent.c` 经 `jemalloc_internal_includes.h` 用到 `edata.h` 的 `edata_t`，
+   * 这类边在 redis 上抽样全是真的（×101 / ×69 / ×59 …）。
+   * 扫描期 `tierOf` 与读期 `evidenceOf` 必须用**同一个**函数判档（项目里那条"别自相矛盾"的教训）。
+   */
+  const deepImportCache = new Map();
+  const hasImportBackingDeep = (fromTypeId, toTypeId) => {
+    const key = `${fromTypeId}|${toTypeId}`;
+    if (deepImportCache.has(key)) return deepImportCache.get(key);
+    const v = computeImportBacking(fromTypeId, toTypeId, false, true);
+    deepImportCache.set(key, v);
+    return v;
+  };
+  /**
    * **这条 import 是不是"点到了那个文件/模块"**（而不只是它所在的命名空间/包）—— 2026-10-05 第 13 轮。
    *
    * "证据距离消歧"第一版把"直接依据"定义成"引用方自己的 import 列表里有一条能匹配上"，
@@ -3107,7 +3133,7 @@ export async function scan(opts) {
     }
     return false;
   };
-  const computeImportBacking = (fromTypeId, toTypeId, directOnly = false) => {
+  const computeImportBacking = (fromTypeId, toTypeId, directOnly = false, deep = false) => {
     const fromType = allTypes[fromTypeId], cand = allTypes[toTypeId];
     if (!fromType || !cand) return false;
     const fromFile = fileRecs[fromType.file], candFile = fileRecs[cand.file];
@@ -3138,8 +3164,12 @@ export async function scan(opts) {
     }
     // 到这里为止都是"**直接**依据"（引用方自己的 import 列表）—— `directOnly` 的问法就此打住
     if (directOnly) return false;
-    // C/C++ 的 include 闭包（≤2 跳）
-    if (Array.isArray(fromFile.closure) && fromFile.closure.includes(cand.file)) return true;
+    // C/C++ 的 include 闭包：**解析用 ≤2 跳那一层**（`closure`，行为与以前一致 ⇒ 零召回损失）；
+    // `deep = true`（只给**档位**用，见 hasImportBackingDeep）时才认**传递闭包** `closureDeep` ——
+    // 依据："经过任意层 include 都可见"就是 C/C++ 的语义，实测这类升档抽样全是真的（见闭包那段的注释）。
+    if (deep) {
+      if (Array.isArray(fromFile.closureDeep) && fromFile.closureDeep.includes(cand.file)) return true;
+    } else if (Array.isArray(fromFile.closure) && fromFile.closure.includes(cand.file)) return true;
     // Dart：同一个 part 库组里的文件同作用域
     if (fromFile.lib && candFile.lib && fromFile.lib === candFile.lib) return true;
     // C# / VB：子命名空间不用 using 也能引用父命名空间里的类型
@@ -3815,6 +3845,15 @@ export async function scan(opts) {
     // 判据与 hasImportBacking 里那条保持一致 —— 两处口径必须相同，否则又会出现"扫描说有、
     // 读侧说没有"的自相矛盾（modules.mjs 文件头记的就是这类事故）。
     if (a && b && a.ns && a.ns === b.ns) return 'import';
+    /**
+     * **C/C++ 的传递 include 链 = 依据**（第 15 轮）：只影响**档位**，不影响选边 ——
+     * 解析仍按 `closure`（≤2 跳）挑候选 ⇒ **边集合一条不变**，只是那些"经多层 include 用到"的真依赖
+     * 不再被记成"猜的"✓。实测 redis 上这类升档抽样全是真的
+     * （`jemalloc/src/extent.c → internal/edata.h::edata_t` ×101 · `ctl.c → tsd_types.h::tsd_t` ×69 …）。
+     * ⚠ 读期 `mcp.mjs` 的 `evidenceOf` 必须调用**同一个** `hasImportBackingDeep` 判据 ——
+     *   否则会出现"扫描说有、读侧说没有"的自相矛盾（modules.mjs 文件头记的就是这类事故）。
+     */
+    if (a && b && a.file !== b.file && hasImportBackingDeep(fromTypeId, toTypeId)) return 'import';
     return hit?.uniq ? 'unique' : 'name';
   };
 
