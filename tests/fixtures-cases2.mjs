@@ -1056,6 +1056,26 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **include 名解析：同目录是"优先"不是"必须"**（精度轮 20，2026-10-05）。
+    // 旧代码写成 `hit = hit.filter(同目录)` —— 一旦**没有**同目录候选就把列表**清空** ✗ ⇒ 这条 include 丢掉、
+    // 那个文件进不了闭包（全语料 **70 个文件**如此 ✗，例：abseil `#include "absl/base/config.h"` 有 3 个同 stem 候选都不在
+    // 引用方目录 ⇒ `absl/base/internal/cpu_detect.h` 闭包为空）。
+    // 修法：同目录**有才收窄**；仍多候选时按**路径后缀**（include 是相对包含根写的）挑，再不行取**路径段数最少**的。
+    // 夹具两头钉：`nsb::Widget` 在 b/thing.hpp（经 mid1.hpp **两跳可达**）→ **必须存在且 import 档**；
+    // 同名的 `nsa::Widget`（a/thing.hpp，不在链上）→ **不许接**。
+    // **反向对照**：旧引擎上 `use.cpp → nsb.Widget` **根本不存在**（中间那条 include 因候选被清空而断链 ✗）。
+    dir: 'cpp-include-suffix',
+    lang: 'cpp',
+    types: 4,
+    names: ['Widget'],
+    importsMin: 2,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['use.cpp', 'nsb.Widget', true], ['use.cpp', 'nsa.Widget', false]],
+    refTiers: [['use.cpp', 'nsb.Widget', 'import']],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

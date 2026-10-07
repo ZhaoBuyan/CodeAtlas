@@ -2823,7 +2823,33 @@ export async function scan(opts) {
           const sameExt = ext ? hit.filter((j) => fileRecs[j].path.toLowerCase().endsWith(ext)) : [];
           if (sameExt.length) hit = sameExt;
         }
-        if (hit.length > 1) hit = hit.filter((j) => fileRecs[j].path.slice(0, fileRecs[j].path.lastIndexOf("/") + 1) === myDir);
+        // ⚠ **同目录是"优先"不是"必须"**（2026-10-05 第 20 轮修的真 bug）：
+        // 以前写成 `hit = hit.filter(同目录)` —— 一旦**没有**同目录候选，列表就被**清空** ✗，
+        // 后面 `hit.length === 1` 永远不成立 ⇒ 这条 include 直接丢，那个文件**进不了闭包** ✗。
+        // 实测（abseil）：`#include "absl/base/config.h"` 有 3 个同 stem 候选
+        // （`absl/base/config.h` / `absl/flags/config.h` / `absl/log/internal/config.h`），都不在引用方目录
+        // ⇒ 全被清掉 ⇒ `absl/base/internal/cpu_detect.h` 这类文件的闭包为空（全语料 **70 个文件**这样 ✗）。
+        if (hit.length > 1) {
+          const sameDir = hit.filter((j) => fileRecs[j].path.slice(0, fileRecs[j].path.lastIndexOf("/") + 1) === myDir);
+          if (sameDir.length) hit = sameDir;
+        }
+        /**
+         * **按"路径后缀 + 最短路径"再挑一次**：include 字符串是**相对某个包含根**写的，
+         * 所以"目标路径以它的**段序列**结尾"是最强信号；若仍多于一个，取**路径段数最少**的（离包含根最近）。
+         * 仍只取**严格唯一**的最小值（并列就放弃，保持"宁缺勿错"）。
+         */
+        if (hit.length > 1) {
+          const segs = String(imp).replace(/\\/g, '/').split('/').filter(Boolean).map((s) => s.toLowerCase());
+          const suf = hit.filter((j) => {
+            const p = fileRecs[j].path.toLowerCase().split('/').filter(Boolean);
+            return segs.length <= p.length && segs.every((s, k) => p[p.length - segs.length + k] === s);
+          });
+          if (suf.length) hit = suf;
+          if (hit.length > 1) {
+            const counted = hit.map((j) => ({ j, n: fileRecs[j].path.split('/').length })).sort((a, b) => a.n - b.n);
+            if (counted[0].n < counted[1].n) hit = [counted[0].j];
+          }
+        }
         if (hit.length === 1 && hit[0] !== i) set.add(hit[0]);
       }
       if (set.size) direct.set(i, set);
