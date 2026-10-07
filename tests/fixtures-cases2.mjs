@@ -1035,6 +1035,27 @@ export const EXTRA_CASES = [
     errorsMax: 0,
   },
   {
+    // **Zig：裸名跨文件必须有 `@import` 依据**（精度轮 18，2026-10-05）。
+    // Zig 里跨文件引用**只能**先 `@import("x.zig")` 再写限定名（`alpha.ScopeWidget`，走限定名那条路）；
+    // 光秃秃的裸名跨文件根本编不过 ⇒ "跨文件 + 零依据"只能是同名巧合 ✗。
+    // 两头钉：`usebare.zig`（导入的是 other.zig，却裸写 ScopeWidget）→ **不许接** alpha.zig 的 ScopeWidget；
+    // 同时它**导入的** other.zig 必须接（import 档 ✓，证明没把真边一起砍）。
+    // **反向对照**：旧引擎上 `usebare.zig → ScopeWidget` 是 `[unique]`（存在）✗。
+    // ⚠ 顺带查清"是不是没提取 import"：**不是** —— 走 `importKindOf: zigImportKind` 抓 `@import(…)`，
+    //   zls 102 个 zig 文件里 78 个有 imports ✓。
+    // 实测收益：`oss3-zls` 1,706 → **1,066（−640）**，全落 `unique` 档、**`import` 档 0 变化**、加 0；
+    //   抽样全是撞名（字段 `arena` · 局部 `Function` · 字段 `path` · 测试里的 `A`）✓。
+    dir: 'zig-import-scope',
+    lang: 'zig',
+    types: 6,
+    names: ['ScopeWidget', 'Other'],
+    importsMin: 2,
+    docs: 0,
+    membersMin: 0,
+    refEdges: [['usebare.zig', 'ScopeWidget', false], ['usebare.zig', 'other.zig', true]],
+    errorsMax: 0,
+  },
+  {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
     // `"red;background-image:url(javascript:…)"` 就能在**打开页面时执行脚本**，把本地读到的

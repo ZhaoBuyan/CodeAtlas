@@ -1153,6 +1153,16 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
 
   // 成员/类型都带签名（参数表 + 返回类型）：同名重载靠它才分得开。取不到就没这两个键。
   function bumpMember(kind, name, node, doc) {
+    /**
+     * **空节点不算成员**（2026-10-05 第 18 轮，被 Zig 夹具揪出来的**既有** bug）。
+     *
+     * Zig 的 `struct {}`（空结构体）会产出一个 **`container_field`、名字与文本都是空**的节点 ——
+     * 引擎把它算进 `members` 分档（`field:1`）却给不出名字、于是不进 `memberList` ⇒
+     * **`members` 求和 ≠ `memberList` 长度**（`tests/run-fixtures.mjs` 有全局断言盯着这类不一致，
+     * 历史上前一次同类问题是 1.4.0 复测报告的 P1）。
+     * 判据很紧：**名字与节点文本都为空**才算语法残渣跳过；有名字、或只有文本（能当兜底名字）都照旧。
+     */
+    if (!name && !String(node.text || '').trim()) return;
     const sig = declSignature(lang, node);
     const t = currentType();
     const entry = { k: kind, n: name, l: node.startPosition.row + 1 };

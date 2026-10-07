@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 语言配置表 —— 引擎通用，语言在这里描述。
  *
  * 每加一门语言只需要在这里加一份 profile：
@@ -1473,6 +1473,18 @@ export const LANGUAGES = {
     },
     imports: {},
     importKindOf: zigImportKind,
+    /**
+     * **裸名跨文件必须有 `@import` 依据**（Zig，2026-10-05 第 18 轮）。
+     *
+     * Zig 里跨文件引用**只能**先 `@import("x.zig")` 拿到容器、再写限定名（`alpha.ScopeWidget`，走限定名那条路）；
+     * 光秃秃的裸名跨文件**根本编不过** ⇒ "跨文件 + 零 import 依据"的裸名匹配只能是同名巧合 ✗。
+     * ⚠ 唯一例外是老的 `usingnamespace`（把别的容器名字引进当前作用域）—— 现代 Zig 已移除、样本里也没量到；
+     *   真出现时会表现为"有 @import 但名字裸用"，属于要单独补依据的情形（记这里备查）。
+     *
+     * 先把"是不是没提取 import"查清了：**不是** —— profile 走 `importKindOf: zigImportKind` 抓 `@import(…)`，
+     * 实测 zls 样本 102 个 zig 文件里 **78 个有 imports** ✓（探针量到的 610/30 分布成立）。
+     */
+    bareNameScope: 'import-only',
     baseFields: [],
     baseNodes: [],
     decisions: ['if_statement', 'while_statement', 'for_statement', 'switch_expression', 'binary_expression'],
