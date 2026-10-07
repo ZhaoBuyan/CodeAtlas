@@ -3269,7 +3269,7 @@ export async function scan(opts) {
   const nsInScope = (fromType, t, mode) => {
     // `'import-only'`（Rust）：这门语言里裸名跨文件**必须有 `use`** —— 没有"命名空间远近"这一说，
     // 所以一律返回 false，闸就退化成"必须有 import 依据（或同文件）"。见 rust profile 的说明。
-    if (mode === 'import-only' || mode === 'import-only-module') return false;
+    if (mode === 'import-only' || mode === 'import-only-module' || mode === 'import-only-deep') return false;
     const toNs = String(t.ns || '').trim();
     if (!toNs) return true;
     const fromNs = String(fromType?.ns || '').trim();
@@ -3709,9 +3709,17 @@ export async function scan(opts) {
       // **204 条在"没有 import 的脚本"里**（有风险 ⇒ 一律不判 ✓）。
       // （同一把尺子量过 TS 组：模块 0 · 脚本 0 —— 说明第 14 轮的 TS 上闸**零风险** ✓。）
       const isScriptFile = scopeMode === 'import-only-module' && !(fromFile?.imports?.length);
+      /**
+       * `'import-only-deep'`（C / C++，2026-10-05 第 19 轮）：**依据那一问换成传递闭包**。
+       * C/C++ 的可见性语义是"经任意层 include 都可见"，用 ≤2 跳那层会砍掉 jemalloc 那种"汇总头"真边 ✗
+       * （第 12 轮实测过），所以这里查 `hasImportBackingDeep`（`closureDeep`）；
+       * **解析挑候选**仍是 ≤2 跳的 `closure`（不动，避免第 12 轮那种弃权丢边）。
+       */
+      const useDeep = scopeMode === 'import-only-deep';
+      const evidenced = useDeep ? hasImportBackingDeep(fromTypeId, id) : hasImportBacking(fromTypeId, id);
       if (scopeMode && !isScriptFile && t.file !== fromFile?.id
         && !nsInScope(allTypes[fromTypeId], t, scopeMode)
-        && !hasImportBacking(fromTypeId, id)) return false;
+        && !evidenced) return false;
       return true;
     }), allTypes[fromTypeId]?.file);
     // `uniq` = 这个名字在**候选表里就是唯一的**（后面挑候选不会改变这一点）

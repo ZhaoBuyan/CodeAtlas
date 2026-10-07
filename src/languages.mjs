@@ -1951,6 +1951,20 @@ export const LANGUAGES = {
       declaration: 'declarator',
     },
     imports: { preproc_include: 1 },
+    /**
+     * **裸名跨文件必须有 include 依据 —— 而且"经任意层 include 可达"就算**（C / C++，2026-10-05 第 19 轮）。
+     *
+     * 为什么用 `'import-only-deep'`（而不是别的语言用的 `'import-only'`）：C/C++ 的可见性语义是
+     * "经过**任意层** include 都可见" —— 只用 ≤2 跳那一层会把 jemalloc 那种"汇总头"的真边当无据砍掉 ✗
+     * （第 12 轮的实测：`extent.c` 只 include `jemalloc_internal_includes.h`，而 `edata_t` 在 3 跳以外）。
+     * 所以这道闸查的是第 15 轮那层 `closureDeep`（传递闭包）✓，而**解析挑候选**仍用 ≤2 跳的 `closure`
+     * （换传递会丢真边：sqlite 曾丢 `btree.c → btreeInt.h::BtShared` ×95）。
+     *
+     * 实测依据：C/C++ 剩下的跨文件 `unique` 边 3,283 条里，目标名前几名全是**标准库 / C 运行时名** ——
+     * `string` 622 · `vector` 211 · `FILE` 82 · `size_t` 73 · `array` 58 · `false_type` 51 · `string_view` 50
+     * —— 真身都在图外（`<string>` / `<vector>` / `<cstdio>`），接到图内同名声明上是**同名巧合** ✗。
+     */
+    bareNameScope: 'import-only-deep',
     baseFields: [],
     baseNodes: [],
     decisions: ['if_statement', 'for_statement', 'while_statement', 'do_statement', 'switch_statement', 'case_statement', 'binary_expression'],
@@ -1978,6 +1992,9 @@ export const LANGUAGES = {
       declaration: 'declarator',
     },
     imports: { preproc_include: 1 },
+    // 与 C 同一档（见 c profile 的说明）：C++ 的"经任意层 include 可见"是真语义，
+    // 所以闸查 **传递闭包** `closureDeep`，而解析挑候选仍用 ≤2 跳的 `closure`。
+    bareNameScope: 'import-only-deep',
     baseFields: [],
     baseNodes: ['base_class_clause'],
     decisions: ['if_statement', 'for_statement', 'while_statement', 'do_statement', 'switch_statement', 'case_statement', 'catch_clause', 'conditional_expression', 'binary_expression'],
