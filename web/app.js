@@ -1,5 +1,7 @@
 /* Code Atlas 前端：吃 bundle.json，画树形图 / 树状列表 + 检查器。
  * 只依赖 d3（全局）。数据全在 /data/bundle.json，前端不含被扫描项目的代码。 */
+import { createBundleLoader } from './bundle-loader.js';
+import { topTypes, createVisibleTypeCache } from './query-model.js';
 
 // 语言由本地服务注入（window.CODEATLAS_LANG，取值同启动器/引擎的 CODEATLAS_LANG）；
 // 直接用 file:// 打开或别的方式打开就是中文（默认）。
@@ -58,11 +60,6 @@ const SENTINELS = {
   'root': ['根目录', 'root'], '根目录': ['根目录', 'root'],
 };
 const sysLabel = (n) => { const m = SENTINELS[n]; return m ? (LANG === 'en' ? m[1] : m[0]) : n; };
-
-fetch('/data/bundle.json')
-  .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-  .then(boot)
-  .catch((err) => { $('#chart').innerHTML = T(`<div class="empty">读取 bundle 失败：${esc(err.message)}<br>先跑 <code>npm run scan -- &lt;目录&gt;</code></div>`, `<div class="empty">Failed to load the bundle: ${esc(err.message)}<br>run <code>npm run scan -- &lt;dir&gt;</code> first</div>`); });
 
 // ---------------------------------------------------------------------------
 // 启动
@@ -282,8 +279,10 @@ function langOf(t) {
   return state.fileById.get(t.file)?.lang || '';
 }
 
+const cachedVisibleTypes = createVisibleTypeCache();
+const visibleTypes = () => cachedVisibleTypes(state, matchType);
 function renderTopList() {
-  const pool = [...state.bundle.types].filter(matchType).sort((a, b) => metricOf(b) - metricOf(a));
+  const pool = visibleTypes();
   const q = state.q;
   if (q) {
     const byMember = pool.filter((t) => memberHitOf(t)).length;
@@ -291,7 +290,7 @@ function renderTopList() {
   } else {
     $('#topTitle').textContent = T(`最大的类型（${METRICS[state.metric]}）`, `Largest types (${METRICS[state.metric]})`);
   }
-  const list = pool.slice(0, 12);
+  const list = topTypes(pool, metricOf, 12);
   $('#topList').innerHTML = list.map((t) => {
     const m = q ? memberHitOf(t) : null;
     const f = state.fileById.get(t.file);
@@ -383,8 +382,7 @@ function groupPath(t) {
 /** 用分组路径搭一棵层级树（已应用筛选） */
 function buildTree() {
   const root = { isGroup: true, name: T('全部', 'All'), path: '', children: [], lookup: new Map() };
-  for (const t of state.bundle.types) {
-    if (!matchType(t)) continue;
+  for (const t of visibleTypes()) {
     const segs = groupPath(t);
     let node = root, p = '';
     for (const s of segs) {
@@ -862,10 +860,10 @@ function renderStatus(shown, _total, w = 0, h = 0) {
 const isGenerated = (t) => Array.isArray(t.tags) && t.tags.includes('compiler-generated');
 
 /** 依赖聚焦用：选中项的关联集合（缓存，避免每个类型都重算） */
-let depCache = { id: null, set: new Set() };
+let depCache = { id: null, bundle: null, set: new Set() };
 function depNeighbors() {
   const id = state.selected;
-  if (depCache.id !== id) depCache = { id, set: new Set(emphasisTargets(id).keys()) };
+  if (depCache.id !== id || depCache.bundle !== state.bundle) depCache = { id, bundle: state.bundle, set: new Set(emphasisTargets(id).keys()) };
   return depCache.set;
 }
 
@@ -1069,7 +1067,7 @@ function radiusOf(t) {
 function drawGraph(chart, w, h) {
   if (graphSim) { graphSim.stop(); graphSim = null; }
   const MAX = 400;
-  const types = state.bundle.types.filter(matchType);
+  const types = visibleTypes();
   const idSet = new Set(types.map((t) => t.id));
   let edges = state.bundle.edges.filter((e) => idSet.has(e.from) && idSet.has(e.to));
   let nodes = types;
@@ -1090,7 +1088,7 @@ function drawGraph(chart, w, h) {
       deg.set(e.from, (deg.get(e.from) || 0) + e.w);
       deg.set(e.to, (deg.get(e.to) || 0) + e.w);
     }
-    nodes = types.slice().sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0)).slice(0, MAX);
+    nodes = topTypes(nodes, (type) => deg.get(type.id) || 0, MAX);
     const keep = new Set(nodes.map((t) => t.id));
     edges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
     note = `${note}${note ? ' · ' : ''}${T('节点太多，只画连接最多的前 ', 'too many nodes — drawing only the top ')}${MAX}${T(' 个', ' by connections')}`;
@@ -1169,8 +1167,7 @@ function drawGraph(chart, w, h) {
 function drawMatrix(target, chart, w, h) {
   const MAXG = 22;
   const groups = new Map();
-  for (const t of state.bundle.types) {
-    if (!matchType(t)) continue;
+  for (const t of visibleTypes()) {
     const key = groupKeyOfType(t);
     if (!groups.has(key)) groups.set(key, { key, color: typeColor(t), ids: [] });
     groups.get(key).ids.push(t.id);
@@ -1254,6 +1251,7 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
     <div class="kv">
       <dt>${T('文件', 'File')}</dt><dd>${esc(f.path)}:${t.line}
         <button class="mini" id="copyPath">${T('复制', 'Copy')}</button></dd>
+      ${state.bundle.source.roots.length > 1 && state.bundle.source.rootPaths?.[f.rootId] ? `<dt>${T('扫描根', 'Scan root')}</dt><dd>${esc(state.bundle.source.rootPaths[f.rootId])}</dd>` : ''}
       <dt>${T('行数（类型区间）', 'Lines (type range)')}</dt><dd>${fmt(t.loc)}${T('（代码 ', ' (code ')}${fmt(t.code)}${T(' / 注释 ', ' / comment ')}${fmt(t.comment)}${T('）', ')')}</dd>
       <dt>${T('复杂度', 'Complexity')}</dt><dd>${t.complexity} <span class="muted">${T('估算', 'estimated')}</span></dd>
       <dt>${T('成员', 'Members')}</dt><dd>${memberRows.length ? memberRows.map(([k, v]) => `${esc(k)} ${v}`).join(' · ') : '—'}</dd>
@@ -1266,7 +1264,10 @@ ${T('这个 bundle 里有 ', 'This bundle has ')}<b>${fmt(b.totals.types)}</b>${
       ${t.memberList.slice(0, 40).map((m) => `<div class="dep${state.q && (m.n || '').toLowerCase().includes(state.q) ? ' hit' : ''}" title="${esc(m.d || '')}"><span class="n">${esc(m.n + sigText(m))}</span><span class="w">${esc(m.k)} · ${m.l}</span></div>${m.d ? `<div class="m-doc">${esc(truncate(m.d, 110))}</div>` : ''}`).join('')}</div>` : ''}
   `;
   $('#copyPath')?.addEventListener('click', () => {
-    navigator.clipboard?.writeText(`${f.path}:${t.line}`);
+    const root = state.bundle.source.rootPaths?.[f.rootId];
+    const filePath = state.bundle.source.roots.length > 1 && root
+      ? `${root.replace(/\\/g, '/')}/${f.relativePath}` : f.path;
+    navigator.clipboard?.writeText(`${filePath}:${t.line}`);
     const el = $('#copyPath');
     el.textContent = T('已复制', 'Copied');
     setTimeout(() => { el.textContent = T('复制', 'Copy'); }, 1200);
@@ -1332,30 +1333,16 @@ function applyBundle(b) {
   draw();
 }
 
-let bundleMeta = null;
-let webMeta = null;          // 网页文件指纹（/web/meta）：改了就把页面自己重载，省得手动 F5
-let applying = false;
-async function pollBundle() {
-  if (applying) return;
-  try {
-    const wm = await (await fetch(`/web/meta?ts=${Date.now()}`)).text();
-    if (webMeta === null) webMeta = wm;
-    else if (wm !== webMeta) { location.reload(); return; }   // 服务端把 app.js/index.html/style.css 的 mtime-大小 拼成指纹
-    const r = await fetch(`/data/bundle.meta?ts=${Date.now()}`);
-    if (!r.ok) return;
-    const meta = await r.text();
-    if (bundleMeta === null) { bundleMeta = meta; return; }    // 首次只记下来，别把刚加载的那份又拉一遍
-    if (meta === bundleMeta) return;
-    bundleMeta = meta;
-    applying = true;
-    const res = await fetch(`/data/bundle.json?ts=${Date.now()}`);
-    applyBundle(await res.json());
-    applying = false;
-  } catch {
-    applying = false;      // 服务停了 / 取不到：下次再试，别把循环卡死
-  }
-}
-setInterval(pollBundle, 2500);
+const bundleLoader = createBundleLoader({
+  onBundle: (bundle, { initial }) => initial ? boot(bundle) : applyBundle(bundle),
+  onWebChange: () => location.reload(),
+  onError: (err, { initial }) => {
+    if (initial) $('#chart').innerHTML = T(`<div class="empty">读取 bundle 失败：${esc(err.message)}<br>服务恢复后将自动重试。</div>`, `<div class="empty">Failed to load bundle: ${esc(err.message)}<br>Retrying automatically.</div>`);
+    else console.warn('Bundle update failed; keeping the current map:', err.message);
+  },
+});
+bundleLoader.poll();
+setInterval(() => bundleLoader.poll(), 2500);
 
 let mapZoom = null;          // 当前地图的 d3.zoom（每次重绘会换新的）
 let mapTf = null;            // 当前缩放/平移（重绘后恢复用；选中不会把视野冲掉）
