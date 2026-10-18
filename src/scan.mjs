@@ -9,7 +9,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Parser, Language } from 'web-tree-sitter';
 import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages, expandUseTree } from './languages.mjs';
@@ -18,9 +19,34 @@ import { moduleKey, importMatchesTarget } from './modules.mjs';
 import { rmrf, rmFile } from './fsx.mjs';
 import { t } from './i18n.mjs';
 import { preprocess, csharpAsyncIdentifier } from './preprocess.mjs';
+import { validateBundle, BUNDLE_SCHEMA } from '../shared/bundle-contract.mjs';
+import { withOutputLock, writeJsonAtomic } from './storage.mjs';
+import { VERSION } from './version.mjs';
+import { gitInfo, gitHeat } from './git-metadata.mjs';
 
-export const SCHEMA = 'code-atlas/1';
-export const VERSION = '1.9.0';
+export const SCHEMA = BUNDLE_SCHEMA;
+export { VERSION };
+
+// Multi-root paths are namespaced before parsing, so every downstream path index
+// (including module resolution and both consumers) uses the same unique identity.
+function rootIdentity(root) {
+  const absolute = path.resolve(root);
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+}
+
+function rootPrefix(root) {
+  const identity = rootIdentity(root);
+  return `${path.basename(identity) || 'root'}-${createHash('sha256').update(identity).digest('hex').slice(0, 12)}`;
+}
+
+function entryStamp(entries) {
+  return JSON.stringify(entries.map((e) => [e.name, e.isDirectory()])
+    .sort((a, b) => a[0].localeCompare(b[0])));
+}
+
+function fileStamp(file) {
+  try { return createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch { return null; }
+}
 
 /**
  * 没归到任何系统规则的哨兵值：**中性固定值**，不带任何语言。
@@ -217,6 +243,8 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   for (const d of excludes || []) ignoreDirs.add(d);
 
   const files = [];
+  const directorySnapshots = new Map();
+  const configSnapshots = new Map();
   const manifests = [];   // 图内遇到的清单文件（清单名 → 路径）；包名/别名发现统一从这里读，不再自己走树
   // ignoredDirs：被默认跳过表命中的目录名 → 次数。它进 bundle、进扫描报告，
   // 让“图里少了东西”这件事可见（monorepo 的 packages/ 当年就是这么被发现的）。
@@ -225,6 +253,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
 
   for (let rootIdx = 0; rootIdx < roots.length; rootIdx++) {
     const root = roots[rootIdx];
+    const rootId = rootPrefix(root);
     const stack = [root];
     while (stack.length) {
       const dir = stack.pop();
@@ -233,6 +262,16 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
         entries = fs.readdirSync(dir, { withFileTypes: true });
       } catch {
         continue;
+      }
+      directorySnapshots.set(dir, entryStamp(entries));
+      // Capture inputs before parsing. Taking a new baseline after parsing could
+      // swallow a file/config edit that arrived while the scan was in progress.
+      for (const e of entries) {
+        if (e.isFile() && (['.gitignore', 'atlas.ignore', 'atlas.facets.json'].includes(e.name)
+          || MANIFEST_NAMES.has(e.name) || e.name.endsWith('.csproj'))) {
+          const file = path.join(dir, e.name);
+          configSnapshots.set(file, fileStamp(file));
+        }
       }
       // 本层自带的跳过规则（嵌套 .gitignore）先收进来，再判断本层的条目 ——
       // 顺序反了，本层 .gitignore 写的规则就管不到本层自己的文件
@@ -270,7 +309,8 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
           continue;
         }
         // 清单文件（包名 / 路径别名）：**只记路径**，遵守跳过规则（默认表 / --exclude / atlas.ignore / .gitignore）
-        if (MANIFEST_NAMES.has(e.name)) manifests.push({ abs, rel: path.relative(root, abs).split(path.sep).join('/'), name: e.name });
+        const graphRel = roots.length > 1 ? `${rootId}/${rel}` : rel;
+        if (MANIFEST_NAMES.has(e.name)) manifests.push({ abs, rel: graphRel, name: e.name });
         const ext = path.extname(e.name).toLowerCase();
         const lang = exts.get(ext);
         if (!lang) {
@@ -307,7 +347,9 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
         if (stat.size > maxKb * 1024) { skipped.tooBig++; continue; }
         files.push({
           abs,
-          rel: path.relative(root, abs).split(path.sep).join('/'),
+          rel: graphRel,
+          relativePath: rel,
+          rootId,
           root,
           lang: fileLang,
           bytes: stat.size,
@@ -325,7 +367,7 @@ function collectFiles(roots, { languages, maxKb, excludes, budget, ignoreRules }
   skipped.ignorePatterns = ignoreRules ? ignoreRules.count : 0;
   skipped.ignoreFiles = ignoreRules ? ignoreRules.fileCount : 0;
   skipped.ignoreNegations = ignoreRules ? ignoreRules.negations : 0;
-  return { files, skipped, manifests };
+  return { files, skipped, manifests, directorySnapshots, configSnapshots };
 }
 
 // ---------------------------------------------------------------------------
@@ -1603,62 +1645,7 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
 // 版本戳
 // ---------------------------------------------------------------------------
 
-function gitInfo(root) {
-  const run = (args) => {
-    try {
-      return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'ignore'] })
-        .toString().trim();
-    } catch { return null; }
-  };
-  const commit = run(['rev-parse', '--short', 'HEAD']);
-  if (!commit) return null;
-  const branch = run(['rev-parse', '--abbrev-ref', 'HEAD']);
-  const status = run(['status', '--porcelain']);
-  return { commit, branch, dirty: Boolean(status) };
-}
 
-/**
- * git 热度：最近 200 次提交里每个文件被改了几次、最近一次是什么时候。
- * 给地图当“我该从哪读起”的着色维度用（见 web 的「git 热度」）。
- *
- * 三个坑：
- *  - `-c core.quotepath=false`：否则非 ASCII 路径会被 git 转义成 `"\346\226..."`，跟 bundle 里的相对路径对不上；
- *  - 扫描根是仓库的子目录时，git 给的路径是**仓库根**相对的 → 用 `rev-parse --show-prefix` 去掉那段前缀；
- *  - 非 git 仓库（或 git 不可用）返回 null，bundle 里就不带 git 字段（不是“全 0”，而是“不知道”）。
- */
-function gitHeat(root) {
-  const run = (args) => {
-    try {
-      return execFileSync('git', ['-c', 'core.quotepath=false', '-C', root, ...args], { stdio: ['ignore', 'pipe', 'ignore'] })
-        .toString();
-    } catch { return null; }
-  };
-  const log = run(['log', '--numstat', '--pretty=format:%ct', '-n', '200']);
-  if (log == null) return null;
-  const prefix = ((run(['rev-parse', '--show-prefix']) || '').trim());
-  const rel = (p) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : prefix ? null : p);
-  const byPath = new Map();
-  let commits = 0;
-  let ts = 0;
-  for (const line of log.split('\n')) {
-    if (/^\d+$/.test(line)) { ts = Number(line) * 1000; commits++; continue; }
-    const m = line.match(/^(\d+|-)\t(\d+|-)\t(.+)$/);   // 二进制文件的行数是 "-"
-    if (!m) continue;
-    const p = rel(m[3]);
-    if (!p) continue;
-    const cur = byPath.get(p) || { changes: 0, lastTs: 0 };
-    cur.changes++;
-    if (ts > cur.lastTs) cur.lastTs = ts;
-    byPath.set(p, cur);
-  }
-  // 跟踪清单：用来区分“在仓库里但一直没改”和“压根没提交过”（新增/未提交的文件要在图上单独看得到）
-  const tracked = new Set();
-  for (const p of (run(['ls-files', '-z']) || '').split('\0')) {
-    const r = p && rel(p);
-    if (r) tracked.add(r);
-  }
-  return { byPath, tracked, commits };
-}
 
 // ---------------------------------------------------------------------------
 // facets：把"系统 / 模块"这类领域分组做成规则
@@ -1855,8 +1842,9 @@ function loadFacets(opts, roots) {
       // 去掉 UTF-8 BOM：Windows 上太常见（PowerShell 5.1 的 Set-Content -Encoding utf8、
       // VS Code 的“UTF-8 with BOM”、老版记事本都会加），JSON.parse 遇到 BOM 会直接报
       // Unexpected token —— 配置文件是给人手改的，这种“看起来没毛病却读不了”的坑必须挡掉。
-      const text = fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '');
-      return { file: f, config: JSON.parse(text) };
+      const raw = fs.readFileSync(f);
+      const text = raw.toString('utf8').replace(/^\uFEFF/, '');
+      return { file: f, config: JSON.parse(text), stamp: createHash('sha256').update(raw).digest('hex') };
     } catch (err) {
       throw new Error(t(`facets 分组配置解析失败：${f}\n${err.message}`, `cannot parse the facets config: ${f}\n${err.message}`));
     }
@@ -1894,7 +1882,7 @@ function applyFacets(facetsDoc, allTypes, fileRecs) {
   const groups = new Map();
   for (const t of allTypes) {
     const f = fileRecs[t.file];
-    const cands = [f.path, path.posix.basename(f.path), t.ns || '', t.fqn];
+    const cands = [f.path, f.relativePath || f.path, path.posix.basename(f.path), t.ns || '', t.fqn];
     let hit = null;
     let rule = null;
     for (const r of rules) {
@@ -2166,6 +2154,8 @@ async function extractFiles(files) {
 
     part.file = {
       path: f.rel,
+      rootId: f.rootId,
+      relativePath: f.relativePath,
       lang: f.lang.id,
       loc, code, comment, blank,
       bytes: f.bytes,
@@ -2491,17 +2481,19 @@ function stripResolveOnlyKeys(merged) {
 const CACHE_NAME = '.scan-cache.json';
 /** 引擎指纹：代码/语言表/预处理改了，缓存就不能再用（不然会拿旧规则的结果） */
 function engineStamp() {
-  const files = ['scan.mjs', 'languages.mjs', 'preprocess.mjs'];
-  const stamps = files.map((n) => {
-    try { return String(Math.round(fs.statSync(path.join(PROJECT_ROOT, 'src', n)).mtimeMs)); } catch { return '0'; }
-  });
-  return [VERSION, ...stamps].join('-');
+  const hash = createHash('sha256').update(VERSION);
+  for (const name of ['scan.mjs', 'languages.mjs', 'preprocess.mjs', 'modules.mjs']) {
+    hash.update(name).update(fs.readFileSync(path.join(PROJECT_ROOT, 'src', name)));
+  }
+  return hash.digest('hex');
 }
 
-function readScanCache(cacheFile, langSpec, maxKb) {
+function readScanCache(cacheFile, langSpec, maxKb, roots, inputStamp) {
   try {
     const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    if (c.schema !== 1) return null;
+    if (c.schema !== 2) return null;
+    if (c.inputs !== inputStamp) return null;
+    if (JSON.stringify(c.roots) !== JSON.stringify(roots.map(rootIdentity).sort())) return null;
     if (c.engine !== engineStamp()) return null;
     if (c.lang !== langSpec) return null;
     if (c.maxKb !== maxKb) return null;
@@ -2509,10 +2501,10 @@ function readScanCache(cacheFile, langSpec, maxKb) {
   } catch { return null; }
 }
 
-function writeScanCache(cacheFile, langSpec, maxKb, files, byRel) {
+function writeScanCache(cacheFile, langSpec, maxKb, files, byRel, roots, inputStamp) {
   // `files` 用**无原型对象**：键是仓库里的相对路径，万一有个文件就叫 `__proto__`，
   // 普通对象上那句赋值改的是原型而不是数据项（缓存条目静默丢失）。见安全审查记录。
-  const out = { schema: 1, engine: engineStamp(), lang: langSpec, maxKb, at: new Date().toISOString(), files: Object.create(null) };
+  const out = { schema: 2, roots: roots.map(rootIdentity).sort(), inputs: inputStamp, engine: engineStamp(), lang: langSpec, maxKb, at: new Date().toISOString(), files: Object.create(null) };
   for (const f of files) {
     const pf = byRel.get(f.rel);
     if (!pf) continue;                        // 读失败之类的，不缓存（下次重试）
@@ -2527,12 +2519,14 @@ function writeScanCache(cacheFile, langSpec, maxKb, files, byRel) {
  * work 文件里有全部待扫文件（父进程收集好的），这里只挑出本语言那部分。
  */
 export async function workerExtract({ work, lang, emit }) {
+  const started = performance.now();
   const w = JSON.parse(fs.readFileSync(work, 'utf8'));
   const profile = resolveLanguages(lang)[0];
   const files = (w.files || [])
     .filter((f) => f.lang === lang)
-    .map((f) => ({ abs: f.abs, rel: f.rel, root: f.root, bytes: f.bytes, mtime: f.mtime, lang: profile }));
+    .map((f) => ({ ...f, lang: profile }));
   const parts = await extractFiles(files);
+  parts.profile = { language: lang, files: files.length, extractMs: performance.now() - started, peakRssKiB: process.resourceUsage().maxRSS };
   fs.writeFileSync(emit, JSON.stringify(parts));
 }
 
@@ -2671,9 +2665,13 @@ function discoverPathAliases(manifests) {
   return out;
 }
 
-export async function scan(opts) {
+async function scanProject(opts) {
   const t0 = Date.now();
-  const roots = (opts.roots?.length ? opts.roots : ['.']).map((r) => path.resolve(r));
+  let phaseStarted = performance.now();
+  const phases = {};
+  const mark = (name) => { const now = performance.now(); phases[name] = now - phaseStarted; phaseStarted = now; };
+  const roots = [...new Map((opts.roots?.length ? opts.roots : ['.']).map((r) => [rootIdentity(r), path.resolve(r)])).values()];
+  const rootPaths = Object.fromEntries(roots.map((r) => [rootPrefix(r), r]));
   const languages = resolveLanguages(opts.lang);
   const outDir = path.resolve(opts.outDir || 'dist');
   const maxKb = opts.maxKb || 1024;
@@ -2688,12 +2686,16 @@ export async function scan(opts) {
   const excludes = [...(opts.excludes || []), ...(facetsDoc?.config?.exclude || [])];
   // 项目自己的跳过规则：atlas.ignore（存在才生效）+ .gitignore（**默认读**，--no-gitignore 关）
   const ignoreRules = loadIgnoreRules(roots, { gitignore: opts.gitignore !== false });   // 默认读；opts.gitignore === false 才关
-  const { files, skipped, manifests } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
+  const { files, skipped, manifests, directorySnapshots, configSnapshots } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
+  if (facetsDoc) configSnapshots.set(facetsDoc.file, facetsDoc.stamp);
+  const inputStamp = createHash('sha256').update(JSON.stringify([...configSnapshots]
+    .sort((a, b) => a[0].localeCompare(b[0])))).digest('hex');
   // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
   // （清单来自 collectFiles —— 遵守跳过规则，图外的包不再泄进图内）
   const packages = discoverPackages(manifests);
   // ③b TS/JS 的路径别名（tsconfig/jsconfig 的 paths）—— 同一套 ctx 一起传下去
   const aliases = discoverPathAliases(manifests);
+  mark('collectMs');
 
   const langById = new Map(languages.map((l) => [l.id, l]));
   const byLang = new Map();
@@ -2712,7 +2714,7 @@ export async function scan(opts) {
   // ---------- 增量：先看缓存，没变的文件直接复用上次的解析结果 ----------
   const cacheFile = path.join(outDir, CACHE_NAME);
   const langSpec = opts.lang || 'auto';
-  const cache = opts.incremental ? readScanCache(cacheFile, langSpec, maxKb) : null;
+  const cache = opts.incremental ? readScanCache(cacheFile, langSpec, maxKb, roots, inputStamp) : null;
   const reused = new Map();          // rel -> 上次的解析结果
   const freshFiles = [];             // 需要重新解析的
   for (const f of files) {
@@ -2730,6 +2732,7 @@ export async function scan(opts) {
     opts.watchInfo.reused = reused.size;
   }
 
+  mark('cacheReadMs');
   const freshParts = [];
   const failedLanguages = [];   // 整门语言没抽出来（子进程崩了等）——要记进 bundle，不能只飘一行日志
   if (freshFiles.length) {
@@ -2738,7 +2741,7 @@ export async function scan(opts) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'code-atlas-'));
     const work = path.join(tmp, 'files.json');
     fs.writeFileSync(work, JSON.stringify({
-      files: freshFiles.map((f) => ({ abs: f.abs, rel: f.rel, root: f.root, bytes: f.bytes, mtime: f.mtime, lang: f.lang.id })),
+      files: freshFiles.map((f) => ({ ...f, lang: f.lang.id })),
     }));
     const NODE = process.env.NODE_BIN || process.execPath;   // 一般就是 node.exe；特殊情况可用 NODE_BIN 指定
     let n = 0;
@@ -2785,6 +2788,7 @@ export async function scan(opts) {
     }
     rmrf(tmp);
   }
+  mark('parseProcessesMs');
 
   // 按 collectFiles 的顺序合并（缓存命中的 + 新解析的）：顺序稳定，只改几个文件时 id 不会乱跳
   const byRel = new Map(reused);
@@ -2793,6 +2797,7 @@ export async function scan(opts) {
   // 按需候选（OCaml 的值）在这里落地：只留"真被限定名指到"的那些，并重编 id。
   // 没有候选的语言此函数直接原样返回，零影响。
   const { fileRecs, allTypes, allRefs, allUses, fileNamespaces, failures } = pruneOnDemandTypes(merged);
+  mark('mergeMs');
 
   // C/C++ 的 **include 闭包**（≤2 跳）：A include 了 B、B include 了 C → A 也能撑住 C 里的引用。
   // 实测 redis / fmt / ocaml：tsdn_t 这类类型全在被“间接 include”的内部头文件里（jemalloc_internal_includes.h
@@ -3175,7 +3180,9 @@ export async function scan(opts) {
     const fromFile = fileRecs[fromType.file], candFile = fileRecs[cand.file];
     if (!fromFile || !candFile) return false;
     // `name` 也带上：Rust 的 `::` 那档要按"导入最后一段 == 目标名"卡一道（见 modules.mjs 的说明）
-    const target = { ns: cand.ns, fqn: cand.fqn, name: cand.name, path: candFile.path };
+    const target = { ns: cand.ns, fqn: cand.fqn, name: cand.name, path: candFile.path, rootId: candFile.rootId, relativePath: candFile.relativePath };
+    const importContext = { packages, aliases, fromPath: fromFile.path, fromRootId: fromFile.rootId,
+      fromRelativePath: fromFile.relativePath, rootPaths: roots.length > 1 ? rootPaths : undefined };
     /**
      * **符号名要对得上**（2026-10-05 第 8/9 轮）：JS/TS/Python 的 import 带着明确的符号名
      * （`import { Plain } from './alpha'` / `from .models import DTModel`）。
@@ -3190,13 +3197,13 @@ export async function scan(opts) {
     const boundBy = (fromFile.importBinds && cand.name) ? fromFile.importBinds[cand.name] : null;
     const nameGated = Boolean(boundBy && !fromFile.importBindsAll);
     for (const raw of fromFile.imports || []) {
-      if (!importMatchesTarget(raw, target, { packages, aliases, fromPath: fromFile.path })) continue;
+      if (!importMatchesTarget(raw, target, importContext)) continue;
       if (nameGated && !boundBy.includes(raw)) continue;
       return true;
     }
     // Dart 的 part 文件：库文件的 import 对它可见（part 文件自己不能写 import，这是语言语义）
     for (const raw of fromFile.libImports || []) {
-      if (importMatchesTarget(raw, target, { packages, aliases, fromPath: fromFile.path })) return true;
+      if (importMatchesTarget(raw, target, importContext)) return true;
     }
     // 到这里为止都是"**直接**依据"（引用方自己的 import 列表）—— `directOnly` 的问法就此打住
     if (directOnly) return false;
@@ -3992,6 +3999,7 @@ export async function scan(opts) {
   }).sort((x, y) => y.w - x.w);
 
   // ---- 汇总统计 ----
+  mark('resolveAndGraphMs');
   const newestMtime = files.reduce((m, f) => Math.max(m, f.mtime), 0);
   const langStats = {};
   for (const f of fileRecs) {
@@ -4025,13 +4033,16 @@ export async function scan(opts) {
   // ---- git 热度（写进 files[]；非 git 仓库不带这个字段）----
   // changes：最近 200 次提交里被改了几次；lastDaysAgo：最近一次改动距今多少天（永远不会是负数）；
   // untracked：这个文件根本没提交过（新增 / 未提交）——只在确实是这种情形时才带这个键。
-  const heat = git ? (roots.map(gitHeat).find(Boolean) || null) : null;
-  if (heat) {
+  const heats = new Map(roots.map((root) => [rootPrefix(root), gitHeat(root)]));
+  if ([...heats.values()].some(Boolean)) {
     const now = Date.now();
     for (const f of fileRecs) {
-      const h = heat.byPath.get(f.path);
+      const heat = heats.get(f.rootId);
+      if (!heat) continue;
+      const filePath = f.relativePath || f.path;
+      const h = heat.byPath.get(filePath);
       if (h) f.git = { changes: h.changes, lastDaysAgo: Math.max(0, Math.round((now - h.lastTs) / 86400000)) };
-      else if (!heat.tracked.has(f.path)) f.git = { changes: 0, lastDaysAgo: null, untracked: true };
+      else if (!heat.tracked.has(filePath)) f.git = { changes: 0, lastDaysAgo: null, untracked: true };
       else f.git = { changes: 0, lastDaysAgo: null };
     }
   }
@@ -4055,6 +4066,7 @@ export async function scan(opts) {
     source: {
       roots: roots.map((r) => path.resolve(r)),
       labels: roots.map((r) => path.basename(r)),
+      rootPaths,
       files: totals.files,
       bytes: totals.bytes,
       newestMtime: newestMtime ? new Date(newestMtime).toISOString() : null,
@@ -4133,36 +4145,43 @@ export async function scan(opts) {
   // （原来这里有个"释放解析器"的循环：解析已经挪到子进程里，父进程不再持有解析器，所以删掉了）
 
   // 写回增量缓存（下次没变的文件就不用再解析了）
+  mark('metadataMs');
   if (freshFiles.length || reused.size) {
-    try { writeScanCache(cacheFile, langSpec, maxKb, files, byRel); } catch (e) { console.log(t(`  （增量缓存没写成功：${e.message}；不影响这次扫描）`, `  (could not write the incremental cache: ${e.message}; this scan is unaffected)`)); }
+    try { writeScanCache(cacheFile, langSpec, maxKb, files, byRel, roots, inputStamp); } catch (e) { console.log(t(`  （增量缓存没写成功：${e.message}；不影响这次扫描）`, `  (could not write the incremental cache: ${e.message}; this scan is unaffected)`)); }
   }
 
-  return { bundle, outDir, files, skipped, roots };
+  mark('cacheWriteMs');
+  bundle.source.scanMs = Date.now() - t0;
+  const profile = { phases, prePublishMs: bundle.source.scanMs, parentPeakRssKiB: process.resourceUsage().maxRSS,
+    files: files.length, reused: reused.size, reparsed: freshFiles.length,
+    languages: freshParts.map((part) => part.profile).filter(Boolean) };
+  return { bundle, outDir, files, skipped, roots, directorySnapshots, configSnapshots, profile };
 }
 
-/** 扫描并写出 bundle.json */
+export async function scan(opts) {
+  return withOutputLock(path.resolve(opts.outDir || 'dist'), () => scanProject(opts));
+}
+
+/** Scan and publish while holding the same output lock as cache writes. */
 export async function scanToDisk(opts) {
-  const result = await scan(opts);
-  fs.mkdirSync(result.outDir, { recursive: true });
-  const out = path.join(result.outDir, 'bundle.json');
-  // **原子替换**（临时文件 + rename）：监控模式下网页与 MCP 随时在读这个文件，
-  // 绝不能读到写了一半的 JSON。同目录、同卷的 rename 是原子的。
-  const tmpOut = `${out}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpOut, JSON.stringify(result.bundle));
-  try {
-    fs.renameSync(tmpOut, out);
-  } catch {
-    fs.writeFileSync(out, JSON.stringify(result.bundle));   // 极端情况下（被占 / 跨卷）退回去直接写
-    rmFile(tmpOut);                                        // 同样是"删不掉就会留下旧产物"，走复查版
-  }
-  return { ...result, out };
+  return withOutputLock(path.resolve(opts.outDir || 'dist'), async () => {
+    const result = await scanProject(opts);
+    const out = path.join(result.outDir, 'bundle.json');
+    const publishStarted = performance.now();
+    validateBundle(result.bundle);
+    await writeJsonAtomic(out, result.bundle);
+    result.profile.phases.publishMs = performance.now() - publishStarted;
+    result.profile.parentPeakRssKiB = process.resourceUsage().maxRSS;
+    if (opts.profile) await writeJsonAtomic(path.join(result.outDir, 'scan-profile.json'), result.profile);
+    return { ...result, out };
+  });
 }
 
 /**
  * 持续扫描（`scan --watch`）—— 就是用户要的那个「内构监控」：
  *   ① 首扫**分几趟**把地图“长”出来：先数一遍文件，再按 2%/10%/25%/50%/100% 分趟增量扫，
  *      每趟写一次 bundle。复用现成的增量缓存 —— 后一趟只解析新增的那批，不重复干活。
- *   ② 之后每 1.5 秒巡检一遗：已纳入文件的 mtime/大小（再加每个目录的条目数）—变了就增量重扫 → 原子替换 bundle。
+ *   ② 之后每 1.5 秒巡检：文件 mtime/大小、遍历到的目录条目和配置内容—变了就增量重扫。
  *      用**轮询**而不是 fs.watch —— 实测 fs.watch 在本机这条路径里收不到事件（见函数里那段说明）。
  * ⚠ 退出别指望优雅：这个进程在退出阶段会撞 libuv 的 UV_HANDLE_CLOSING（老坑），
  *   所以启动器停监控 / 关窗口时请**直接强杀**（process.kill），别发信号等它自己退。
@@ -4175,6 +4194,8 @@ export async function watchScan(opts) {
   const maxKb = opts.maxKb || 1024;
   const excludes = opts.excludes || [];
   let lastFiles = [];
+  let lastDirectorySnapshots = new Map();
+  let lastConfigSnapshots = new Map();
   let pass = 0;
   let dirtyList = [];        // 本轮巡检发现的改动 → 写进 bundle.source.watch.changed（MCP 拿它提示 AI）
 
@@ -4191,6 +4212,8 @@ export async function watchScan(opts) {
     });
     dirtyList = [];
     lastFiles = r.files || [];
+    lastDirectorySnapshots = r.directorySnapshots;
+    lastConfigSnapshots = r.configSnapshots;
     pass++;
     console.log(t(`  ✓ 地图已更新（第 ${pass} 趟）：${r.bundle.totals.files} 文件 · ${r.bundle.totals.types} 类型 · ${new Date().toLocaleTimeString()}`,
       `  ✓ Map updated (pass ${pass}): ${r.bundle.totals.files} files · ${r.bundle.totals.types} types · ${new Date().toLocaleTimeString()}`));
@@ -4207,21 +4230,26 @@ export async function watchScan(opts) {
     if (i < caps.length - 1) await new Promise((s) => setTimeout(s, 1200));   // 留出时间让网页看出来
   }
 
-  // ② 之后：**轮询**已纳入文件的 mtime/大小（再加每个目录的条目数，用来发现新增/删除），
+  // ② 之后：**轮询**已纳入文件的 mtime/大小和全部已遍历目录的条目，用来发现新增/删除，
   //    变了就增量重扫 + 原子替换 bundle。
   //
   // 为什么不用 fs.watch（原计划是它）：本机实测**装上了却一个事件都收不到、也不报错** ——
   // 同一个目录用裸 `fs.watch` 能收到事件（做过对照），但放进我们这个“先 spawnSync 跑完解析”的
   // 进程里就是没有；而且它在网络盘 / 目录被重建 / 编辑器临时文件上还有一堆坑。
   // 轮询没有句柄、没有平台差异，代价只是每 1.5 秒 stat 一遗（超过 2 万文件自动放宽到 5 秒）。
-  let dirSnap = new Map();           // 目录 -> 条目数（新增 / 删除文件的信号）
+  let dirSnap = new Map();
+  let configSnap = new Map();
+  // Include names and kinds: a rename can preserve the number of entries.
+  const directoryStamp = (dir) => {
+    try {
+      return entryStamp(fs.readdirSync(dir, { withFileTypes: true }));
+    } catch { return null; }
+  };
   const snapDirs = () => {
-    dirSnap = new Map();
-    for (const f of lastFiles) {
-      const d = path.dirname(f.abs);
-      if (dirSnap.has(d)) continue;
-      try { dirSnap.set(d, fs.readdirSync(d).length); } catch { dirSnap.set(d, -1); }
-    }
+    dirSnap = new Map(lastDirectorySnapshots);
+    configSnap = new Map(lastConfigSnapshots);
+    // A temporarily unreadable root still needs a discovery entry.
+    for (const root of roots) if (!dirSnap.has(root)) dirSnap.set(root, null);
   };
 
   let busy = false;
@@ -4239,7 +4267,7 @@ export async function watchScan(opts) {
     if (again) { again = false; fire(); }
   };
 
-  /** 一遗轻量巡检：文件 mtime/大小变了、或某个目录的条目数变了 → 需要重扫（顺手记下改了哪些，给 MCP 提示用） */
+  /** 文件、目录条目或解析配置变化后重扫，并记录改动供 MCP 提示。 */
   const dirty = () => {
     const hits = [];
     for (const f of lastFiles) {
@@ -4247,9 +4275,8 @@ export async function watchScan(opts) {
       try { st = fs.statSync(f.abs); } catch { hits.push(f.rel); continue; }        // 被删 / 改名了
       if (st.size !== f.bytes || Math.round(st.mtimeMs) !== Math.round(f.mtime)) hits.push(f.rel);
     }
-    for (const [d, n] of dirSnap) {
-      try { if (fs.readdirSync(d).length !== n) hits.push(`${path.basename(d)}/`); } catch { hits.push(`${path.basename(d)}/`); }
-    }
+    for (const [d, stamp] of dirSnap) if (directoryStamp(d) !== stamp) hits.push(`${path.basename(d)}/`);
+    for (const [file, stamp] of configSnap) if (fileStamp(file) !== stamp) hits.push(path.basename(file));
     if (hits.length) dirtyList = hits;
     return hits.length > 0;
   };

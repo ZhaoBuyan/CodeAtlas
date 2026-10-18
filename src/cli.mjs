@@ -19,6 +19,7 @@ import { scanToDisk, watchScan, workerExtract, draftFacets, VERSION } from './sc
 import { LANGUAGES } from './languages.mjs';
 import { ingest } from './ingest.mjs';
 import { startMcp, listToolsText } from './mcp.mjs';
+import { fileVersion } from './storage.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, '..', 'web');
@@ -258,22 +259,25 @@ function startServer({ outDir, port = DEFAULT_PORT, open = true, host = '127.0.0
     else if (url === '/data/bundle.json') file = bundlePath;
     else if (url === '/data/bundle.meta') {
       // 监控模式靠它判断“bundle 变了没”：每次只回几十字节，比每 2.5 秒拉 3 MB 的 bundle 便宜得多
-      let st;
-      try { st = fs.statSync(bundlePath); } catch { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('404'); return; }
+      let version;
+      try { version = fileVersion(bundlePath); } catch { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('404'); return; }
       res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
-      res.end(`${Math.round(st.mtimeMs)}-${st.size}`);
+      res.end(version);
       return;
     }
     else if (url === '/web/meta') {
       // 网页文件指纹：页面每 2.5 秒拿它对一次，改了（app.js / index.html / style.css）就自己重载
-      const stamp = ['app.js', 'index.html', 'style.css'].map((f) => {
-        try { const s = fs.statSync(path.join(WEB_DIR, f)); return `${f}:${Math.round(s.mtimeMs)}-${s.size}`; } catch { return `${f}:x`; }
+      const assets = ['app.js', 'index.html', 'style.css', 'bundle-loader.js', 'query-model.js'].map((f) => path.join(WEB_DIR, f))
+        .concat(path.join(HERE, '..', 'shared', 'bundle-contract.mjs'));
+      const stamp = assets.map((file) => {
+        try { return fileVersion(file); } catch { return 'missing'; }
       }).join('|');
       res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
       res.end(stamp);
       return;
     }
     else if (url === '/vendor/d3.js') file = path.join(HERE, '..', 'node_modules', 'd3', 'dist', 'd3.min.js');
+    else if (url === '/shared/bundle-contract.mjs') file = path.join(HERE, '..', 'shared', 'bundle-contract.mjs');
     else if (url.startsWith('/web/')) file = insideDir(WEB_DIR, url.slice(5));
     else file = insideDir(WEB_DIR, url.replace(/^\/+/, ''));
     // file 可能是 null（想往外爬，比如 /../package.json）→ 当成“不存在”处理
@@ -354,6 +358,7 @@ async function cmdScan(argv) {
     incremental: opts.incremental !== undefined,
     // 遵守项目自己的 .gitignore：**默认开**（2026-09-23：agent 工作流里临时文件进图是常态）；--no-gitignore 关掉
     gitignore: opts['no-gitignore'] === undefined,
+    profile: opts.profile !== undefined,
   };
   // --watch：持续扫描（启动器里那个「内构监控」）—— 先分趟把地图长出来，然后一直监听、改了自动重扫。
   // ⚠ 这个分支**不会返回**（事件循环里挂着 watcher）；停止请强杀进程。

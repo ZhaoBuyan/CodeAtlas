@@ -9,6 +9,8 @@
  *   · 读期 `evidenceOf()` 用它判“这条边有没有 import 支撑”。
  */
 
+import path from 'node:path';
+
 /** 源码后缀：判“import 是否指到这个文件”时用来去掉尾部扩展名（'util.log-or-console' 这种不能被当成扩展名切掉） */
 export const SRC_EXT = new Set([
   'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'py', 'java', 'cs', 'kt', 'kts', 'go', 'rs', 'rb', 'php',
@@ -42,6 +44,19 @@ export function moduleKey(p) {
 export function importMatchesTarget(rawImport, target, ctx) {
   let imp = String(rawImport || '').replace(/[;,]+$/, '').replace(/^['"]|['"]$/g, '').trim();
   if (!imp) return false;
+  // Multi-root relative imports must resolve against physical roots before the
+  // broad basename heuristics below. This also permits ../other-root/model.js.
+  if (/^\.\.?(?:\/|$)/.test(imp) && ctx?.rootPaths && ctx.fromRelativePath && target.relativePath) {
+    const fromRoot = ctx.rootPaths[ctx.fromRootId], toRoot = ctx.rootPaths[target.rootId];
+    if (fromRoot && toRoot) {
+      const canonical = (p) => process.platform === 'win32' ? p.toLowerCase() : p;
+      const base = canonical(path.resolve(fromRoot, path.dirname(ctx.fromRelativePath), imp));
+      const dest = canonical(path.resolve(toRoot, target.relativePath));
+      if (dest === base || dest.startsWith(base + path.sep)) return true;
+      for (const ext of SRC_EXT) if (dest === `${base}.${ext}`) return true;
+      return false;
+    }
+  }
   // 通配导入（`import kotlinx.coroutines.*` / `use std::collections::*` / Scala 的 `a.b._`）：
   // 去掉通配尾巴按包比 —— 实测 coroutines 上大量跨包引用卡在这里（通配串一个目标也撞不上）
   const impBase = imp.replace(/(?:\.\*|::\*|\._)$/, '');

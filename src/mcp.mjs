@@ -23,6 +23,8 @@ import path from 'node:path';
 import { t as T, isEn, sysLabel } from './i18n.mjs';
 // 模块名归一 / import 是否能指到目标 —— 与扫描期（scan.mjs 的 resolveName）**共用同一套口径**
 import { moduleKey, importMatchesTarget } from './modules.mjs';
+import { validateBundle } from '../shared/bundle-contract.mjs';
+import { fileVersion, readStableJson } from './storage.mjs';
 
 export function listToolsText() {
   return TOOLS.map((t) => {
@@ -107,6 +109,7 @@ const INSTRUCTIONS = [
 ].join('\n');
 
 export function buildIndex(b) {
+  validateBundle(b);
   const byId = new Map(b.types.map((t) => [t.id, t]));
   const files = new Map(b.files.map((f) => [f.id, f]));
   const ins = new Map();
@@ -303,7 +306,9 @@ function evidenceRecomputed(idx, e) {
   if (!src || !dst) return 'name';
   if (src.file === dst.file) return 'same';
   const f = idx.files.get(src.file);
-  const target = { ns: dst.ns, fqn: dst.fqn, path: idx.files.get(dst.file)?.path };
+  const targetFile = idx.files.get(dst.file);
+  const target = { ns: dst.ns, fqn: dst.fqn, name: dst.name, path: targetFile?.path,
+    rootId: targetFile?.rootId, relativePath: targetFile?.relativePath };
   if (f && target.path) {
     // 仓库自身的包名（package.json 的 name → 包目录）+ TS/JS 的路径别名（tsconfig paths）：
     // 与扫描期同一套口径
@@ -314,7 +319,8 @@ function evidenceRecomputed(idx, e) {
         : null;
     }
     // 读期与扫描期必须同一套口径（项目里那条"自相矛盾"的教训）：相对导入要带上**引用方路径**才能解析
-    const ctxFor = { ...(idx._pkgCtx || {}), fromPath: f.path };
+    const ctxFor = { ...(idx._pkgCtx || {}), fromPath: f.path, fromRootId: f.rootId,
+      fromRelativePath: f.relativePath, rootPaths: idx.b.source.roots.length > 1 ? idx.b.source.rootPaths : undefined };
     // 符号名要对得上（与扫描期 hasImportBacking 同一口径，见那里的说明）：
     // 这个名字是被**哪条** import 引进来的 → 依据只能来自那一条
     const boundBy = (f.importBinds && target.name) ? f.importBinds[target.name] : null;
@@ -1101,12 +1107,19 @@ function toolSubgraph(idx, a) {
 
 function toolFile(idx, a) {
   const q = String(a.path || '').toLowerCase();
-  const f = idx.b.files.find((x) => x.path.toLowerCase().includes(q));
+  const exact = idx.b.files.find((x) => x.path.toLowerCase() === q);
+  const matches = exact ? [exact] : idx.b.files.filter((x) => x.path.toLowerCase().includes(q));
+  if (matches.length > 1) return T(
+    `匹配到 ${matches.length} 个文件，请使用完整路径：\n${matches.slice(0, 20).map((f) => f.path).join('\n')}`,
+    `${matches.length} files match; use a full path:\n${matches.slice(0, 20).map((f) => f.path).join('\n')}`);
+  const f = matches[0];
   if (!f) return T(`没有匹配 "${a.path}" 的文件。用 search 可以按文件名片段搜符号。`, `No file matches "${a.path}". Use search to find symbols by file-name fragment.`);
   const types = idx.b.types.filter((t) => t.file === f.id);
   const lines = [
     T(`${f.path}  [${f.lang}]  ${f.loc} 行（其中代码 ${f.code} / 注释 ${f.comment} / 空 ${f.blank}）`, `${f.path}  [${f.lang}]  ${f.loc} lines total (code ${f.code} / comment ${f.comment} / blank ${f.blank})`),
   ];
+  const root = idx.b.source.rootPaths?.[f.rootId];
+  if (root) lines.push(T(`扫描根：${root}；根内路径：${f.relativePath}`, `Scan root: ${root}; relative path: ${f.relativePath}`));
   if (f.doc) lines.push(T(`说明：${briefDoc(f.doc, 120)}`, `Doc: ${briefDoc(f.doc, 120)}`));   // 文件头注释的“半句话”（AI 实测：注释的信息密度高于图）
   if (f.errors) lines.push(T(`注意：${f.errors} 处解析异常`, `Note: ${f.errors} parse errors`));
   // `types`：默认（all）**把类型清单列全** —— AI 实测明确说这是"性价比最高的一类输出"
@@ -1423,11 +1436,11 @@ const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, r
 
 function callTool(idx, name, args, sess) {
   const fn = IMPL[name];
-  if (!fn) return T(`未知工具：${name}`, `Unknown tool: ${name}`);
+  if (!Object.hasOwn(IMPL, name)) return { text: T(`未知工具：${name}`, `Unknown tool: ${name}`), isError: true };
   try {
-    return fn(idx, args || {}, sess || {});
+    return { text: fn(idx, args || {}, sess || {}), isError: false };
   } catch (err) {
-    return T(`工具执行出错：${err.message}`, `Tool failed: ${err.message}`);
+    return { text: T(`工具执行出错：${err.message}`, `Tool failed: ${err.message}`), isError: true };
   }
 }
 
@@ -1440,8 +1453,9 @@ export function startMcp({ bundlePath }) {
     process.stderr.write(T(`MCP：找不到 ${bundlePath}，先跑一次扫描（atlas <路径>）\n`, `MCP: cannot find ${bundlePath} — run a scan first (atlas <path>)\n`));
     process.exit(1);
   }
-  let idx = buildIndex(JSON.parse(fs.readFileSync(bundlePath, 'utf8')));
-  let mtime = fs.statSync(bundlePath).mtimeMs;
+  const initial = readStableJson(bundlePath);
+  let idx = buildIndex(initial.value);
+  let version = initial.version;
   process.stderr.write(T(`MCP 就绪：${bundlePath}（${idx.b.types.length} 个类型，${TOOLS.length} 个工具）\n`, `MCP ready: ${bundlePath} (${idx.b.types.length} types, ${TOOLS.length} tools)\n`));
   if (process.stdin.isTTY) {
     process.stderr.write(T('提示：这是 stdio 服务 —— 它在等客户端发 JSON-RPC，直接跑就是这个样子（不是卡死）。\n', 'Note: this is a stdio service — it waits for the client to send JSON-RPC, so running it directly looks like this (it is not hung).\n'));
@@ -1454,18 +1468,26 @@ export function startMcp({ bundlePath }) {
   // 换新了要**告诉 AI**（reloaded）：它的上下文里可能还留着旧图上的结论 —— 下一个工具结果尾部会挂一条“图更新过、请重查”
   // sess：本进程的“会话状态”（AI 实测反馈：快照戳/图例/口径块每次都重复是固定税）—— 只在首次或图更新后重发
   let reloaded = false;
+  let reloadError = '';
   const sess = { stampShown: false, refsFull: false, impactFull: false };
   function maybeReload() {
     try {
-      const tm = fs.statSync(bundlePath).mtimeMs;
-      if (tm !== mtime) {
-        mtime = tm;
-        idx = buildIndex(JSON.parse(fs.readFileSync(bundlePath, 'utf8')));
+      const nextVersion = fileVersion(bundlePath);
+      if (nextVersion !== version) {
+        const candidate = readStableJson(bundlePath);
+        const nextIndex = buildIndex(candidate.value);
+        idx = nextIndex;
+        version = candidate.version;
+        reloadError = '';
         reloaded = true;
         sess.stampShown = false; sess.refsFull = false; sess.impactFull = false;
         process.stderr.write(T(`MCP：检测到 bundle 更新，已重载（${idx.b.types.length} 个类型）\n`, `MCP: bundle changed, reloaded (${idx.b.types.length} types)\n`));
-      }
-    } catch { /* 读不到就继续用旧的 */ }
+      } else reloadError = '';
+    } catch (error) {
+      const message = String(error.message || error).slice(0, 300);
+      if (message !== reloadError) process.stderr.write(`MCP: keeping the last valid bundle; reload failed: ${message}\n`);
+      reloadError = message;
+    }
   }
 
   const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -1473,21 +1495,43 @@ export function startMcp({ bundlePath }) {
   const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
 
   let buf = '';
+  let bufferedBytes = 0;
+  let dropping = false;
+  const maxMessageBytes = 1024 * 1024;
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
-    buf += chunk;
-    let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (line) handle(line);
+    const pieces = chunk.split('\n');
+    for (let i = 0; i < pieces.length; i++) {
+      if (!dropping) {
+        bufferedBytes += Buffer.byteLength(pieces[i], 'utf8');
+        if (bufferedBytes > maxMessageBytes) {
+          fail(null, -32600, 'Message exceeds 1 MiB');
+          dropping = true;
+          buf = '';
+        } else buf += pieces[i];
+      }
+      if (i < pieces.length - 1) {
+        const line = buf.trim();
+        if (!dropping && line) handle(line);
+        buf = ''; bufferedBytes = 0; dropping = false;
+      }
     }
   });
 
   function handle(line) {
     let msg;
-    try { msg = JSON.parse(line); } catch { return; }
+    try { msg = JSON.parse(line); } catch { return fail(null, -32700, 'Invalid JSON'); }
+    const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+    if (!object(msg) || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string'
+      || (Object.hasOwn(msg, 'id') && !(msg.id === null || typeof msg.id === 'string' || typeof msg.id === 'number'))) {
+      return fail(null, -32600, 'Invalid JSON-RPC request');
+    }
     const { id, method, params } = msg;
+    if (params !== undefined && !object(params)) {
+      if (Object.hasOwn(msg, 'id')) fail(id, -32602, 'params must be an object');
+      return;
+    }
+    if (!Object.hasOwn(msg, 'id')) return; // Notifications do not produce responses.
     if (method === 'initialize') {
       return ok(id, {
         protocolVersion: PROTOCOL,
@@ -1505,12 +1549,28 @@ export function startMcp({ bundlePath }) {
     if (method === 'tools/list') return ok(id, { tools: TOOLS });
     if (method === 'tools/call') {
       const name = params?.name;
-      const args = params?.arguments || {};
+      if (typeof name !== 'string') return fail(id, -32602, 'Tool name must be a string');
+      const tool = TOOLS.find((tool) => tool.name === name);
+      if (!tool) return fail(id, -32602, `Unknown tool: ${name}`);
+      const args = params.arguments === undefined ? {} : params.arguments;
+      if (!object(args)) return fail(id, -32602, 'Tool arguments must be an object');
+      const schema = tool.inputSchema;
+      for (const key of schema.required || []) {
+        if (!Object.hasOwn(args, key)) return fail(id, -32602, `Missing argument: ${key}`);
+      }
+      for (const [key, value] of Object.entries(args)) {
+        const property = schema.properties?.[key];
+        if (!property && schema.additionalProperties === false) return fail(id, -32602, `Unknown argument: ${key}`);
+        if (property && (typeof value !== property.type || (property.enum && !property.enum.includes(value)))) {
+          return fail(id, -32602, `Invalid argument: ${key}`);
+        }
+      }
       maybeReload();
-      const text = callTool(idx, name, args, sess);
+      const { text, isError } = callTool(idx, name, args, sess);
       // 快照戳只挂**本会话首次**（或图更新后首次）的非 overview 结果（AI 实测反馈：每次重复是固定税）；
       // 图更新那一条已带时间，不重复挂
       let body = text;
+      if (reloadError) body += `\n${T('注意：新图重载失败，当前回答使用上一份有效快照。', 'Warning: bundle reload failed; this answer uses the last valid snapshot.')} ${reloadError}`;
       if (name !== 'overview') {
         if (reloaded) sess.stampShown = true;
         else if (!sess.stampShown) { body += `\n${T(`（快照 ${stampShort(idx.b)}）`, `(snapshot ${stampShort(idx.b)})`)}`; sess.stampShown = true; }
@@ -1520,7 +1580,7 @@ export function startMcp({ bundlePath }) {
         body += `\n${mapUpdateNote(idx.b)}`;
         reloaded = false;
       }
-      return ok(id, { content: [{ type: 'text', text: body }], isError: false });
+      return ok(id, { content: [{ type: 'text', text: body }], isError });
     }
     if (id !== undefined) fail(id, -32601, T(`不支持的方法：${method}`, `Unsupported method: ${method}`));
   }
