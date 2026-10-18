@@ -180,9 +180,8 @@ built by CI from the tagged commit (the paths below are just where the local bui
 - **Release flow**: tag and push — `git tag v1.4.0 && git push origin v1.4.0` (push that one tag; **avoid `--tags`**,
   which would push local backup / experiment tags too). CI runs the tests, builds both exes
   and attaches them to a GitHub Release (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
-- **Three places carry the version** and have to move together: `launcher/CodeAtlas.Launcher.csproj`’s `<Version>`
-  (what the exe and the window title show), `src/scan.mjs`’s `VERSION` (bundle metadata + the incremental cache
-  fingerprint) and `package.json`’s `version`.
+- **Change the product version only in `package.json`.** Both the engine and launcher read it.
+  `npm run check:version -- --launcher` verifies the evaluated build version; release tags must be `v<version>`.
 
 ## Scanning without source (ingest)
 
@@ -616,9 +615,8 @@ so the whole file does not vanish from the map; their members (functions/variabl
   the MCP `overview` and a chip in the web UI all say how many files are affected (`totals.nonUtf8Files`).
   Their comments/strings show up as mojibake even when the parse itself succeeds (so there is no “parse error”),
   and converting them to UTF-8 gives back clean text on the next scan.
-- **What incremental scanning relies on**: `--incremental` decides cache validity from an engine fingerprint
-  (version + mtimes of `scan.mjs`/`languages.mjs`/`preprocess.mjs`). Change the version or those files and the
-  cache is discarded and a full scan runs — it will not quietly answer with results produced by old rules.
+- **What incremental scanning relies on**: scan roots, project configuration, product version and parsing-code content fingerprints.
+  Changing these invalidates the cache; individual file hits still depend on size and modification time.
 - **Look at `unknown` / `ambiguous` first**: dependency edges are **name-matching** level, so same-named
   symbols in different scopes may stay unmatched or be mislinked; those two counts are the "I am not sure here"
   signal. They appear in the report, in the UI and in `bundle.json` — check them before trusting conclusions.

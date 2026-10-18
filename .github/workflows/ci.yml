@@ -1,6 +1,6 @@
 name: CI
 
-# 推代码/PR：跑测试（55 门语言回归 + 三条探针 + MCP 自检 + 启动器构建）
+# 推代码/PR：与本地 test:ci 使用同一个完整检查入口
 # 打 tag（v*）：同上 + 打两个发行版 exe，并挂到 GitHub Release 当下载资产
 on:
   push:
@@ -32,32 +32,8 @@ jobs:
       - name: 装依赖
         run: npm ci
 
-      - name: 语言 fixtures 回归（55 个用例，每个独立进程）
-        run: node tests/run-fixtures.mjs
-
-      # 安全回归（2026-09-25）：
-      #   · probe-web-color    —— facets 的 color 是不可信输入，前端只许放行安全色值
-      #   · probe-payload-quote —— 打包脚本给 PowerShell 传路径时必须转义 `'`（不转义=构建机执行注入）
-      # 运行时回归（同日）：
-      #   · probe-runtime      —— 本地服务 + 路径穿越 + 非法编码 + 增量缓存 + `--watch` 自动重扫
-      - name: 安全与运行时回归（前端颜色入口 / 打包脚本路径引用 / 服务与监控）
-        run: |
-          node tests/probe-web-color.mjs
-          node tests/probe-payload-quote.mjs
-          node tests/probe-runtime.mjs
-
-      - name: 先扫一份 bundle（MCP 自检要用）
-        run: node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua
-
-      - name: MCP 协议自检（工具表 / 各工具 / map / impact / 成员搜索）
-        run: node tests/mcp-selftest.mjs tests/.out/ci
-
-      # 这条门是补出来的（2026-10-03）：`npm run launcher` 以前写的是 `dotnet publish ... -o .`，
-      # 在本机 SDK 10 上必失败（输出目录=仓库根 → MSBuild 把 launcher/ 的 .cs 全排掉 → CS5001），
-      # 而 CI 从来没跑过这条脚本 → 坏了没人知道。现在改成 tools/build-launcher.mjs 并发到
-      # out-launcher 再拷回根目录；这一步只验「脚本能跑通、产落在该落的地方」。
-      - name: 启动器能构建（npm run launcher 脚本本身要有门）
-        run: npm run launcher
+      - name: 完整检查（统一入口，含版本 / 引擎 / 安全 / MCP / 启动器）
+        run: npm run test:ci
 
   release:
     name: 打包发行（只在打 tag 时）

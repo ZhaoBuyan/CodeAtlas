@@ -150,8 +150,7 @@ npm run launcher       # 开发模式的启动器 → 仓库根的 CodeAtlas.exe
 - **发版流程**：打 tag 推上去就行 —— `git tag v1.4.0 && git push origin v1.4.0`（**推单个 tag，别用 `--tags`** ——
   那会把本地的备份 / 实验标签（`backup/*`）一起推上去）。CI 会先跑测试，
   然后打两个 exe 并挂到 GitHub Release 当下载资产（见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
-- **版本号有三个地方，必须一起改**：`launcher/CodeAtlas.Launcher.csproj` 的 `<Version>`（exe 与窗口标题显示的就是它）、
-  `src/scan.mjs` 的 `VERSION`（bundle 元数据 + 增量缓存指纹）、`package.json` 的 `version`。
+- **产品版本只改 `package.json` 的 `version`**：引擎和启动器均读取这一来源。`npm run check:version -- --launcher` 校验实际构建版本，发版 tag 必须是对应的 `v<version>`。
 
 ## 没有源码也能扫（ingest）
 
@@ -515,8 +514,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - **文件编码按 UTF-8 读**：不是 UTF-8 的文件会被**认出来并标出来** —— 扫描报告、MCP 的 `overview`、网页顶部的 chip
   都会告诉你受影响的有几个文件（`totals.nonUtf8Files`）。这种文件即使语法树解析成功，注释 / 字符串也会是乱码
   （所以不会报“解析异常”）；转成 UTF-8 再扫一次就干净了。
-- **增量扫描的前提**：`--incremental` 靠引擎指纹（版本 + `scan.mjs`/`languages.mjs`/`preprocess.mjs` 的 mtime）判断缓存能不能用。
-  换了版本或改了这几处，缓存自动作废、本次按全量扫 —— 不会拿旧规则的结果骗你。
+- **增量扫描的前提**：缓存校验扫描根集合、项目配置、产品版本及解析代码内容指纹。切换项目、修改配置或解析规则后，缓存会失效；文件命中仍依据大小与修改时间。
 - **先看 `unknown` / `ambiguous` 两个数**：依赖边是**名字匹配**级别的，同名符号在多个作用域里会匹配不上或误连，这两个计数就是「这里我不敢确定」的信号。
   报告、界面和 `bundle.json` 里都带着；看结论前先看一眼这两个数大不大。
 - **解析失败不静默**：某个文件解析出 ERROR、某门语言的语法包这次没跑起来，都只影响那一块，并且会在报告里点名。
