@@ -70,6 +70,10 @@ if (up) {
   check(idx.status === 200 && idx.text.includes('CODEATLAS_LANG'), '首页 200 且注入了语言');
   const app = await get('/web/app.js');
   check(app.status === 200 && app.text.length > 1000, '静态文件 /web/app.js 200');
+  const loader = await get('/web/bundle-loader.js');
+  check(loader.status === 200 && loader.text.includes('createBundleLoader'), '网页更新模块 200');
+  const contract = await get('/shared/bundle-contract.mjs');
+  check(contract.status === 200 && contract.text.includes('validateBundle'), '共享 bundle 契约模块 200');
   const bundle = await get('/data/bundle.json');
   check(bundle.status === 200 && bundle.text.includes('"edges"'), '/data/bundle.json 200');
   for (const p of ['/..%2Fpackage.json', '/../package.json', '/web/../../package.json']) {

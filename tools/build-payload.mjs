@@ -22,6 +22,7 @@ import { LANGUAGES, WASM_ROOTS, resolveWasm } from '../src/languages.mjs';
 //    已经害过这条流水线一次 —— 残留的 payload.zip 会让 ZipFile::CreateFromDirectory 直接失败。
 //    见 src/fsx.mjs 的文件头。
 import { rmrf, rmFile } from '../src/fsx.mjs';
+import { payloadSourceFiles } from './payload-files.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -72,36 +73,13 @@ function findRealNode() {
 // ---------------------------------------------------------------------------
 console.log(`\nCode Atlas · 打包引擎（${withNode ? '完全版：带 node.exe' : '精简版：不带 node'}）\n`);
 
-rmrf(STAGE);
+if (!rmrf(STAGE)) throw new Error(`Cannot clear payload staging directory: ${STAGE}`);
 fs.mkdirSync(STAGE, { recursive: true });
 
 // 1) 引擎代码与前端
-const srcFiles = fs.readdirSync(path.join(ROOT, 'src')).filter((f) => f.endsWith('.mjs')).map((f) => [`src/${f}`, null]);
-const webFiles = fs.readdirSync(path.join(ROOT, 'web')).map((f) => [`web/${f}`, null]);
-copy([...srcFiles, ...webFiles, ...listConfigs()]);
-
-/**
- * configs/：默认只带 **git 跟踪的** 那部分。
- * 各人自己的项目分组规则是私有的（已 gitignore），不该跟着 exe 发给别人；
- * 要全带（自己用）就加 --all-configs。
- */
-function listConfigs() {
-  const dir = path.join(ROOT, 'configs');
-  const all = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-  if (args.includes('--all-configs')) return all.map((f) => [`configs/${f}`, null]);
-  try {
-    const tracked = execFileSync('git', ['ls-files', 'configs'], { cwd: ROOT, encoding: 'utf8' })
-      .split('\n').map((s) => s.trim()).filter(Boolean).map((p) => path.basename(p));
-    const kept = all.filter((f) => tracked.includes(f));
-    if (kept.length !== all.length) {
-      console.log(`  configs：带 ${kept.length} 个（跳掉 ${all.length - kept.length} 个未入库的私有规则；自己用要全带上就加 --all-configs）`);
-    }
-    return kept.map((f) => [`configs/${f}`, null]);
-  } catch {
-    console.log('  configs：git 不可用，按目录里的全带');
-    return all.map((f) => [`configs/${f}`, null]);
-  }
-}
+const allConfigs = args.includes('--all-configs');
+if (allConfigs) console.log('  --all-configs: including local project configuration files by explicit request');
+copy(payloadSourceFiles(ROOT, { allConfigs }).map((file) => [file, null]));
 
 // 2) 顶层说明性文件（许可证 / 第三方声明 / 版本信息）
 copy([
@@ -186,6 +164,11 @@ fs.writeFileSync(path.join(STAGE, 'payload.json'), JSON.stringify(meta, null, 2)
 const walk = (dir, base = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? walk(path.join(dir, e.name), `${base}${e.name}/`) : [`${base}${e.name}`]);
 const files = walk(STAGE);
+const manifest = files.sort().map((file) => ({ path: file, bytes: fs.statSync(path.join(STAGE, file)).size,
+  sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(STAGE, file))).digest('hex') }));
+fs.writeFileSync(path.join(STAGE, 'payload-files.json'), JSON.stringify({ files: manifest }, null, 2) + '\n');
+console.log(`  发行清单：${manifest.length} 个文件（含 SHA-256；清单自身不参与哈希）`);
+files.push('payload-files.json');
 const bytes = files.reduce((a, f) => a + fs.statSync(path.join(STAGE, f)).size, 0);
 console.log(`  暂存：${files.length} 个文件 / ${(bytes / 1048576).toFixed(1)} MB`);
 

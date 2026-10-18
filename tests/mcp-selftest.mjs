@@ -275,7 +275,7 @@ const withMember = bundle.types.find((t) => (t.memberList || []).some((x) => x.n
 if (withMember) {
   const m = withMember.memberList.find((x) => x.n);
   const q = `${withMember.fqn}.${m.n}`;
-  const r = await call('refs', { name: q, dir: 'in' });
+  const r = await call('refs', { name: q, direction: 'in' });
   check(!/找不到匹配/.test(r) && r.includes(`id=${withMember.id}`), 'refs（类型.成员 → 指回所属类型）', q);
   const sr = await call('search', { query: m.n, scope: 'member' });
   check(sr.includes(`所属类型 id=${withMember.id}`) || sr.includes(`owner type id=${withMember.id}`), 'search（成员命中带所属类型 id）', m.n);
@@ -285,7 +285,7 @@ if (withMember) {
 check(/按代码行|by code lines/.test(overview), 'overview 写明“按代码行”', '最大的文件（按代码行）');
 const anyFile = bundle.files.find((f) => f.loc > 0 && f.path);
 if (anyFile) {
-  const fi = await call('file', { path: anyFile.path.split('/').pop() });
+  const fi = await call('file', { path: anyFile.path });
   check(/其中代码|lines total/.test(fi), 'file 写明总行与代码行', `行数：${fi.match(/[\d,]+ 行[^\n]*|[\d,]+ lines total[^\n]*/)?.[0] || '（读不到）'}`.slice(0, 70));
 }
 

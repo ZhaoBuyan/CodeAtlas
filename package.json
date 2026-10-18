@@ -9,26 +9,24 @@
     "atlas": "src/cli.mjs"
   },
   "//scripts": [
-    "⚠ test 与 test:ci 跑的是**两张不同的图**，改引擎/自检时两条都要跑：",
-    "  test     —— 自检跑 dist（本仓库自己的图，有 src/ 与 configs/）；pretest 会先 `npm run scan:self`",
-    "              把它**现扫**一遍 —— dist 以前靠手工重扫（上一次是 09-23），会悄悄过期：",
-    "              '本地全绿'可能是在旧代码的图上跑出来的（2026-10-03 换新图时立刻露出一条红门）",
-    "  test:ci  —— 与 .github/workflows/ci.yml **逐字一致**：现扫 tests/fixtures 再自检",
-    "两者内容不同 → '本地全绿'和 'CI 红'可以同时成立（2026-09-23 真踩过：一条门写死了 src/mcp.mjs，",
-    "dist 有、fixtures 没有 → 假红藏了一整轮）。"
+    "test: 自扫当前项目，再用 dist 做 MCP 自检；test:ci: 与 CI 使用同一入口，含启动器构建。",
+    "check:engine 不需要 .NET；check:all 只跑一次公共回归，再检查两张图与启动器。",
+    "检查步骤统一维护在 tools/check.mjs；产品版本只维护 package.json。"
   ],
   "scripts": {
     "scan": "node src/cli.mjs scan",
     "scan:self": "node tools/scan-self.mjs",
     "serve": "node src/cli.mjs serve",
-    "pretest": "npm run scan:self",
-    "test": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node tests/probe-runtime.mjs && node tests/mcp-selftest.mjs",
-    "test:ci": "node tests/run-fixtures.mjs && node tests/probe-web-color.mjs && node tests/probe-runtime.mjs && node src/cli.mjs scan tests/fixtures --out tests/.out/ci --lang csharp,typescript,javascript,tsx,go,rust,lua && node tests/mcp-selftest.mjs tests/.out/ci",
+    "test": "node tools/check.mjs --mode self",
+    "test:ci": "node tools/check.mjs --mode ci --launcher",
     "probe": "node tests/probe-nodes.mjs",
     "probe:profile": "node tests/probe-profile-nodes.mjs",
     "probe:web": "node tests/probe-web-color.mjs",
     "probe:runtime": "node tests/probe-runtime.mjs",
+    "probe:integrity": "node tests/probe-scan-integrity.mjs",
+    "probe:updates": "node --test tests/probe-bundle-updates.mjs",
     "probe:payload": "node tests/probe-payload-quote.mjs",
+    "probe:launcher": "node tests/probe-launcher.mjs",
     "probe:abi": "node tests/probe-abi.mjs",
     "probe:mem": "node tests/probe-grammars.mjs",
     "probe:tree": "node tools/probe-tree.mjs",
@@ -42,7 +40,13 @@
     "payload:lite": "node tools/build-payload.mjs --no-node",
     "publish:sc": "node tools/build-payload.mjs && dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:CodeAtlasEdition=full -p:CodeAtlasPayload=payload.zip -o publish-sc",
     "publish:lite": "node tools/build-payload.mjs --no-node && dotnet publish launcher/CodeAtlas.Launcher.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:CodeAtlasEdition=lite -p:CodeAtlasPayload=payload-lite.zip -o publish-lite",
-    "publish": "npm run publish:sc && npm run publish:lite"
+    "publish": "npm run publish:sc && npm run publish:lite",
+    "check:engine": "node tools/check.mjs --mode ci",
+    "check:all": "node tools/check.mjs --mode both --launcher",
+    "check:version": "node tools/check-version.mjs",
+    "benchmark": "node tools/benchmark.mjs",
+    "prepublish:sc": "node tools/check-version.mjs --launcher",
+    "prepublish:lite": "node tools/check-version.mjs --launcher"
   },
   "engines": {
     "node": ">=20"
