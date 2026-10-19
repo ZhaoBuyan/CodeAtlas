@@ -559,6 +559,13 @@ for (const c of [...CASES, ...EXTRA_CASES]) {
       else push(!e, `${what} ${e ? `不该存在，实际权重 ${e.w}` : '不存在（对）'}`);
     }
   }
+  // File identity matters for partial declarations with the same FQN.
+  for (const [fromFile, from, toFile, to, kind, want] of c.fileEdges || []) {
+    const found = b.edges.some((e) => e.kind === kind
+      && b.files[b.types[e.from].file].path === fromFile && b.types[e.from].fqn === from
+      && b.files[b.types[e.to].file].path === toFile && b.types[e.to].fqn === to);
+    push(found === want, `${fromFile}::${from} → ${toFile}::${to}（${kind}）${want ? '存在' : '不存在'}`);
+  }
   /**
    * 按**档位**断同一条边（2026-10-04 加的）：`refEdges` 只能断"在不在"，
    * 而"有据（import）还是猜的（unique/name）"是另一件必须钉住的事 ——

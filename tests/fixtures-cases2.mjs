@@ -7,6 +7,29 @@
  */
 export const EXTRA_CASES = [
   {
+    // C# reference roles: declarations and value-member names are not global types.
+    // Preserve real global/nested/generic types and private access across partial files.
+    // The pre-fix fixture contains each negative edge; MixedOwner's false member use
+    // raises the genuine RoleUser dependency from weight 2 to 3 before the fix.
+    dir: 'csharp-reference-roles', lang: 'csharp',
+    names: ['DeclOwner', 'MemberOwner', 'ValidOwner', 'MixedOwner', 'WrongPrivate', 'ConverterOwner', 'GenericChild'],
+    errorsMax: 0,
+    refEdges: [
+      ['Clients.DeclOwner', 'Source', false], ['Clients.DeclOwner', 'InitConstants', true],
+      ['Clients.MemberOwner', 'Status', false], ['Clients.MemberOwner', 'RoleUser', false], ['Clients.MemberOwner', 'Error', false],
+      ['Clients.WrongPrivate', 'BitOperations', false], ['Clients.ConverterOwner', 'JsonConverter', false],
+      ['Clients.ValidOwner', 'LegitGlobal', true], ['Clients.ValidOwner', 'Preserved.Inner', true], ['Clients.ValidOwner', 'GenericBox', true],
+      ['RoleAccessDerived', 'RoleSharedNested', true],
+    ],
+    refTiers: [['Clients.ValidOwner', 'Preserved.Inner', 'import']],
+    edgeWeights: [['Clients.MixedOwner', 'RoleUser', 'ref', 2]],
+    extends: ['GenericChild -> GenericBase'],
+    fileEdges: [
+      ['Partial.cs', 'HashCode', 'Targets.cs', 'BitOperations', 'ref', true],
+      ['Owners.cs', 'Clients.ConverterOwner', 'Targets.cs', 'JsonConverter', 'inherit', false],
+    ],
+  },
+  {
     // Protobuf（2026-09-25 新加）：package / message / enum / service / 嵌套 message / import。
     // 实测要点（`工作文档\样本库\probe-any.mjs`，零 ERROR）：
     //   · 名字在 message_name / enum_name / service_name / rpc_name 上（没有 `name` 字段）→ 钩子；

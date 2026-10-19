@@ -650,18 +650,21 @@ function baseNameOf(node) {
 }
 
 /** 收集一组基类/接口名 */
-function collectBaseNames(node, out) {
+function collectBaseNames(node, out, arities, arityOf) {
   const listTypes = new Set(['base_list', 'super_interfaces', 'interface_type_list', 'type_list', 'extends_clause', 'implements_clause', 'delegation_specifiers', 'superclass', 'implements_interfaces', 'union_member_types']);
   if (listTypes.has(node.type)) {
     // 列表型节点要**递归**：GraphQL 的 implements_interfaces / union_member_types 是左递归嵌套的
     //（`implements Node & Timestamped` 外层只直接挂着最后一个名字，只取一层就会漏掉前面的）。
     // 实测：不递归时 Query 的基类只剩 ["Timestamped"]，Node 丢了。
-    for (const c of node.namedChildren) collectBaseNames(c, out);
+    for (const c of node.namedChildren) collectBaseNames(c, out, arities, arityOf);
     return;
   }
   if (node.type === 'type_arguments' || node.type === 'type_parameter') return;
   const name = baseNameOf(node);
-  if (name && /^[A-Za-z_$][\w$.]*$/.test(name)) out.push(name.split('.').pop());
+  if (name && /^[A-Za-z_$][\w$.]*$/.test(name)) {
+    out.push(name.split('.').pop());
+    if (arities) arities.push(arityOf(node));
+  }
 }
 
 
@@ -1225,15 +1228,22 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   function addRef(node) {
     if (skipIds.has(node.id)) return;
     const name = node.text;
+    const memberName = !!lang.memberReferenceOf?.(node);
+    const arity = lang.refArityOf?.(node);
+    const role = memberName || arity > 0 ? { ...(memberName ? { memberName: true } : null), ...(arity > 0 ? { arity } : null) } : null;
+    const suffix = `${memberName ? '|member' : ''}${arity > 0 ? `|arity:${arity}` : ''}`;
     const t = currentType();
     if (!t) {
-      fileRefCount.set(name, (fileRefCount.get(name) || 0) + 1);
+      const key = `${name}${suffix}`;
+      const cur = fileRefCount.get(key);
+      if (cur) cur.n++;
+      else fileRefCount.set(key, { name, n: 1, ...role });
       return;
     }
-    const key = `${t.index}|${name}`;
+    const key = `${t.index}|${name}${suffix}`;
     const cur = refCount.get(key);
     if (cur) cur.n++;
-    else refCount.set(key, { owner: t.index, name, n: 1 });
+    else refCount.set(key, { owner: t.index, name, n: 1, ...role });
   }
 
   // 有些语法会把注释挂在 import / namespace 节点里面（Kotlin 就是），收 import 时顺手把它们捞出来，别漏掉注释
@@ -1259,19 +1269,21 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
     const nm = nameOf(node, lang);
     if (!nm && !lang.anonymousName) return null;
     const bases = [];
+    const baseArities = lang.refArityOf ? [] : null;
+    const genericArity = lang.typeArityOf?.(node);
     for (const field of lang.baseFields || []) {
       const b = node.childForFieldName(field);
-      if (b) collectBaseNames(b, bases);
+      if (b) collectBaseNames(b, bases, baseArities, lang.refArityOf);
     }
     if (lang.baseNodes?.length) {
       const findBaseNodes = (n) => {
         for (const c of n.namedChildren) {
-          if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases);
+          if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases, baseArities, lang.refArityOf);
           else if (!lang.types[c.type]) findBaseNodes(c);
         }
       };
       for (const c of node.namedChildren) {
-        if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases);
+        if (lang.baseNodes.includes(c.type)) collectBaseNames(c, bases, baseArities, lang.refArityOf);
         else if (!lang.types[c.type] && !lang.members[c.type]) findBaseNodes(c);
       }
     }
@@ -1285,11 +1297,14 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
       startRow: node.startPosition.row,
       endRow: node.endPosition.row,
       bases,
+      ...(baseArities?.some((n) => n > 0) ? { baseArities } : null),
+      ...(Number.isInteger(genericArity) ? { genericArity } : null),
       doc: languageDoc(lang, node, comments, lines),
       members: {},
       memberList: [],
       complexity: 1,
       parent: currentType() ? currentType().index : null,
+      ...(currentType() && lang.privateTypeOf?.(node) ? { privateNested: true } : null),
     };
     // 类型本身也留一份签名：JS/TS 的顶层函数、C#/Java 的 record 主构造函数都算"类型"，
     // 它们的参数表不在任何成员上（不给的话 symbol 里就完全看不到它收什么参数）。
@@ -1634,7 +1649,7 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   walk(tree.rootNode);
   if (fns) nsStack.pop();
   for (const r of refCount.values()) refs.push(r);
-  for (const [name, n] of fileRefCount) fileScope.refs.push({ name, n });
+  for (const r of fileRefCount.values()) fileScope.refs.push(r);
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
     console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
   }
@@ -2073,6 +2088,9 @@ async function extractFiles(files) {
         // 没抽到就没有这两个键（不是空值）——读侧看到没有就是"不知道"
         ...(t.p ? { p: t.p } : null),
         ...(t.r ? { r: t.r } : null),
+        ...(t.privateNested ? { privateNested: true } : null),
+        ...(Number.isInteger(t.genericArity) ? { genericArity: t.genericArity } : null),
+        ...(t.baseArities ? { baseArities: t.baseArities } : null),
         members: t.members,
         memberList: t.memberList,
         complexity: t.complexity,
@@ -2086,7 +2104,7 @@ async function extractFiles(files) {
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
       };
       for (const r of facts.refs) {
-        if (r.owner === t.index) part.refs.push({ t: id, name: r.name, n: r.n });
+        if (r.owner === t.index) part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
       }
       for (const u of facts.uses) {
         if (u.t === t.index) part.uses.push({ t: id, n: u.n, l: u.l, c: u.c });
@@ -2138,7 +2156,7 @@ async function extractFiles(files) {
         system: null,
         systemRule: null,
       });
-      for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name, n: r.n });
+      for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
     }
 
     // ① 文件级（类型之外）的调用位置：挂到**文件**上，不管有没有合成 module 节点 ——
@@ -2304,7 +2322,7 @@ function mergeParts(parts) {
         out.allTypes.push({ ...t, id: t.id + tOff, file: fileId, parent: t.parent == null ? null : t.parent + tOff });
       }
       // n = 这个"解析前的名字"在同一个 owner 里被引用了几次（权重就是从这里来的）
-      for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name, n: r.n || 1 });
+      for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name, n: r.n || 1, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
       for (const u of pf.uses || []) out.allUses.push({ owner: u.t + tOff, n: u.n, l: u.l, c: u.c });
       out.fileNamespaces.push(pf.ns || {});
     }
@@ -2470,6 +2488,9 @@ function stripResolveOnlyKeys(merged) {
     delete t.hasModulePrefix;
     delete t.abstract;
     delete t.synthModule;
+    delete t.privateNested;
+    delete t.genericArity;
+    delete t.baseArities;
   }
   return merged;
 }
@@ -3472,7 +3493,28 @@ async function scanProject(opts) {
    * "跳过局部名"是**清噪声**还是**会丢真边**。
    */
   const localLog = [];
-  const resolveName = (name, fromTypeId) => {
+  const containingTypeKeys = new Map();
+  const containingTypeKey = (id) => {
+    if (containingTypeKeys.has(id)) return containingTypeKeys.get(id);
+    const type = allTypes[id];
+    if (!type) return null;
+    const prefix = type.parent == null ? type.ns : containingTypeKey(type.parent);
+    const key = `${prefix}\u0000${type.name}`;
+    containingTypeKeys.set(id, key);
+    return key;
+  };
+  const privateTypeAccessible = (fromId, target) => {
+    if (!target.privateNested || target.parent == null) return true;
+    const container = containingTypeKey(target.parent);
+    for (let id = fromId; id != null; id = allTypes[id]?.parent) {
+      if (containingTypeKey(id) === container) return true;
+    }
+    return false;
+  };
+  const referenceArityMatches = (ref, target) => !(ref?.arity > 0 && Number.isInteger(target.genericArity)
+    && ref.arity !== target.genericArity);
+
+  const resolveNameCandidate = (name, fromTypeId) => {
     // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的，
     // 所以必须按完整限定名精确匹配 —— 匹配不上就**放弃**，绝不能退化成"按叶子名撞"。
     //
@@ -3880,6 +3922,21 @@ async function scanProject(opts) {
     return null;
   };
 
+  // Validate the existing choice, without resolving again against a smaller pool:
+  // rejecting one impossible target does not prove another same-name target valid.
+  const resolveName = (name, fromTypeId, refInfo) => {
+    const hit = resolveNameCandidate(name, fromTypeId);
+    if (!hit) return null;
+    const target = allTypes[hit.id];
+    const fromLang = fileRecs[allTypes[fromTypeId]?.file]?.lang;
+    const invalidMember = fromLang === 'csharp' && refInfo?.memberName && !target.ns && target.parent == null;
+    if (invalidMember || !privateTypeAccessible(fromTypeId, target) || !referenceArityMatches(refInfo, target)) {
+      noteUnresolved('unknown', name, fromTypeId);
+      return null;
+    }
+    return hit;
+  };
+
   // ---- 建图：引用 + 继承 ----
   // 权重 = 引用**次数**（同一个 owner 里同名字出现几次）：
   //   · 网页里连线的粗细（stroke-width = min(4, 1 + log2(1 + w))）、依赖矩阵的浓淡都用它
@@ -3934,12 +3991,13 @@ async function scanProject(opts) {
   };
 
   for (const r of allRefs) {
-    const hit = resolveName(r.name, r.owner);
+    const hit = resolveName(r.name, r.owner, r);
     if (hit) addEdge(r.owner, hit.id, 'ref', r.n || 1, tierOf(r.owner, hit.id, hit));
   }
   for (const t of allTypes) {
-    for (const b of t.bases) {
-      const hit = resolveName(b, t.id);
+    for (let i = 0; i < t.bases.length; i++) {
+      const b = t.bases[i];
+      const hit = resolveName(b, t.id, t.baseArities?.[i] > 0 ? { arity: t.baseArities[i] } : undefined);
       if (hit) addEdge(t.id, hit.id, 'inherit', 1, tierOf(t.id, hit.id, hit));
     }
   }

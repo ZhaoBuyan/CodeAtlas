@@ -960,6 +960,18 @@ const dartReturnTypeOf = (node) => {
   return null;
 };
 
+// Only report an arity when the source actually supplies a generic argument list.
+// Unknown/error shapes stay unfiltered; a generic argument inside another name
+// must not inherit the outer name's arity.
+const csharpReferenceArity = (node) => {
+  let name = node;
+  if (name.type === 'identifier' && name.parent?.type === 'generic_name'
+    && name.parent.firstNamedChild?.id === name.id) name = name.parent;
+  while (name && ['qualified_name', 'alias_qualified_name'].includes(name.type)) name = name.lastNamedChild;
+  const args = name?.type === 'generic_name' && name.namedChildren.find((c) => c.type === 'type_argument_list');
+  return args && !args.hasError ? args.namedChildren.length : undefined;
+};
+
 export const LANGUAGES = {
   csharp: {
     id: 'csharp',
@@ -974,6 +986,30 @@ export const LANGUAGES = {
     preprocess: 'csharp',
     // 参数名的标识符不算"引用"（否则参数名与类型重名时会产生假依赖）
     skipNameNodes: { parameter: 'name' },
+    // Enum member names declare values; their initializer expressions still contain refs.
+    // Do not turn `MemberList.Source = 1` into a dependency on an unrelated class Source.
+    refFilter: (node) => !(node.parent?.type === 'enum_member_declaration'
+      && node.parent.childForFieldName('name')?.id === node.id),
+    // Preserve the RHS role of `receiver.Name`, including generic member wrappers.
+    // Nested types remain candidates; only an incompatible global top-level target is vetoed.
+    memberReferenceOf: (node) => {
+      const name = node.parent?.type === 'generic_name' && node.parent.firstNamedChild?.id === node.id ? node.parent : node;
+      return name.parent?.type === 'member_access_expression'
+        && name.parent.childForFieldName('name')?.id === name.id;
+    },
+    // Explicit private nested types are accessible only within their containing type.
+    // Partial declarations in separate files share that containing-type identity.
+    privateTypeOf: (node) => {
+      const modifiers = node.namedChildren.filter((c) => c.type === 'modifier').map((c) => c.text);
+      // `private protected` also permits derived types in the same assembly.
+      return modifiers.includes('private') && !modifiers.includes('protected');
+    },
+    typeArityOf: (node) => {
+      const params = node.namedChildren.find((c) => c.type === 'type_parameter_list');
+      if (params && !params.hasError) return params.namedChildren.length;
+      return node.hasError ? undefined : 0;
+    },
+    refArityOf: csharpReferenceArity,
     // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 + 本地变量声明
     localBindings: {
       // 泛型（类型）参数：`class Foo[T]` / `fn f<T>()` 里的那个 T —— 它是**类型**参数，
