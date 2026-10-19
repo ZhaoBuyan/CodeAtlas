@@ -1,12 +1,13 @@
 /** Git snapshot and per-file history; extracted without changing matching semantics. */
 import { execFileSync } from 'node:child_process';
 
-export function gitInfo(root) {
+export function gitInfo(root, measure) {
   const run = (args) => {
-    try {
+    const invoke = () => { try {
       return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'ignore'] })
         .toString().trim();
-    } catch { return null; }
+    } catch { return null; } };
+    return measure ? measure(`info.${args.join(' ')}`, invoke) : invoke();
   };
   const commit = run(['rev-parse', '--short', 'HEAD']);
   if (!commit) return null;
@@ -24,12 +25,13 @@ export function gitInfo(root) {
  *  - 扫描根是仓库的子目录时，git 给的路径是**仓库根**相对的 → 用 `rev-parse --show-prefix` 去掉那段前缀；
  *  - 非 git 仓库（或 git 不可用）返回 null，bundle 里就不带 git 字段（不是“全 0”，而是“不知道”）。
  */
-export function gitHeat(root) {
+export function gitHeat(root, measure) {
   const run = (args) => {
-    try {
+    const invoke = () => { try {
       return execFileSync('git', ['-c', 'core.quotepath=false', '-C', root, ...args], { stdio: ['ignore', 'pipe', 'ignore'] })
         .toString();
-    } catch { return null; }
+    } catch { return null; } };
+    return measure ? measure(`heat.${args.join(' ')}`, invoke) : invoke();
   };
   const log = run(['log', '--numstat', '--pretty=format:%ct', '-n', '200']);
   if (log == null) return null;

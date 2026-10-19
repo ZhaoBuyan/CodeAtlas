@@ -2670,6 +2670,23 @@ async function scanProject(opts) {
   let phaseStarted = performance.now();
   const phases = {};
   const mark = (name) => { const now = performance.now(); phases[name] = now - phaseStarted; phaseStarted = now; };
+  // Opt-in observations around existing work only: no extra Git calls or file walks.
+  // Sections partition metadataMs; gitCalls are nested within its gitInfo/gitHeat sections.
+  const operations = {}, metadata = { sections: {}, gitCalls: {} };
+  const timed = (records, phase, name, run) => {
+    if (!opts.profile) return run();
+    const started = performance.now();
+    let result, failed = false;
+    try { result = run(); return result; }
+    catch (error) { failed = true; throw error; }
+    finally {
+      const record = records[name] ||= { phase, calls: 0, ms: 0, failedCalls: 0 };
+      record.calls++; record.ms += performance.now() - started;
+      // Git helpers preserve their historical null-on-failure behavior.
+      if (failed || (records === metadata.gitCalls && result === null)) record.failedCalls++;
+    }
+  };
+  const measureGit = opts.profile ? (name, run) => timed(metadata.gitCalls, 'metadataMs', name, run) : undefined;
   const roots = [...new Map((opts.roots?.length ? opts.roots : ['.']).map((r) => [rootIdentity(r), path.resolve(r)])).values()];
   const rootPaths = Object.fromEntries(roots.map((r) => [rootPrefix(r), r]));
   const languages = resolveLanguages(opts.lang);
@@ -2682,19 +2699,19 @@ async function scanProject(opts) {
     }
   }
 
-  const facetsDoc = loadFacets(opts, roots);
+  const facetsDoc = timed(operations, 'collectMs', 'config.loadFacets', () => loadFacets(opts, roots));
   const excludes = [...(opts.excludes || []), ...(facetsDoc?.config?.exclude || [])];
   // 项目自己的跳过规则：atlas.ignore（存在才生效）+ .gitignore（**默认读**，--no-gitignore 关）
-  const ignoreRules = loadIgnoreRules(roots, { gitignore: opts.gitignore !== false });   // 默认读；opts.gitignore === false 才关
+  const ignoreRules = timed(operations, 'collectMs', 'config.loadIgnoreRules', () => loadIgnoreRules(roots, { gitignore: opts.gitignore !== false }));   // 默认读；opts.gitignore === false 才关
   const { files, skipped, manifests, directorySnapshots, configSnapshots } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
   if (facetsDoc) configSnapshots.set(facetsDoc.file, facetsDoc.stamp);
   const inputStamp = createHash('sha256').update(JSON.stringify([...configSnapshots]
     .sort((a, b) => a[0].localeCompare(b[0])))).digest('hex');
   // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
   // （清单来自 collectFiles —— 遵守跳过规则，图外的包不再泄进图内）
-  const packages = discoverPackages(manifests);
+  const packages = timed(operations, 'collectMs', 'config.discoverPackages', () => discoverPackages(manifests));
   // ③b TS/JS 的路径别名（tsconfig/jsconfig 的 paths）—— 同一套 ctx 一起传下去
-  const aliases = discoverPathAliases(manifests);
+  const aliases = timed(operations, 'collectMs', 'config.discoverPathAliases', () => discoverPathAliases(manifests));
   mark('collectMs');
 
   const langById = new Map(languages.map((l) => [l.id, l]));
@@ -2714,7 +2731,7 @@ async function scanProject(opts) {
   // ---------- 增量：先看缓存，没变的文件直接复用上次的解析结果 ----------
   const cacheFile = path.join(outDir, CACHE_NAME);
   const langSpec = opts.lang || 'auto';
-  const cache = opts.incremental ? readScanCache(cacheFile, langSpec, maxKb, roots, inputStamp) : null;
+  const cache = opts.incremental ? timed(operations, 'cacheReadMs', 'cache.read', () => readScanCache(cacheFile, langSpec, maxKb, roots, inputStamp)) : null;
   const reused = new Map();          // rel -> 上次的解析结果
   const freshFiles = [];             // 需要重新解析的
   for (const f of files) {
@@ -4000,6 +4017,13 @@ async function scanProject(opts) {
 
   // ---- 汇总统计 ----
   mark('resolveAndGraphMs');
+  let metadataStepStarted = opts.profile ? performance.now() : 0;
+  const metadataStep = (name) => {
+    if (!opts.profile) return;
+    const now = performance.now();
+    metadata.sections[name] = { calls: 1, ms: now - metadataStepStarted };
+    metadataStepStarted = now;
+  };
   const newestMtime = files.reduce((m, f) => Math.max(m, f.mtime), 0);
   const langStats = {};
   for (const f of fileRecs) {
@@ -4026,14 +4050,18 @@ async function scanProject(opts) {
   };
 
   // ---- 系统 / 模块分组（facets 规则）----
+  metadataStep('summary');
   const facets = applyFacets(facetsDoc, allTypes, fileRecs);
+  metadataStep('facets');
 
   // ---- 版本戳 ----
-  const git = roots.map(gitInfo).find(Boolean) || null;
+  const git = roots.map((root) => gitInfo(root, measureGit)).find(Boolean) || null;
+  metadataStep('gitInfo');
   // ---- git 热度（写进 files[]；非 git 仓库不带这个字段）----
   // changes：最近 200 次提交里被改了几次；lastDaysAgo：最近一次改动距今多少天（永远不会是负数）；
   // untracked：这个文件根本没提交过（新增 / 未提交）——只在确实是这种情形时才带这个键。
-  const heats = new Map(roots.map((root) => [rootPrefix(root), gitHeat(root)]));
+  const heats = new Map(roots.map((root) => [rootPrefix(root), gitHeat(root, measureGit)]));
+  metadataStep('gitHeat');
   if ([...heats.values()].some(Boolean)) {
     const now = Date.now();
     for (const f of fileRecs) {
@@ -4046,6 +4074,7 @@ async function scanProject(opts) {
       else f.git = { changes: 0, lastDaysAgo: null };
     }
   }
+  metadataStep('attachGit');
   // 图已经建完 → 只给解析期用的内部键在这里统一摘掉（`abstract` 就是建边时用的，见
   // stripResolveOnlyKeys）。放在**造 bundle 之前**：`serve` / `mcp` 这些不是走 scanToDisk
   // 写盘的路径也拿的是这个对象，漏了它们 bundle 里就带着内部键。
@@ -4145,15 +4174,17 @@ async function scanProject(opts) {
   // （原来这里有个"释放解析器"的循环：解析已经挪到子进程里，父进程不再持有解析器，所以删掉了）
 
   // 写回增量缓存（下次没变的文件就不用再解析了）
+  metadataStep('bundle');
   mark('metadataMs');
   if (freshFiles.length || reused.size) {
-    try { writeScanCache(cacheFile, langSpec, maxKb, files, byRel, roots, inputStamp); } catch (e) { console.log(t(`  （增量缓存没写成功：${e.message}；不影响这次扫描）`, `  (could not write the incremental cache: ${e.message}; this scan is unaffected)`)); }
+    try { timed(operations, 'cacheWriteMs', 'cache.write', () => writeScanCache(cacheFile, langSpec, maxKb, files, byRel, roots, inputStamp)); } catch (e) { console.log(t(`  （增量缓存没写成功：${e.message}；不影响这次扫描）`, `  (could not write the incremental cache: ${e.message}; this scan is unaffected)`)); }
   }
 
   mark('cacheWriteMs');
   bundle.source.scanMs = Date.now() - t0;
   const profile = { phases, prePublishMs: bundle.source.scanMs, parentPeakRssKiB: process.resourceUsage().maxRSS,
     files: files.length, reused: reused.size, reparsed: freshFiles.length,
+    ...(opts.profile ? { metadata, operations } : {}),
     languages: freshParts.map((part) => part.profile).filter(Boolean) };
   return { bundle, outDir, files, skipped, roots, directorySnapshots, configSnapshots, profile };
 }
