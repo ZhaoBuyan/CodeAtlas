@@ -72,7 +72,7 @@ export function validateBundle(bundle) {
       type.tags.forEach((value) => string(value, `types[${i}].tags`));
     }
     reference(type.file, files, `types[${i}].file`);
-    if (type.parent != null) reference(type.parent, types, `types[${i}].parent`);
+    if (type.parent != null) reference(type.parent, types, `types[${i}].parent (${String(type.fqn || type.name)} → parent=${String(type.parent)})`);
     for (const key of ['bases', 'memberList']) array(type[key], `types[${i}].${key}`);
     type.bases.forEach((value) => string(value, `types[${i}].bases`));
     type.memberList.forEach((member, j) => {

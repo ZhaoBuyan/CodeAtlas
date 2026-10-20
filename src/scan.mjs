@@ -2064,6 +2064,17 @@ async function extractFiles(files) {
         dupOwners.get(id).push(i);
       }
     }
+    // Index once per file instead of scanning every reference/use for every
+    // type. Buckets preserve original order, including duplicate owners.
+    const refsByOwner = new Map(), usesByOwner = new Map();
+    for (const r of facts.refs) {
+      if (!refsByOwner.has(r.owner)) refsByOwner.set(r.owner, []);
+      refsByOwner.get(r.owner).push(r);
+    }
+    for (const u of facts.uses) {
+      if (!usesByOwner.has(u.t)) usesByOwner.set(u.t, []);
+      usesByOwner.get(u.t).push(u);
+    }
     for (let i = 0; i < facts.types.length; i++) {
       const t = facts.types[i];
       const id = keepIdx.get(i);
@@ -2111,11 +2122,11 @@ async function extractFiles(files) {
         fanOut: 0,
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
       };
-      for (const r of facts.refs) {
-        if (r.owner === t.index) part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
+      for (const r of refsByOwner.get(t.index) || []) {
+        part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
       }
-      for (const u of facts.uses) {
-        if (u.t === t.index) part.uses.push({ t: id, n: u.n, l: u.l, c: u.c });
+      for (const u of usesByOwner.get(t.index) || []) {
+        part.uses.push({ t: id, n: u.n, l: u.l, c: u.c });
       }
     }
 
@@ -2449,7 +2460,14 @@ function pruneOnDemandTypes(merged) {
     if (!keep[i]) continue;
     const t = all[i];
     const nt = { ...t, id: map[i] };
-    if (nt.parent != null) nt.parent = map[nt.parent] ?? null;
+    if (nt.parent != null) {
+      // ⚠ `map` 里**没被保留**的类型是 `-1`（L2418 的 fill 哨兵）—— 以前写 `map[nt.parent] ?? null`，
+      // 但 `-1` 不是 null/undefined ⇒ 会把 **-1 直接写进 bundle**，bundle 里就出现悬空 parent ✗。
+      // 实测：OCaml 的 `module S` / `type tag` 这类（父类型被剪掉的）共 324 个，`validateBundle` 直接中止整个扫描
+      // ⇒ 3 个 OCaml/ReScript 样本**根本扫不出来**（旧版没有这道校验，所以一直没暴露）。
+      const mapped = map[nt.parent];
+      nt.parent = Number.isInteger(mapped) && mapped >= 0 ? mapped : null;
+    }
     delete nt.onDemand;                            // 内部标记，不写进 bundle
     newTypes.push(nt);
   }
