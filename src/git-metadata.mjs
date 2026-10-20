@@ -33,7 +33,20 @@ export function gitHeat(root, measure) {
     } catch { return null; } };
     return measure ? measure(`heat.${args.join(' ')}`, invoke) : invoke();
   };
-  const log = run(['log', '--numstat', '--pretty=format:%ct', '-n', '200']);
+  // Status-only avoids computing line counts that heat never consumes. Keep an
+  // explicit legacy switch; unusual/rename/copy output falls back as a whole,
+  // preserving the legacy numstat path spelling and merge behavior.
+  let log = null;
+  if (process.env.CODEATLAS_GIT_HEAT_MODE === 'name-status') {
+    const status = run(['log', '--name-status', '--pretty=format:%ct', '-n', '200']);
+    if (status != null) {
+      const lines = status.split('\n');
+      if (lines.every(line => !line || /^\d+$/.test(line) || /^[AMDT]\t[^\t]+$/.test(line))) {
+        log = lines.map(line => /^[AMDT]\t/.test(line) ? `0\t0\t${line.slice(2)}` : line).join('\n');
+      }
+    }
+  }
+  if (log == null) log = run(['log', '--numstat', '--pretty=format:%ct', '-n', '200']);
   if (log == null) return null;
   const prefix = ((run(['rev-parse', '--show-prefix']) || '').trim());
   const rel = (p) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : prefix ? null : p);

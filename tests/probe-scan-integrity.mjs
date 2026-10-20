@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { importMatchesTarget } from '../src/modules.mjs';
+import { queryUnresolved } from '../src/unresolved.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 fs.mkdirSync(path.join(repo, 'tests/.out'), { recursive: true });
@@ -167,6 +168,36 @@ console.log('✓ cache is scoped to roots; unchanged files are still reused');
     for (const reason of ['csharp-member-global', 'csharp-private-container', 'csharp-generic-arity']) assert.ok(summary.byLangWhy[`csharp / ${reason}`]?.n > 0);
   }
   console.log('✓ C# rejected targets are diagnosed with reasons and source/target identity; cold/warm graphs stay identical');
+  const detailBundle = JSON.parse(fs.readFileSync(path.join(out, 'bundle.json')));
+  const details = detailBundle.stats.unresolved.details;
+  assert.equal(details.entries.reduce((n, r) => n + r.n, 0) + details.dropped, detailBundle.unresolved.unknown + detailBundle.unresolved.ambiguous);
+  const original = fs.readFileSync(path.join(out, 'bundle.json'), 'utf8');
+  const mcp = connectMcp('csharp-diagnostics');
+  try {
+    const expected = queryUnresolved(detailBundle, { lang: 'csharp', file: 'Owners.cs', limit: 3 });
+    const response = await mcp.call('tools/call', { name: 'unresolved', arguments: { lang: 'csharp', file: 'Owners.cs', limit: 3 } });
+    assert.equal(response.result.isError, false);
+    for (const row of expected.top) assert.ok(response.result.content[0].text.includes(JSON.stringify(row.name)));
+    assert.equal(fs.readFileSync(path.join(out, 'bundle.json'), 'utf8'), original, 'query never rewrites the snapshot');
+  } finally { mcp.child.kill(); }
+  for (const mode of ['legacy', 'truncated']) {
+    const copy = JSON.parse(original);
+    if (mode === 'legacy') delete copy.stats.unresolved.details;
+    else {
+      const d = copy.stats.unresolved.details;
+      d.dropped = d.entries.slice(1).reduce((n, r) => n + r.n, 0);
+      d.entries = d.entries.slice(0, 1); d.truncated = true;
+    }
+    fs.writeFileSync(path.join(out, 'bundle.json'), JSON.stringify(copy));
+    const client = connectMcp('csharp-diagnostics');
+    try {
+      const response = await client.call('tools/call', { name: 'unresolved', arguments: {} });
+      assert.equal(response.result.isError, false);
+      assert.match(response.result.content[0].text, mode === 'legacy' ? /Source details unavailable/ : /Details truncated/);
+    } finally { client.child.kill(); }
+  }
+  fs.writeFileSync(path.join(out, 'bundle.json'), original);
+  console.log('✓ unresolved MCP queries are read-only, filter persisted data, and disclose legacy/truncated details');
 }
 
 const multi = scan(['a', 'b'], 'multi').bundle;
