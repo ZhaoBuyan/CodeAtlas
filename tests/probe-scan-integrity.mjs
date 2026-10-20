@@ -77,6 +77,36 @@ assert.match(scan(['b'], 'cache', true).log, /reused 0 unchanged files/, 'projec
 console.log('✓ cache is scoped to roots; unchanged files are still reused');
 
 {
+  for (const name of ['keep.js', 'extra/skip.js', 'private=copy.js', 'one.generated.js', 'project.js', 'git.js']) write(`scope/${name}`, 'export class ScopeItem {}\n');
+  write('scope/atlas.ignore', 'project.js\n'); write('scope/.gitignore', 'git.js\n');
+  const plain = scan(['scope'], 'scope-default').bundle;
+  const empty = scan(['scope'], 'scope-empty', false, ['--ignore-patterns=   ']).bundle;
+  for (const key of ['files', 'types', 'edges', 'totals']) assert.deepEqual(empty[key], plain[key]);
+  const rules = 'extra/\r\nprivate=copy.js\r\n*.generated.js';
+  const custom = scan(['scope'], 'scope-custom', false, [`--ignore-patterns=${rules}`]).bundle;
+  assert.deepEqual(custom.files.map((f) => f.path), ['keep.js']);
+  assert.ok(custom.stats.skipped.projectBySrc['--ignore-patterns'] >= 2);
+  const override = scan(['scope'], 'scope-custom', true, ['--ignore-patterns=private=copy.js']);
+  assert.match(override.log, /reused 0 unchanged files/, 'changing explicit rules invalidates cached extraction');
+  assert.equal(override.bundle.files.length, 3);
+  const noGit = scan(['scope'], 'scope-no-git', false, [`--ignore-patterns=${rules}`, '--no-gitignore']).bundle;
+  assert.deepEqual(noGit.files.map((f) => f.path).sort(), ['git.js', 'keep.js']);
+  const out = path.join(work, 'scope-auto');
+  const auto = spawn(node, [cli, path.join(work, 'scope'), '--out', out, '--lang', 'javascript', `--ignore-patterns=${rules}`, '--no-open', '--port', '0'], { cwd: repo, env, windowsHide: true });
+  let autoLog = '';
+  auto.stdout.on('data', (b) => { autoLog += b; }); auto.stderr.on('data', (b) => { autoLog += b; });
+  try {
+    await waitFor(() => fs.existsSync(path.join(out, 'bundle.json')) || auto.exitCode !== null, 'auto entry exclusions');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, 'bundle.json'))).files.map((f) => f.path), ['keep.js'], autoLog);
+  } finally { auto.kill(); }
+  const ingested = path.join(work, 'scope-ingest');
+  const ingest = spawnSync(node, [cli, 'ingest', path.join(work, 'scope'), '--out', ingested, '--lang', 'javascript', `--ignore-patterns=${rules}`, '--no-gitignore'], { cwd: repo, env, windowsHide: true, encoding: 'utf8', timeout: 60000 });
+  assert.equal(ingest.status, 0, ingest.stdout + ingest.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ingested, 'bundle.json'))).files.map((f) => f.path).sort(), ['git.js', 'keep.js']);
+  console.log('✓ explicit rules compose with project rules across scan/auto entries, preserve blank defaults and invalidate caches');
+}
+
+{
   const file = write('hash/main.js', 'export class Alpha {}\n');
   const stamp = new Date('2026-01-01T00:00:00Z');
   fs.utimesSync(file, stamp, stamp);
@@ -235,9 +265,10 @@ try {
 // Hash mode must discover content-only changes before the incremental scan runs.
 {
   const file = write('hash-watch/main.js', 'export class Alpha {}\n');
+  write('hash-watch/omit.js', 'export class Omitted {}\n');
   const stamp = new Date('2026-01-01T00:00:00Z');
   fs.utimesSync(file, stamp, stamp);
-  const child = spawn(node, [cli, 'scan', path.join(work, 'hash-watch'), '--out', path.join(work, 'hash-watch-out'), '--lang', 'javascript', '--watch', '--cache-hash', '--no-open'], { cwd: repo, env, windowsHide: true });
+  const child = spawn(node, [cli, 'scan', path.join(work, 'hash-watch'), '--out', path.join(work, 'hash-watch-out'), '--lang', 'javascript', '--watch', '--cache-hash', '--ignore-patterns=omit.js', '--no-open'], { cwd: repo, env, windowsHide: true });
   let log = '';
   child.stdout.on('data', (b) => { log += b; });
   child.stderr.on('data', (b) => { log += b; });
@@ -247,6 +278,7 @@ try {
     fs.writeFileSync(file, 'export class Bravo {}\n');
     fs.utimesSync(file, stamp, stamp);
     await waitFor(() => read()?.types.some((t) => t.name === 'Bravo'), 'hash watch same-metadata change');
+    assert.deepEqual(read().files.map((f) => f.path), ['main.js'], 'watch stages preserve explicit rules');
     assert.equal(child.exitCode, null, log);
     console.log('✓ hash watch discovers edits with identical size and mtime');
   } finally { child.kill(); }

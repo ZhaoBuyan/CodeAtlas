@@ -110,6 +110,8 @@ namespace CodeAtlas
         public bool Incremental { get; set; }
         /// <summary>扫描时是否按项目自己的 .gitignore 跳过（**默认开**，2026-09-23 起；和“扫描范围”一起选）</summary>
         public bool RespectGitignore { get; set; } = true;
+        /// <summary>显式额外排除规则，一行一条；与 atlas.ignore / .gitignore 叠加。</summary>
+        public string ExtraIgnore { get; set; } = "";
         /// <summary>界面与引擎输出的语言："zh"（默认）或 "en"</summary>
         public string Lang { get; set; } = "zh";
         /// <summary>我们不认识的字段：原样留着。保存时是整体重写，若不带着它们，别的版本写的字段会被抹掉
@@ -352,12 +354,12 @@ namespace CodeAtlas
         /// 读不了一定要说出来：静默回落默认值会让用户觉得"我的设置自己没了"。</summary>
         public static string ConfigError { get; private set; }
 
-        public static Config LoadConfig()
+        public static Config LoadConfig(string configPath = null)
         {
             try
             {
-                if (File.Exists(ConfigPath))
-                    return JsonSerializer.Deserialize<Config>(File.ReadAllText(ConfigPath)) ?? new Config();
+                if (File.Exists(configPath ?? ConfigPath))
+                    return JsonSerializer.Deserialize<Config>(File.ReadAllText(configPath ?? ConfigPath)) ?? new Config();
             }
             catch (Exception ex) { ConfigError = ex.Message; }
             return new Config();
@@ -366,9 +368,9 @@ namespace CodeAtlas
         /// <summary>上次保存配置失败的原因（读不了/写不进去都要能说出来——静默失败会让人以为"设置自己没了"）</summary>
         public static string ConfigSaveError { get; set; }
 
-        public static void SaveConfig(Config c)
+        public static void SaveConfig(Config c, string configPath = null)
         {
-            try { File.WriteAllText(ConfigPath, JsonSerializer.Serialize(c, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false)); }
+            try { File.WriteAllText(configPath ?? ConfigPath, JsonSerializer.Serialize(c, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false)); }
             catch (Exception ex) { ConfigSaveError = ex.Message; }
         }
 
@@ -603,6 +605,7 @@ namespace CodeAtlas
             if (!string.IsNullOrWhiteSpace(langs)) { args.Add("--lang"); args.Add(langs.Trim()); }
             if (cfg.Incremental) args.Add("--incremental");   // 只重解析改过的文件
             if (!cfg.RespectGitignore) args.Add("--no-gitignore"); // 默认按项目自己的 .gitignore 跳过；用户明确关掉才传这个
+            if (!string.IsNullOrWhiteSpace(cfg.ExtraIgnore)) args.Add("--ignore-patterns=" + cfg.ExtraIgnore);
             if (watch) args.Add("--watch");                   // 内构监控：分趟长出来 + 改动自动重扫（不会自己结束）
             // 分组规则：项目设置里记下的那份（没记就让引擎自己找）
             if (!string.IsNullOrWhiteSpace(facets)) { args.Add("--facets"); args.Add(facets.Trim()); }
@@ -1186,10 +1189,11 @@ namespace CodeAtlas
                 MessageBox.Show(this, L.T("读不到语言表：", "Could not read the language list: ") + ex.Message, "Code Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            using var d = new LangPicker(langs, _cfg.Langs, _cfg.RespectGitignore);
+            using var d = new LangPicker(langs, _cfg.Langs, _cfg.RespectGitignore, _cfg.ExtraIgnore);
             if (d.ShowDialog(this) != DialogResult.OK) return;
             _cfg.Langs = d.Result;
             _cfg.RespectGitignore = d.GitignoreWanted;          // 和语言一起选定、一起存
+            _cfg.ExtraIgnore = d.ExtraIgnore;
             Engine.SaveConfig(_cfg);
             if (Engine.ConfigSaveError != null)
             {
@@ -1199,6 +1203,7 @@ namespace CodeAtlas
             _langs.Text = LangsButtonText();
             ApplyLayout(); // 文字变了按钮宽度也变，重排一下免得压到旁边的按钮
             Log(L.T("语言：", "Languages: ") + LangsSummary());
+            Log(L.T("额外排除规则：", "Extra exclusion rules: ") + (string.IsNullOrWhiteSpace(_cfg.ExtraIgnore) ? L.T("无", "none") : _cfg.ExtraIgnore.Replace("\r", "").Replace("\n", " · ")));
         }
 
         private string LangsButtonText()
@@ -1410,6 +1415,10 @@ namespace CodeAtlas
     /// </summary>
     internal sealed class LangPicker : Form
     {
+        private readonly Panel _exclusions = new Panel();
+        private readonly TextBox _extraIgnore = new TextBox();
+        private readonly Label _excludeLabel = new Label();
+        private readonly Label _excludeHint = new Label();
         private readonly CheckedListBox _list = new CheckedListBox();
         private readonly Panel _listHost = new Panel();
         private readonly Label _hint = new Label();
@@ -1425,8 +1434,9 @@ namespace CodeAtlas
 
         /// <summary>要不要按项目自己的 .gitignore 跳过（和语言一起选、一起返回）</summary>
         public bool GitignoreWanted;
+        public string ExtraIgnore { get; private set; } = "";
 
-        public LangPicker(LangInfo[] langs, string current, bool gitignore = true)
+        public LangPicker(LangInfo[] langs, string current, bool gitignore = true, string extraIgnore = "")
         {
             GitignoreWanted = gitignore;
             _langs = langs ?? Array.Empty<LangInfo>();
@@ -1483,7 +1493,7 @@ namespace CodeAtlas
             Launcher.Style(_ok, true);
             _ok.BackColor = Palette.Accent;
             _ok.ForeColor = Palette.Bg;
-            _ok.Click += (s, e) => { Result = ComputeResult(); GitignoreWanted = _list.GetItemChecked(_langs.Length); DialogResult = DialogResult.OK; Close(); };
+            _ok.Click += (s, e) => { Result = ComputeResult(); GitignoreWanted = _list.GetItemChecked(_langs.Length); ExtraIgnore = _extraIgnore.Text.Trim(); DialogResult = DialogResult.OK; Close(); };
             _cancel.Text = L.T("取消", "Cancel");
             Launcher.Style(_cancel);
             _cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -1504,8 +1514,28 @@ namespace CodeAtlas
             bottom.Controls.Add(left);
             bottom.Controls.Add(right);
 
+            _exclusions.Dock = DockStyle.Bottom;
+            _excludeLabel.Text = L.T("额外跳过（全局，每行一条）", "Extra exclusions (all targets, one per line)");
+            _excludeLabel.Dock = DockStyle.Top;
+            _excludeLabel.ForeColor = Palette.Fg;
+            _extraIgnore.Multiline = true;
+            _extraIgnore.ScrollBars = ScrollBars.Vertical;
+            _extraIgnore.Dock = DockStyle.Top;
+            _extraIgnore.BackColor = Palette.Panel;
+            _extraIgnore.ForeColor = Palette.Fg;
+            _extraIgnore.BorderStyle = BorderStyle.FixedSingle;
+            _extraIgnore.Text = extraIgnore ?? "";
+            _excludeHint.Text = L.T("例：cache/、private.cs、*.generated.cs（分别写在一行）。与 atlas.ignore / .gitignore 叠加；留空不额外排除。不支持 ! 反选。",
+                "Examples: cache/, private.cs, *.generated.cs (one per line). Combined with atlas.ignore / .gitignore; blank adds nothing. ! reinclusion is unsupported.");
+            _excludeHint.Dock = DockStyle.Fill;
+            _excludeHint.ForeColor = Palette.Dim;
+            _exclusions.Controls.Add(_excludeHint);
+            _exclusions.Controls.Add(_extraIgnore);
+            _exclusions.Controls.Add(_excludeLabel);
+
             Controls.Add(_listHost);   // Fill 先加
             Controls.Add(_hint);   // 再 Top
+            Controls.Add(_exclusions);
             Controls.Add(bottom);  // 再 Bottom
 
             AcceptButton = _ok;
@@ -1521,6 +1551,10 @@ namespace CodeAtlas
             _hint.Padding = new Padding(pad, (int)(14 * k), pad, (int)(10 * k));
             _hint.Height = (int)(72 * k);
             _listHost.Padding = new Padding(pad, 0, pad, (int)(4 * k));
+            _exclusions.Padding = new Padding(pad, 0, pad, 0);
+            _exclusions.Height = (int)(164 * k);
+            _excludeLabel.Height = (int)(25 * k);
+            _extraIgnore.Height = (int)(65 * k);
             foreach (var c in new Control[] { _onlyCode, _allBtn, _noneBtn, _ok, _cancel })
                 c.Margin = new Padding(0, 0, (int)(8 * k), 0);
             var flowPad = (int)(12 * k);
@@ -1528,7 +1562,7 @@ namespace CodeAtlas
             ((FlowLayoutPanel)_onlyCode.Parent).Padding = new Padding(pad, flowPad, 0, flowPad);
             var wa = Screen.FromPoint(Cursor.Position).WorkingArea;
             int h = Math.Min((int)(660 * k), Math.Max((int)(380 * k), wa.Height - (int)(140 * k)));
-            ClientSize = new Size((int)(470 * k), h);
+            ClientSize = new Size(Math.Min((int)(600 * k), wa.Width - (int)(60 * k)), h);
         }
 
         private void SetChecks(Func<LangInfo, bool> want)

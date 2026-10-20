@@ -443,8 +443,8 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | Emacs Lisp | `.el` | ✅ fixtures（无类型概念 → 顶层函数/变量挂在合成的 module 节点上） |
 | Elixir | `.ex` `.exs` | ✅ fixtures（module / function / struct；注：`defmodule`/`def` 在语法树里是 call 节点，靠专属钩子识别；`alias` 会计入导入，但暂不连成依赖边） |
 
-**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`Dart`、`Elm`、`QL`、`Haskell`、`PowerShell`、`Julia`、`Vue`、`Svelte`…
-`Vue` 单文件组件要先解决“解析内嵌 `<script>`”，`Objective-C` 的 `.m` 与 MATLAB 扩名冲突（只能靠开关指定），这两个是刻意先不做。
+**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`Elm`、`QL`、`Haskell`、`Julia`、`Svelte`…
+`Objective-C` 的 `.m` 与 MATLAB 扩名冲突（只能靠开关指定），因此刻意留待后续处理。
 `TLA+` 的上游没有可直接用的 wasm，放在 `vendor/wasm/` 自己维护；`SystemRDL` 同理 —— 它是我们用 emscripten
 （clang + wasm-ld，不需要 emcc）自己编的，wasm 也放 `vendor/wasm/`（配方见 `src/languages.mjs`）。
 审计命令：`node tests/probe-abi.mjs`（把每个语法包真加载 + 真解析一遍，分清能用 / 用不了）；

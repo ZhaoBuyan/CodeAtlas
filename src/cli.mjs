@@ -37,7 +37,9 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
-      const [k, inline] = a.slice(2).split('=');
+      const equal = a.indexOf('=');
+      const k = a.slice(2, equal < 0 ? undefined : equal);
+      const inline = equal < 0 ? undefined : a.slice(equal + 1);
       const v = inline !== undefined ? inline : k === 'cache-hash' ? 'true' : (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true');
       opts[k] = v;
     } else opts._.push(a);
@@ -338,6 +340,8 @@ async function cmdAuto(argv) {
     facets: opts.facets || null,
     maxKb: Number(opts.maxkb || 1024),
     incremental: opts.incremental !== undefined,
+    ignorePatterns: opts['ignore-patterns'] || '',
+    gitignore: opts['no-gitignore'] === undefined,
   });
   printIngestReport(res);
   // --no-open 的意思是不弹系统浏览器，服务照起（启动器靠这个 URL 把地图嵌进窗口）
@@ -356,6 +360,7 @@ async function cmdScan(argv) {
     facets: opts.facets || null,
     // 增量：默认关（全量）；加 --incremental 才按文件复用上次的解析结果
     incremental: opts.incremental !== undefined,
+    ignorePatterns: opts['ignore-patterns'] || '',
     cacheHash: opts['cache-hash'] !== undefined && opts['cache-hash'] !== 'false',
     // 遵守项目自己的 .gitignore：**默认开**（2026-09-23：agent 工作流里临时文件进图是常态）；--no-gitignore 关掉
     gitignore: opts['no-gitignore'] === undefined,
@@ -397,6 +402,8 @@ async function cmdIngest(argv) {
     facets: opts.facets || null,
     maxKb: Number(opts.maxkb || 1024),
     incremental: opts.incremental !== undefined,
+    ignorePatterns: opts['ignore-patterns'] || '',
+    gitignore: opts['no-gitignore'] === undefined,
   });
   printIngestReport(res);
   if (opts.open !== undefined) {
@@ -552,6 +559,7 @@ const HELP_ZH = `Code Atlas v${VERSION}
   --lang <语言>    只扫指定语言（csharp / typescript / java / lua / auto）
   --facets <文件>  系统/模块分组规则（默认自动找 <目标>/atlas.facets.json 或 configs/<目录名>.facets.json）
   --exclude a,b    额外跳过的目录名
+  --ignore-patterns <规则>  额外排除规则，每行一条，语法同 atlas.ignore（与项目规则叠加）
   --cache-hash     scan 内容校验（配合 --incremental / --watch；增加读取与 SHA-256 成本）
   --work <目录>    反编译产物放哪（默认 ingest/<名字>）`;
 
@@ -579,6 +587,7 @@ Common options:
   --lang <lang>     only scan the given languages (csharp / typescript / java / lua / auto)
   --facets <file>   system/module grouping rules (default: <target>/atlas.facets.json or configs/<dirname>.facets.json)
   --exclude a,b     extra directory names to skip
+  --ignore-patterns <rules>  additional newline-separated atlas.ignore rules (combined with project rules)
   --cache-hash      scan content checks (with --incremental / --watch; adds reads and SHA-256 cost)
   --work <dir>      where decompiled output goes (default ingest/<name>)`;
 

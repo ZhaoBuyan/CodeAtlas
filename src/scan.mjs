@@ -134,7 +134,7 @@ const GENERATED_NAME_RE = /(^<|^_003C)|(__InlineArray|__DisplayClass|PrivateImpl
 //   · 每份 .gitignore 是在**进那一层目录时**读的（collectFiles 调 enterDir），
 //     所以"外层规则先于内层规则"这个顺序天然成立，不用事后排序
 //   · 扫描根**以上**的 .gitignore 不读（那是目标之外的东西）
-function loadIgnoreRules(roots, { gitignore } = {}) {
+function loadIgnoreRules(roots, { gitignore, extraPatterns } = {}) {
   const rules = [];
   const sources = new Set();
   let files = 0;
@@ -144,8 +144,11 @@ function loadIgnoreRules(roots, { gitignore } = {}) {
   const addFile = (rootIdx, base, file, name) => {
     let text;
     try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
-    sources.add(name);
     files++;
+    addText(rootIdx, base, text, name);
+  };
+  const addText = (rootIdx, base, text, name) => {
+    sources.add(name);
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
@@ -162,6 +165,8 @@ function loadIgnoreRules(roots, { gitignore } = {}) {
       }
     }
   };
+
+  if (extraPatterns?.trim()) for (let i = 0; i < roots.length; i++) addText(i, '', extraPatterns, '--ignore-patterns');
 
   return {
     /**
@@ -2725,11 +2730,11 @@ async function scanProject(opts) {
   const facetsDoc = timed(operations, 'collectMs', 'config.loadFacets', () => loadFacets(opts, roots));
   const excludes = [...(opts.excludes || []), ...(facetsDoc?.config?.exclude || [])];
   // 项目自己的跳过规则：atlas.ignore（存在才生效）+ .gitignore（**默认读**，--no-gitignore 关）
-  const ignoreRules = timed(operations, 'collectMs', 'config.loadIgnoreRules', () => loadIgnoreRules(roots, { gitignore: opts.gitignore !== false }));   // 默认读；opts.gitignore === false 才关
+  const ignoreRules = timed(operations, 'collectMs', 'config.loadIgnoreRules', () => loadIgnoreRules(roots, { gitignore: opts.gitignore !== false, extraPatterns: opts.ignorePatterns }));   // 默认读；opts.gitignore === false 才关
   const { files, skipped, manifests, directorySnapshots, configSnapshots } = collectFiles(roots, { languages, maxKb, excludes, budget: opts.fileBudget, ignoreRules });
   if (facetsDoc) configSnapshots.set(facetsDoc.file, facetsDoc.stamp);
   const inputStamp = createHash('sha256').update(JSON.stringify([...configSnapshots]
-    .sort((a, b) => a[0].localeCompare(b[0])))).digest('hex');
+    .sort((a, b) => a[0].localeCompare(b[0])))).update(opts.ignorePatterns || '').digest('hex');
   // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
   // （清单来自 collectFiles —— 遵守跳过规则，图外的包不再泄进图内）
   const packages = timed(operations, 'collectMs', 'config.discoverPackages', () => discoverPackages(manifests));
@@ -4326,7 +4331,7 @@ export async function watchScan(opts) {
   };
 
   // ① 分趟长出来（小项目就一趟全量）
-  const { files: all } = collectFiles(roots, { languages, maxKb, excludes, ignoreRules: loadIgnoreRules(roots, { gitignore: opts.gitignore !== false }) });
+  const { files: all } = collectFiles(roots, { languages, maxKb, excludes, ignoreRules: loadIgnoreRules(roots, { gitignore: opts.gitignore !== false, extraPatterns: opts.ignorePatterns }) });
   const total = all.length;
   const c = (f) => Math.max(20, Math.round(total * f));
   const caps = [...new Set([c(0.02), c(0.1), c(0.25), c(0.5)].filter((n) => n < total).concat([total]))].sort((a, b) => a - b);

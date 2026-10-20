@@ -384,14 +384,14 @@ export async function ingest(o) {
       notes.push(t(`改为扫描它所在的目录：${dir}`, `Scanning its directory instead: ${dir}`));
       const q = autoFacets(path.basename(dir), o.facets);
       if (q.note) notes.push(q.note);
-      const res = await scanToDisk({ roots: [dir], outDir: o.outDir, lang: o.lang, facets: q.facets, maxKb: o.maxKb, incremental: o.incremental, ingest: { original: target, tool: null, sourceDir: dir, notes } });
+      const res = await scanToDisk({ roots: [dir], outDir: o.outDir, lang: o.lang, facets: q.facets, maxKb: o.maxKb, incremental: o.incremental, ignorePatterns: o.ignorePatterns, gitignore: o.gitignore, ingest: { original: target, tool: null, sourceDir: dir, notes } });
       return { bundle: res.bundle, out: res.out, original: target, tool: null, sourceDir: dir, notes };
     }
   }
 
   if (stat.isDirectory() && hasSource(target)) {
     notes.push(t('目录里已有可扫源码，跳过反编译', 'Directory already has source to scan — skipping decompilation'));
-    const res = await scanToDisk({ roots: [target], outDir: o.outDir, lang: o.lang, facets: o.facets, maxKb: o.maxKb, incremental: o.incremental, ingest: { original: target, tool: null, sourceDir: target, notes } });
+    const res = await scanToDisk({ roots: [target], outDir: o.outDir, lang: o.lang, facets: o.facets, maxKb: o.maxKb, incremental: o.incremental, ignorePatterns: o.ignorePatterns, gitignore: o.gitignore, ingest: { original: target, tool: null, sourceDir: target, notes } });
     return { ...res, sourceDir: target, tool: null, notes, original: target };
   }
 
@@ -442,6 +442,6 @@ export async function ingest(o) {
 
   const q = autoFacets(stat.isDirectory() ? baseName : path.basename(target).replace(/\.[^.]+$/, ''), o.facets);
   if (q.note) notes.push(q.note);
-  const res = await scanToDisk({ roots: [sourceDir], outDir: o.outDir, lang: o.lang, facets: q.facets, maxKb: o.maxKb, incremental: o.incremental, ingest: { original: target, tool, sourceDir, notes } });
+  const res = await scanToDisk({ roots: [sourceDir], outDir: o.outDir, lang: o.lang, facets: q.facets, maxKb: o.maxKb, incremental: o.incremental, ignorePatterns: o.ignorePatterns, gitignore: o.gitignore, ingest: { original: target, tool, sourceDir, notes } });
   return { ...res, sourceDir, tool, notes, original: target };
 }

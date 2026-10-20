@@ -525,10 +525,8 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | Emacs Lisp | `.el` | ✅ fixtures (no type concept → top-level functions/variables hang off a synthetic module node) |
 | Elixir | `.ex` `.exs` | ✅ fixtures (module / function / struct; note `defmodule`/`def` are `call` nodes in the tree, recognized by dedicated hooks; `alias` counts as an import but is not linked into an edge yet) |
 
-**No profile yet** (the grammar loads; what's missing is our layer): `Dart`, `Elm`, `QL`, `Haskell`,
-`PowerShell`, `Julia`, `Vue`, `Svelte`…
-`Vue` single-file components first need "parse the embedded `<script>`", and `Objective-C`'s `.m` clashes with
-MATLAB — those two are deliberately deferred.
+**No profile yet** (the grammar loads; what's missing is our layer): `Elm`, `QL`, `Haskell`, `Julia`, `Svelte`…
+`Objective-C`'s `.m` clashes with MATLAB's extension (needs a switch to disambiguate), so it is deliberately deferred.
 `TLA+` has no usable upstream wasm, so it is maintained in `vendor/wasm/`; the same goes for `SystemRDL` —
 we compile it ourselves with emscripten (clang + wasm-ld, no emcc needed) and keep the wasm in `vendor/wasm/`
 (recipe in `src/languages.mjs`).
