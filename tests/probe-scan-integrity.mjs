@@ -132,6 +132,24 @@ console.log('✓ cache is scoped to roots; unchanged files are still reused');
   console.log('✓ optional content hashes detect same-size/same-mtime edits, reuse touches, refresh metadata and match cold graphs');
 }
 
+// Dense files must keep references and call positions attached to their owner.
+{
+  write('dense/owners.js', Array.from({ length: 160 }, (_, i) =>
+    `export class Owner${i} {\nfirst() { return ${i ? `new Owner${i - 1}()` : 'null'}; }\nsecond() { return ${i ? `new Owner${i - 1}()` : 'null'}; }\n}`).join('\n'));
+  const cold = scan(['dense'], 'dense-owners').bundle;
+  const warm = scan(['dense'], 'dense-owners', true).bundle;
+  assert.deepEqual(warm.types, cold.types); assert.deepEqual(warm.edges, cold.edges);
+  assert.equal(cold.types.length, 160); assert.equal(cold.edges.length, 159);
+  const types = new Map(cold.types.map(t => [t.id, t]));
+  for (const edge of cold.edges) {
+    const from = types.get(edge.from), to = types.get(edge.to);
+    assert.equal(Number(from.name.slice(5)), Number(to.name.slice(5)) + 1);
+    assert.equal(edge.w, 2); assert.equal(edge.tier, 'same');
+    assert.deepEqual(from.uses.filter(u => u.n.startsWith('Owner')).map(u => u.n), [to.name, to.name]);
+  }
+  console.log('✓ dense files preserve reference weights, owner identity and call positions across cold/warm scans');
+}
+
 // Rejected C# targets must be visible in the existing diagnostic sidecar.
 {
   const out = path.join(work, 'csharp-diagnostics');
