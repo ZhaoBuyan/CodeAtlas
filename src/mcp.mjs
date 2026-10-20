@@ -1456,6 +1456,8 @@ function toolUnresolved(idx, args) {
   }
   if (q.truncated) lines.push(T(`明细已截断：全图有 ${fmt(q.dropped)} 个解析记录未保存；以下只统计已保存部分，不能当作完整 Top。`,
     `Details truncated: ${fmt(q.dropped)} resolution records were not retained across the snapshot. Below is recorded data only, not a complete Top ranking.`));
+  if (q.droppedByKind) lines.push(T(`未保存记录：unknown ${fmt(q.droppedByKind.unknown)} / ambiguous ${fmt(q.droppedByKind.ambiguous)}；两类额度独立，ambiguous 未保存为 0 时该类明细完整。`,
+    `Unretained records: unknown ${fmt(q.droppedByKind.unknown)} / ambiguous ${fmt(q.droppedByKind.ambiguous)}; quotas are independent. Zero ambiguous drops means complete ambiguous details.`));
   lines.push(T(`筛选后已记录 ${fmt(q.matched)} 个解析记录，${fmt(q.groups)} 组名字/原因（显示前 ${q.top.length}）：`,
     `Recorded matches: ${fmt(q.matched)} resolution records, ${fmt(q.groups)} name/reason groups (showing ${q.top.length}):`));
   if (!q.top.length) lines.push(T('已保存明细中没有匹配项；若明细截断，这不证明源码里没有。', 'No matches in retained details; with truncation this does not prove absence in source.'));

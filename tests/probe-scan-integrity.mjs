@@ -177,6 +177,7 @@ console.log('✓ cache is scoped to roots; unchanged files are still reused');
     const expected = queryUnresolved(detailBundle, { lang: 'csharp', file: 'Owners.cs', limit: 3 });
     const response = await mcp.call('tools/call', { name: 'unresolved', arguments: { lang: 'csharp', file: 'Owners.cs', limit: 3 } });
     assert.equal(response.result.isError, false);
+    assert.match(response.result.content[0].text, /Unretained records: unknown/);
     for (const row of expected.top) assert.ok(response.result.content[0].text.includes(JSON.stringify(row.name)));
     assert.equal(fs.readFileSync(path.join(out, 'bundle.json'), 'utf8'), original, 'query never rewrites the snapshot');
   } finally { mcp.child.kill(); }
@@ -187,6 +188,7 @@ console.log('✓ cache is scoped to roots; unchanged files are still reused');
       const d = copy.stats.unresolved.details;
       d.dropped = d.entries.slice(1).reduce((n, r) => n + r.n, 0);
       d.entries = d.entries.slice(0, 1); d.truncated = true;
+      delete d.droppedByKind; delete d.limits; // Legacy truncated snapshot, without per-kind counters.
     }
     fs.writeFileSync(path.join(out, 'bundle.json'), JSON.stringify(copy));
     const client = connectMcp('csharp-diagnostics');

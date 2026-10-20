@@ -158,6 +158,8 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | `file(path, types?)` | The types inside one file (`types:"count"` for just the total) |
 
 Each tool lists a bounded number of entries and says "first N of M" when it truncates (`limit` / `members` raise it).
+
+Unresolved source details reserve independent quotas: up to 50,000 ambiguous groups and 1,000 unknown groups per scan. Unknown records cannot crowd out ambiguous records. The tool reports missing records by kind; zero ambiguous drops means that category is complete, even if unknown details were truncated. These storage quotas differ from the query's `limit`.
 Every result ends with a snapshot stamp (UTC).
 
 `overview` / `search` / `refs` / `map` / `impact` also take an optional **`exclude`** (comma-separated paths, e.g.
