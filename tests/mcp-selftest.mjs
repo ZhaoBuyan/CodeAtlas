@@ -10,7 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { freshnessNote, parseExclude, isExcluded } from '../src/mcp.mjs';
+import { freshnessNote, parseExclude, isExcluded, listToolsText } from '../src/mcp.mjs';
+import { queryUnresolved } from '../src/unresolved.mjs';
 import { importMatchesTarget } from '../src/modules.mjs';
 import { csharpConditionalDirectives } from '../src/preprocess.mjs';
 import { rmrf } from '../src/fsx.mjs';   // 见 src/fsx.mjs：本环境 DSH 的 node 里 fs.rmSync 会静默不删
@@ -79,6 +80,8 @@ notify('notifications/initialized');
 const tools = await req('tools/list');
 const names = (tools.result?.tools || []).map((t) => t.name);
 check(names.length >= 6, 'tools/list', names.join(', '));
+check(names.includes('unresolved') && listToolsText().includes('unresolved'), 'unresolved 已注册到 MCP 与工具说明');
+check(tools.result.tools.find((t) => t.name === 'unresolved')?.annotations?.readOnlyHint === true, 'unresolved 标记为只读');
 
 // 从 bundle 里挑测试输入
 const hottest = bundle.types.slice().sort((a, b) => b.fanIn - a.fanIn)[0];
@@ -94,8 +97,27 @@ check(/名字匹配|name match/i.test(overview), 'overview 交代可信度前提
 check(/故意没接|left out on purpose/.test(overview), 'overview 交代"没依据、故意没接"的引用数（找不到的直接说）');
 check(/数据快照|Snapshot/.test(overview), 'overview 给数据时效（生成时间/语言/上限）');
 
+
 const search = await call('search', { query: hottest.fqn.slice(0, Math.max(3, Math.floor(hottest.name.length / 2))) });
 check(search.includes(hottest.name), 'search', `找到 ${hottest.name}`);
+
+const unresolvedOutput = await call('unresolved', { limit: 3 });
+const detailRows = bundle.stats?.unresolved?.details?.entries;
+if (Array.isArray(detailRows)) {
+  check(/筛选后已记录|Recorded matches/.test(unresolvedOutput), 'unresolved 返回已保存明细与计数口径');
+  const first = detailRows[0];
+  if (first) {
+    const file = bundle.files.find((f) => f.id === first.file).path;
+    const expected = queryUnresolved(bundle, { lang: first.lang, file, limit: 1 });
+    const filtered = await call('unresolved', { lang: first.lang, file, limit: 1 });
+    check(filtered.includes(JSON.stringify(expected.top[0].name)) && filtered.includes(first.lang), 'unresolved 按来源文件与语言筛选');
+  }
+  const empty = await call('unresolved', { file: '__no_such_source_file__' });
+  check(/没有匹配项|No matches/.test(empty), 'unresolved 无匹配只报告已保存范围');
+  check(/解析引用分组|resolution groups/.test(unresolvedOutput), 'unresolved 不把计数冒充边数或出现次数');
+} else check(/没有来源明细|Source details unavailable/.test(unresolvedOutput), '旧图缺明细时如实提示，不伪造文件信息');
+const invalidUnresolved = await req('tools/call', { name: 'unresolved', arguments: { limit: 0 } });
+check(invalidUnresolved.result?.isError === true, 'unresolved 拒绝越界 Top-N');
 
 const sym = await call('symbol', { name: String(hottest.id) });   // 用 id：多语言 bundle 里同名同全名的类型可能有好几个（C# 和 TS 的 Animal）
 check(sym.includes(hottest.name) && /文件|[Ff]ile/.test(sym), 'symbol', sym.split('\n')[0].slice(0, 70));

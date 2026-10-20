@@ -23,6 +23,7 @@ import { validateBundle, BUNDLE_SCHEMA } from '../shared/bundle-contract.mjs';
 import { withOutputLock, writeJsonAtomic } from './storage.mjs';
 import { VERSION } from './version.mjs';
 import { gitInfo, gitHeat } from './git-metadata.mjs';
+import { createUnresolvedDetails } from './unresolved.mjs';
 
 export const SCHEMA = BUNDLE_SCHEMA;
 export { VERSION };
@@ -2510,7 +2511,7 @@ const CACHE_NAME = '.scan-cache.json';
 /** 引擎指纹：代码/语言表/预处理改了，缓存就不能再用（不然会拿旧规则的结果） */
 function engineStamp() {
   const hash = createHash('sha256').update(VERSION);
-  for (const name of ['scan.mjs', 'languages.mjs', 'preprocess.mjs', 'modules.mjs']) {
+  for (const name of ['scan.mjs', 'languages.mjs', 'preprocess.mjs', 'modules.mjs', 'unresolved.mjs']) {
     hash.update(name).update(fs.readFileSync(path.join(PROJECT_ROOT, 'src', name)));
   }
   return hash.digest('hex');
@@ -3467,9 +3468,11 @@ async function scanProject(opts) {
    */
   const unresolvedByLang = new Map();   // lang → { ambiguous, unknown }
   const unresolvedNames = new Map();    // `${lang}\t${name}` → 次数
-  const noteUnresolved = (why, name, fromTypeId) => {
+  const unresolvedDetails = createUnresolvedDetails();
+  const noteUnresolved = (why, name, fromTypeId, reason = why) => {
     unresolved[why]++;
     const lang = fileRecs[allTypes[fromTypeId]?.file]?.lang || '?';
+    unresolvedDetails.record(allTypes[fromTypeId]?.file, lang, name, why, reason);
     const rec = unresolvedByLang.get(lang) || { ambiguous: 0, unknown: 0 };
     rec[why]++;
     unresolvedByLang.set(lang, rec);
@@ -3950,7 +3953,7 @@ async function scanProject(opts) {
       : !privateTypeAccessible(fromTypeId, target) ? 'csharp-private-container'
         : !referenceArityMatches(refInfo, target) ? 'csharp-generic-arity' : null;
     if (rejection) {
-      noteUnresolved('unknown', name, fromTypeId);
+      noteUnresolved('unknown', name, fromTypeId, rejection);
       // One selected target is rejected here; this is not the original candidate-pool size.
       dbgUnres(name, fromTypeId, rejection, 1, target);
       return null;
@@ -4225,6 +4228,7 @@ async function scanProject(opts) {
       ...unresolved,
       byLang: Object.fromEntries([...unresolvedByLang].sort((a, b) =>
         (b[1].ambiguous + b[1].unknown) - (a[1].ambiguous + a[1].unknown))),
+      details: unresolvedDetails.snapshot(),
       topNames: [...unresolvedNames.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30)
         .map(([k, n]) => { const [lang, nm] = k.split('\t'); return { lang, name: nm, n }; }),
     },

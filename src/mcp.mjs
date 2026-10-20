@@ -25,6 +25,7 @@ import { t as T, isEn, sysLabel } from './i18n.mjs';
 import { moduleKey, importMatchesTarget } from './modules.mjs';
 import { validateBundle } from '../shared/bundle-contract.mjs';
 import { fileVersion, readStableJson } from './storage.mjs';
+import { queryUnresolved } from './unresolved.mjs';
 
 export function listToolsText() {
   return TOOLS.map((t) => {
@@ -51,6 +52,8 @@ const INSTRUCTIONS = [
   'ids) and drill down with symbol / refs / subgraph / impact. When context is tight, call map(budget) first to get the',
   'skeleton (systems -> key types -> key members); if the project has no system grouping config, map says so and degrades',
   'to a most-referenced list instead of pretending to be the whole picture.',
+  'Use unresolved(lang?, file?, limit?) to inspect recorded unresolved names and reasons. It never rescans; old snapshots',
+  'may lack source details and bounded diagnostics may be truncated. Recorded counts are not dependency edges.',
   '',
   'Boundaries you must know (honesty first — do not treat inference as fact):',
   '- Types / members / line counts / imports come from the syntax tree and are trustworthy; dependency edges come from static',
@@ -240,6 +243,16 @@ const TOOLS = [
       },
       additionalProperties: false,
     },
+  },
+  {
+    name: 'unresolved',
+    description: 'Read unresolved reference diagnostics from this snapshot only (never rescans). Filter by exact language id or source-file path fragment; rank recorded names by resolution count. These are not edges or token occurrences. Bounded details may be truncated; old snapshots may lack source details.',
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', properties: {
+      lang: { type: 'string', description: 'Exact language id, e.g. csharp; optional' },
+      file: { type: 'string', description: 'Case-insensitive source-file path fragment, matching all such files; optional' },
+      limit: { type: 'number', description: 'Top recorded names, integer 1-100; default 20' },
+    }, additionalProperties: false },
   },
 ];
 
@@ -1432,7 +1445,27 @@ function toolImpact(idx, a, sess = {}) {
   return out.join('\n');
 }
 
-const IMPL = { overview: toolOverview, search: toolSearch, symbol: toolSymbol, refs: toolRefs, subgraph: toolSubgraph, file: toolFile, list: toolList, map: toolMap, impact: toolImpact };
+function toolUnresolved(idx, args) {
+  const q = queryUnresolved(idx.b, args);
+  const lines = [q.totals ? T(`全图未解析：unknown ${fmt(q.totals.unknown)} / ambiguous ${fmt(q.totals.ambiguous)}`, `Snapshot unresolved: unknown ${fmt(q.totals.unknown)} / ambiguous ${fmt(q.totals.ambiguous)}`)
+    : T('此图未保存有效的未解析总数。', 'Unresolved totals unavailable in this snapshot.')];
+  if (!q.available) {
+    lines.push(T('此图没有来源明细，无法按文件定位或给出筛选后的 Top。请用当前引擎重新扫描；本工具不会重扫。',
+      'Source details unavailable in this snapshot; file filtering and filtered Top rankings are unavailable. Rescan with the current engine; this tool never rescans.'));
+    return lines.join('\n');
+  }
+  if (q.truncated) lines.push(T(`明细已截断：全图有 ${fmt(q.dropped)} 个解析记录未保存；以下只统计已保存部分，不能当作完整 Top。`,
+    `Details truncated: ${fmt(q.dropped)} resolution records were not retained across the snapshot. Below is recorded data only, not a complete Top ranking.`));
+  lines.push(T(`筛选后已记录 ${fmt(q.matched)} 个解析记录，${fmt(q.groups)} 组名字/原因（显示前 ${q.top.length}）：`,
+    `Recorded matches: ${fmt(q.matched)} resolution records, ${fmt(q.groups)} name/reason groups (showing ${q.top.length}):`));
+  if (!q.top.length) lines.push(T('已保存明细中没有匹配项；若明细截断，这不证明源码里没有。', 'No matches in retained details; with truncation this does not prove absence in source.'));
+  for (const r of q.top) lines.push(`  ${r.n}\t[${r.lang}] ${JSON.stringify(r.name)}\t${r.kind} / ${r.reason}\t${r.fileCount} ${T('个文件', 'files')}: ${r.files.map((f) => JSON.stringify(f)).join(', ')}${r.fileCount > r.files.length ? ' …' : ''}`);
+  lines.push(T('计数按解析引用分组/继承解析记账，不是代码出现次数或依赖边数；同名定义不代表可以合法接边。',
+    'Counts follow resolution groups/inheritance attempts, not source-token occurrences or dependency edges; a same-name definition does not prove a valid edge.'));
+  return lines.join('\n');
+}
+
+const IMPL = { unresolved: toolUnresolved, overview: toolOverview, search: toolSearch, symbol: toolSymbol, refs: toolRefs, subgraph: toolSubgraph, file: toolFile, list: toolList, map: toolMap, impact: toolImpact };
 
 function callTool(idx, name, args, sess) {
   const fn = IMPL[name];
