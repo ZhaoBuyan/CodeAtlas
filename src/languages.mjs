@@ -1228,6 +1228,17 @@ export const LANGUAGES = {
       typed_default_parameter: 'name',
     },
     imports: { import_statement: 1, import_from_statement: 1 },
+    /**
+     * **裸名跨文件必须有 import 依据**（Python，2026-10-20）。
+     *
+     * 语义与 Rust 同形：一个模块里的裸名只可能指向 ① 本文件声明的 ② `import`/`from … import` 绑定的
+     * ③ 内置（builtins，真身在图外）。别的模块的顶层名字**没 import 就看不到**（`module.attr` 是限定名，
+     * 走另一条路）；真那么写运行时会 `NameError`。所以「跨文件 + 零 import 依据」的裸名匹配只能是名字巧合 ✗。
+     *
+     * 已知边界：`from x import *` 走 `pyImportBindsAll`；`__init__.py` 的再导出若既没 `import` 也没
+     * `from … import`，本闸视为无据（与"显式优先"的取舍一致）。
+     */
+    bareNameScope: 'import-only',
     // 被 import 引进来的**名字**（见 jsImportedBindings / pyImportedBindings 的说明）：
     // 实测 django 上 `class DateFunctionTests → tests/db_functions/models.py::DTModel`（×142）这类
     // 真引用其实来自 `from .models import DTModel` —— 以前只记路径、不记符号名，于是既没依据、也挡不住同名巧合。
