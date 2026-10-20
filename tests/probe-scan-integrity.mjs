@@ -18,8 +18,8 @@ const write = (rel, text) => {
   fs.writeFileSync(file, text);
   return file;
 };
-const scan = (roots, out, incremental = false) => {
-  const result = spawnSync(node, [cli, 'scan', ...roots.map((r) => path.join(work, r)), '--out', path.join(work, out), '--lang', 'javascript', ...(incremental ? ['--incremental'] : [])],
+const scan = (roots, out, incremental = false, extra = []) => {
+  const result = spawnSync(node, [cli, 'scan', ...roots.map((r) => path.join(work, r)), '--out', path.join(work, out), '--lang', 'javascript', ...(incremental ? ['--incremental'] : []), ...extra],
     { cwd: repo, env, encoding: 'utf8', timeout: 60000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const bundle = JSON.parse(fs.readFileSync(path.join(work, out, 'bundle.json'), 'utf8'));
@@ -75,6 +75,69 @@ assert.equal(switched.bundle.files[0].path, 'same.js', 'single-root paths stay c
 write('b/package.json', '{"name":"changed-project-input"}\n');
 assert.match(scan(['b'], 'cache', true).log, /reused 0 unchanged files/, 'project inputs invalidate cached extraction');
 console.log('✓ cache is scoped to roots; unchanged files are still reused');
+
+{
+  const file = write('hash/main.js', 'export class Alpha {}\n');
+  const stamp = new Date('2026-01-01T00:00:00Z');
+  fs.utimesSync(file, stamp, stamp);
+  const plain = scan(['hash'], 'hash-off').bundle;
+  const cold = scan(['hash'], 'hash-on', false, ['--cache-hash']).bundle;
+  for (const key of ['files', 'types', 'edges', 'totals', 'unresolved']) assert.deepEqual(cold[key], plain[key]);
+  assert.equal(JSON.stringify(cold).includes('contentHash'), false, 'hash is cache-only');
+  const touched = new Date('2026-01-02T00:00:00Z');
+  fs.utimesSync(file, touched, touched);
+  const reused = scan(['hash'], 'hash-on', true, ['--cache-hash']);
+  assert.match(reused.log, /reused 1 unchanged files/);
+  assert.equal(reused.bundle.files[0].mtime, touched.getTime(), 'reused facts get current metadata');
+  fs.writeFileSync(file, 'export class Bravo {}\n');
+  fs.utimesSync(file, touched, touched);
+  const changed = scan(['hash'], 'hash-on', true, ['--cache-hash']);
+  assert.match(changed.log, /reused 0 unchanged files/);
+  assert.deepEqual(changed.bundle.types.map((t) => t.name), ['Bravo']);
+  const fresh = scan(['hash'], 'hash-cold').bundle;
+  for (const key of ['files', 'types', 'edges', 'totals', 'unresolved']) assert.deepEqual(changed.bundle[key], fresh[key]);
+  const missing = scan(['hash'], 'hash-cold', true, ['--cache-hash']);
+  assert.match(missing.log, /reused 0 unchanged files/, 'no hash means reparse, never trust metadata');
+  console.log('✓ optional content hashes detect same-size/same-mtime edits, reuse touches, refresh metadata and match cold graphs');
+}
+
+// Rejected C# targets must be visible in the existing diagnostic sidecar.
+{
+  const out = path.join(work, 'csharp-diagnostics');
+  const sidecar = path.join(out, 'unresolved.tsv');
+  const run = (debug, incremental = false) => {
+    const result = spawnSync(node, [cli, 'scan', path.join(repo, 'tests/fixtures/csharp-reference-roles'), '--out', out, '--lang', 'csharp', ...(incremental ? ['--incremental'] : [])],
+      { cwd: repo, env: { ...env, CA_DEBUG_UNRESOLVED: debug ? sidecar : '' }, encoding: 'utf8', timeout: 60000, windowsHide: true });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    return JSON.parse(fs.readFileSync(path.join(out, 'bundle.json'), 'utf8'));
+  };
+  const plain = run(false);
+  assert.equal(fs.existsSync(sidecar), false, 'diagnostics remain opt-in');
+  for (const incremental of [false, true]) {
+    const diagnosed = run(true, incremental);
+    for (const key of ['files', 'types', 'edges', 'totals', 'unresolved']) assert.deepEqual(diagnosed[key], plain[key], `diagnostics changed ${key}`);
+    assert.deepEqual(diagnosed.stats.unresolved, plain.stats.unresolved);
+    const rows = fs.readFileSync(sidecar, 'utf8').trim().split(/\r?\n/).map((line) => line.split('\t'));
+    for (const [reason, name] of [['csharp-member-global', 'RoleUser'], ['csharp-private-container', 'BitOperations'], ['csharp-generic-arity', 'JsonConverter']]) {
+      const row = rows.find((r) => r[0] === name && r[1] === reason);
+      assert.ok(row, `missing ${reason} diagnostic`);
+      assert.equal(row[2], '1');
+      assert.equal(row[3], 'csharp');
+      assert.equal(row[4], 'Owners.cs');
+      const target = JSON.parse(row[5]);
+      assert.equal(target.file, 'Targets.cs');
+      assert.equal(target.fqn, name);
+      assert.ok(target.line > 0);
+    }
+    assert.equal(rows.length, diagnosed.unresolved.unknown + diagnosed.unresolved.ambiguous);
+    const report = spawnSync(node, [path.join(repo, 'tools/unresolved-report.mjs'), out, '--json'], { cwd: repo, env, encoding: 'utf8', timeout: 60000, windowsHide: true });
+    assert.equal(report.status, 0, report.stderr);
+    const summary = JSON.parse(report.stdout);
+    assert.equal(summary.total, rows.length);
+    for (const reason of ['csharp-member-global', 'csharp-private-container', 'csharp-generic-arity']) assert.ok(summary.byLangWhy[`csharp / ${reason}`]?.n > 0);
+  }
+  console.log('✓ C# rejected targets are diagnosed with reasons and source/target identity; cold/warm graphs stay identical');
+}
 
 const multi = scan(['a', 'b'], 'multi').bundle;
 assert.deepEqual(multi.types.map((t) => t.name).sort(), ['Alpha', 'Bravo']);
@@ -168,5 +231,25 @@ try {
 } catch (error) {
   throw new Error(`${error.message}\n${watchLog}`, { cause: error });
 } finally { watcher.kill(); }
+
+// Hash mode must discover content-only changes before the incremental scan runs.
+{
+  const file = write('hash-watch/main.js', 'export class Alpha {}\n');
+  const stamp = new Date('2026-01-01T00:00:00Z');
+  fs.utimesSync(file, stamp, stamp);
+  const child = spawn(node, [cli, 'scan', path.join(work, 'hash-watch'), '--out', path.join(work, 'hash-watch-out'), '--lang', 'javascript', '--watch', '--cache-hash', '--no-open'], { cwd: repo, env, windowsHide: true });
+  let log = '';
+  child.stdout.on('data', (b) => { log += b; });
+  child.stderr.on('data', (b) => { log += b; });
+  const read = () => { try { return JSON.parse(fs.readFileSync(path.join(work, 'hash-watch-out/bundle.json'), 'utf8')); } catch { return null; } };
+  try {
+    await waitFor(() => log.includes('Watching '), 'hash watch ready');
+    fs.writeFileSync(file, 'export class Bravo {}\n');
+    fs.utimesSync(file, stamp, stamp);
+    await waitFor(() => read()?.types.some((t) => t.name === 'Bravo'), 'hash watch same-metadata change');
+    assert.equal(child.exitCode, null, log);
+    console.log('✓ hash watch discovers edits with identical size and mtime');
+  } finally { child.kill(); }
+}
 
 console.log(`All scan-integrity checks passed. Generated inputs: ${work}`);

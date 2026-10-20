@@ -38,7 +38,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const [k, inline] = a.slice(2).split('=');
-      const v = inline !== undefined ? inline : (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true');
+      const v = inline !== undefined ? inline : k === 'cache-hash' ? 'true' : (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true');
       opts[k] = v;
     } else opts._.push(a);
   }
@@ -356,6 +356,7 @@ async function cmdScan(argv) {
     facets: opts.facets || null,
     // 增量：默认关（全量）；加 --incremental 才按文件复用上次的解析结果
     incremental: opts.incremental !== undefined,
+    cacheHash: opts['cache-hash'] !== undefined && opts['cache-hash'] !== 'false',
     // 遵守项目自己的 .gitignore：**默认开**（2026-09-23：agent 工作流里临时文件进图是常态）；--no-gitignore 关掉
     gitignore: opts['no-gitignore'] === undefined,
     profile: opts.profile !== undefined,
@@ -551,6 +552,7 @@ const HELP_ZH = `Code Atlas v${VERSION}
   --lang <语言>    只扫指定语言（csharp / typescript / java / lua / auto）
   --facets <文件>  系统/模块分组规则（默认自动找 <目标>/atlas.facets.json 或 configs/<目录名>.facets.json）
   --exclude a,b    额外跳过的目录名
+  --cache-hash     scan 内容校验（配合 --incremental / --watch；增加读取与 SHA-256 成本）
   --work <目录>    反编译产物放哪（默认 ingest/<名字>）`;
 
 // 英文帮助：和上面的中文版成对，由 t() 二选一（两份都写在调用点上，改文案时能同时看到）
@@ -577,6 +579,7 @@ Common options:
   --lang <lang>     only scan the given languages (csharp / typescript / java / lua / auto)
   --facets <file>   system/module grouping rules (default: <target>/atlas.facets.json or configs/<dirname>.facets.json)
   --exclude a,b     extra directory names to skip
+  --cache-hash      scan content checks (with --incremental / --watch; adds reads and SHA-256 cost)
   --work <dir>      where decompiled output goes (default ingest/<name>)`;
 
 const HELP = t(HELP_ZH, HELP_EN);

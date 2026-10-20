@@ -123,7 +123,7 @@ for (const [k, v] of [...byLangWhy].sort((a, b) => b[1].n - a[1].n)) {
   const pct = v.n ? Math.round((100 * v.has) / v.n) : 0;
   console.log(`  ${k.padEnd(34)} ${String(v.n).padStart(7)} ${String(v.has).padStart(8)}  (${pct}%)`);
 }
-console.log(`\nTop ${topN} 名字（n · 有定义=真缺口 / 无定义=噪声）：`);
+console.log(`\nTop ${topN} 名字（n · 图上有同名定义仅作线索，不代表可接边）：`);
 for (const [k, n] of [...byName.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN)) {
   const [lang, name] = k.split('\t');
   const defined = hasDef.has(name.slice(name.lastIndexOf('.') + 1));

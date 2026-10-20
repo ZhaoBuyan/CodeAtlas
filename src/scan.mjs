@@ -1968,11 +1968,12 @@ async function extractFiles(files) {
   // 本次扫描的文件清单（相对路径）：`ifaceOnly` 要用它判"这个 .mli 有没有同名 .ml"
   const scannedRels = new Set(files.map((x) => x.rel));
   for (const f of files) {
-    let rawSource;
+    let rawSource, rawSourceBytes;
     let nonUtf8 = false;    try {
       // 顺手查一眼编码：非 UTF-8（GBK / ANSI 之类）会被**静默**替换成 U+FFFD —— 注释和字符串变乱码，
       // 而语法树不报错，用户容易以为是工具的问题。统计出来，在报告 / MCP / 网页里都说一句。
       const rawBuf = fs.readFileSync(f.abs);
+      rawSourceBytes = rawBuf;
       rawSource = rawBuf.toString('utf8');
       if (Buffer.compare(Buffer.from(rawSource, 'utf8'), rawBuf) !== 0) nonUtf8 = true;
     } catch (err) {
@@ -1981,6 +1982,7 @@ async function extractFiles(files) {
     }
     // 本文件的结果：id 都是**文件内局部**的，父进程合并时统一平移到全局
     const part = { rel: f.rel, lang: f.lang.id, ns: null, types: [], refs: [], uses: [], file: null };
+    if (f.cacheHash) part.contentHash = createHash('sha256').update(rawSourceBytes).digest('hex');
     const parser = await getParser(f.lang);
     let source = f.lang.preprocess ? preprocess(rawSource, f.lang.preprocess) : rawSource;
     let tree = parser.parse(source);
@@ -2529,7 +2531,7 @@ function writeScanCache(cacheFile, langSpec, maxKb, files, byRel, roots, inputSt
   for (const f of files) {
     const pf = byRel.get(f.rel);
     if (!pf) continue;                        // 读失败之类的，不缓存（下次重试）
-    out.files[f.rel] = { mtime: Math.round(f.mtime), bytes: f.bytes, lang: f.lang.id, part: pf };
+    out.files[f.rel] = { mtime: Math.round(f.mtime), bytes: f.bytes, lang: f.lang.id, ...(pf.contentHash ? { contentHash: pf.contentHash } : {}), part: pf };
   }
   fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
   fs.writeFileSync(cacheFile, JSON.stringify(out));
@@ -2757,8 +2759,11 @@ async function scanProject(opts) {
   const freshFiles = [];             // 需要重新解析的
   for (const f of files) {
     const hit = cache && cache.files[f.rel];
-    if (hit && hit.mtime === Math.round(f.mtime) && hit.bytes === f.bytes && hit.lang === f.lang.id && hit.part) {
-      reused.set(f.rel, hit.part);
+    const contentMatches = opts.cacheHash && hit?.contentHash ? fileStamp(f.abs) === hit.contentHash : false;
+    const unchanged = opts.cacheHash ? contentMatches : hit && hit.mtime === Math.round(f.mtime) && hit.bytes === f.bytes;
+    f.cacheHash = !!opts.cacheHash;
+    if (hit && unchanged && hit.lang === f.lang.id && hit.part) {
+      reused.set(f.rel, { ...hit.part, file: { ...hit.part.file, mtime: Math.round(f.mtime), bytes: f.bytes } });
     } else freshFiles.push(f);
   }
   if (opts.incremental) {
@@ -2831,6 +2836,7 @@ async function scanProject(opts) {
   // 按 collectFiles 的顺序合并（缓存命中的 + 新解析的）：顺序稳定，只改几个文件时 id 不会乱跳
   const byRel = new Map(reused);
   for (const p of freshParts) for (const pf of p.files || []) byRel.set(pf.rel, pf);
+  if (opts.cacheHash) for (const f of files) f.contentHash = byRel.get(f.rel)?.contentHash;
   const merged = mergeParts([{ files: files.map((f) => byRel.get(f.rel)).filter(Boolean), failures: freshParts.flatMap((p) => p.failures || []) }]);
   // 按需候选（OCaml 的值）在这里落地：只留"真被限定名指到"的那些，并重编 id。
   // 没有候选的语言此函数直接原样返回，零影响。
@@ -3451,7 +3457,7 @@ async function scanProject(opts) {
    *
    * 以前这些数只活在 `CA_DEBUG_UNRESOLVED` 的调试日志里（产品里看不到）⇒
    * "图里到底少了什么、为什么少"只能靠猜。用户要的是：**能找的尽量找，找不到的直接说出来**。
-   *   · `unknown`   —— 按名字一个候选都对不上（真身多半在图外：标准库 / 第三方）；
+   *   · `unknown`   —— 没有匹配目标，或原目标被角色/可见性/泛型校验否决；
    *   · `ambiguous` —— 有候选但**挑不出唯一解释**（"宁缺勿错"，故意不接）。
    */
   const unresolvedByLang = new Map();   // lang → { ambiguous, unknown }
@@ -3473,11 +3479,16 @@ async function scanProject(opts) {
    * 与 `CA_DEBUG_REF` 一样必须落盘（解析子进程的 stderr 被父进程管道收走）。
    */
   const unresolvedLog = [];
-  const dbgUnres = (name, fromTypeId, why, nCand) => {
+  const dbgUnres = (name, fromTypeId, why, nCand, rejectedTarget) => {
     if (!process.env.CA_DEBUG_UNRESOLVED) return;
     const t = allTypes[fromTypeId];
     const fr = fileRecs[t?.file];
-    unresolvedLog.push(`${name}\t${why}\t${nCand}\t${fr?.lang || '?'}\t${fr?.path || '?'}`);
+    // Keep the existing five TSV columns; optional rejected-target details are JSON.
+    const detail = rejectedTarget ? `\t${JSON.stringify({
+      id: rejectedTarget.id, fqn: rejectedTarget.fqn,
+      file: fileRecs[rejectedTarget.file]?.path, line: rejectedTarget.line,
+    })}` : '';
+    unresolvedLog.push(`${name}\t${why}\t${nCand}\t${fr?.lang || '?'}\t${fr?.path || '?'}${detail}`);
   };
   /**
    * 诊断：`CA_DEBUG_REF=<名字片段>` + `CA_DEBUG_REF_OUT=<文件>` 时，把"这个引用名挑了哪些候选、
@@ -3930,8 +3941,13 @@ async function scanProject(opts) {
     const target = allTypes[hit.id];
     const fromLang = fileRecs[allTypes[fromTypeId]?.file]?.lang;
     const invalidMember = fromLang === 'csharp' && refInfo?.memberName && !target.ns && target.parent == null;
-    if (invalidMember || !privateTypeAccessible(fromTypeId, target) || !referenceArityMatches(refInfo, target)) {
+    const rejection = invalidMember ? 'csharp-member-global'
+      : !privateTypeAccessible(fromTypeId, target) ? 'csharp-private-container'
+        : !referenceArityMatches(refInfo, target) ? 'csharp-generic-arity' : null;
+    if (rejection) {
       noteUnresolved('unknown', name, fromTypeId);
+      // One selected target is rejected here; this is not the original candidate-pool size.
+      dbgUnres(name, fromTypeId, rejection, 1, target);
       return null;
     }
     return hit;
@@ -4198,7 +4214,7 @@ async function scanProject(opts) {
     /**
      * **"找不到就直接说"**（用户 2026-10-05 政策）：有引用、但**没有任何依据**、所以故意没接的那些引用 ——
      * 按语言计数 + Top 名字。以前只活在 `CA_DEBUG_UNRESOLVED` 的调试日志里（产品里看不到）。
-     * `unknown` = 一个候选都对不上（真身多半在图外）；`ambiguous` = 有候选但挑不出唯一解释。
+     * `unknown` = 无匹配目标，或原目标被校验否决；`ambiguous` = 有候选但挑不出唯一解释。
      */
     unresolved: {
       ...unresolved,
@@ -4362,7 +4378,8 @@ export async function watchScan(opts) {
     for (const f of lastFiles) {
       let st;
       try { st = fs.statSync(f.abs); } catch { hits.push(f.rel); continue; }        // 被删 / 改名了
-      if (st.size !== f.bytes || Math.round(st.mtimeMs) !== Math.round(f.mtime)) hits.push(f.rel);
+      if (st.size !== f.bytes || Math.round(st.mtimeMs) !== Math.round(f.mtime)
+        || (opts.cacheHash && (!f.contentHash || fileStamp(f.abs) !== f.contentHash))) hits.push(f.rel);
     }
     for (const [d, stamp] of dirSnap) if (directoryStamp(d) !== stamp) hits.push(`${path.basename(d)}/`);
     for (const [file, stamp] of configSnap) if (fileStamp(file) !== stamp) hits.push(path.basename(file));
