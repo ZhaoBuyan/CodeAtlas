@@ -140,12 +140,13 @@ What gets copied looks like this (all paths are **absolute**, nothing to edit):
 | **dsh (DeepSeek Harness)** | not `mcpServers` — run `node src/cli.mjs mcp --print-config --client dsh` and merge the printed Cordis patch YAML into `$DSH_HOME/cordis.patch.yml` (unverified here — dsh not installed on this machine) |
 | **Windsurf / Cline / others** | find the "MCP servers" setting and paste the `mcpServers` snippet |
 
-**Restart the client** afterwards; you should see a `code-atlas` server with 9 tools.
+**Restart the client** afterwards; you should see a `code-atlas` server with 10 tools.
 
-### 5.3 What you can ask once it is connected (9 tools)
+### 5.3 What you can ask once it is connected (10 tools)
 
 | Tool | When to use it |
 | --- | --- |
+| `unresolved(lang?, file?, limit?)` | Inspect recorded unresolved names/reasons by language or source-file fragment. Never rescans; reports missing old details or truncation. Counts are resolution records, not edges. |
 | `overview` | Get the lay of the land first: how much is there, where the usual entry points are; it also flags files that changed on disk after the scan |
 | `list(path?)` | **Browse by directory** — start here when you do not know any names yet: pass a folder (or nothing for the scan root) and get its folders / files with file, type and line counts |
 | `search(query, scope?)` | Find symbols — **member names are searched too** ("who defines `OnPaint`?"), with type hits and member hits separated |
@@ -212,3 +213,6 @@ directory gains a cache file; deleting it is harmless, it rebuilds.)
 - **It only writes next to itself** (`dist\`, `launcher.config.json`) and **never modifies your code**; grouping rules
   also go to your own user directory (`%LocalAppData%\CodeAtlas\`) by default. Unless you explicitly tick "write into
   the project directory" in the wizard, the scanned project is not touched, byte for byte.
+## Optional Git heat query optimization
+
+Set `CODEATLAS_GIT_HEAT_MODE=name-status` in the scanner process environment to avoid unused line-count calculations. The default remains the original `numstat` query. Both modes use the latest 200 commits; rename/copy or unrecognized status output falls back to `numstat`. Fallback can add a Git call, so repositories with frequent renames may see no benefit. Unset the variable (or set it to `numstat`) to restore the original path.

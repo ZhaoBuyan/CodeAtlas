@@ -29,7 +29,7 @@ Four things it aims for:
   no Node install, no environment setup;
 - **One dataset, two consumers**: the same `bundle.json` — **humans** browse it in the browser
   (tree map / tree list / dependency graph / dependency matrix), **AI** queries it over MCP
-  (9 tools, including token-budgeted export and impact analysis). You never re-parse just to feed an AI;
+  (10 tools, including token-budgeted export and impact analysis). You never re-parse just to feed an AI;
 - **Honesty first**: whatever is uncertain is labelled (dependency edges are static name matching;
   unmatched and ambiguous references are counted; decompiled output is marked as having no source comments).
   It would rather show "I don't know" than pretend to be authoritative.
@@ -114,7 +114,7 @@ node src/cli.mjs mcp    [--out dist] [--print-config]    # MCP server for AI cli
   Note this is a **global** setting, not per project.
 - **UI language**: the toolbar button right after "Incremental" reads `界面：中文` / `UI: English` — one click
   switches the interface and saves the choice to `launcher.config.json`. It covers the launcher (run log, status
-  bar, dialogs, error messages), the engine's scan output, all nine MCP tools **and** the web map. Switching
+  bar, dialogs, error messages), the engine's scan output, all ten MCP tools **and** the web map. Switching
   does **not** re-scan anything: the bundle stores language-neutral values and the display layer maps them.
   Without the launcher, set `CODEATLAS_LANG=en` (the env var overrides the config; anything starting with `en` works).
 - Requires **Node.js** (the engine is written in Node); no .NET SDK needed (but the .NET 9 runtime is,
@@ -230,7 +230,7 @@ language version again, add `preprocess: 'xxx'` to that profile) — right now n
 
 ## For AI: the MCP query layer
 
-> **Setup steps (which button, where each client pastes the config, when to use each of the 9 tools,
+> **Setup steps (which button, where each client pastes the config, when to use each of the 10 tools,
 > troubleshooting) are in [USAGE.md](USAGE.md) section 5 (Chinese: [使用说明.md](使用说明.md)).**
 > Lazy path: scan once in the launcher → click "MCP config" → paste into your AI client.
 
