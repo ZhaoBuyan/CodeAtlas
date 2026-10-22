@@ -41,7 +41,14 @@ export async function withOutputLock(outDir, action) {
       rmFile(path.join(dir, name));
     }
     return await action();
-  } finally { rmFile(marker); }
+  } finally {
+    rmFile(marker);
+    // ⚠ **目录本身也要收**：`%TEMP%/codeatlas-writers-<hash>` 是"每个输出目录一个"，以前只删标记、
+    // 目录永远留着 ⇒ 实测本机累计 **671 个空目录**，`%TEMP%` 枚举从 53ms 劣化到几分钟，
+    // 排查时被误判成"扫描卡死"。`rmdir` 只在目录**空**时成功（原子）：若有别的进程刚建了标记就
+    // 会 ENOTEMPTY，忽略即可；下次扫描的 `mkdirSync(..., {recursive:true})` 会把它建回来。
+    try { fs.rmdirSync(dir); } catch { /* 非空/被占用都无所谓 */ }
+  }
 }
 
 /** Rename retries never fall back to truncating the published file. */
