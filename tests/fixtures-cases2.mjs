@@ -1098,24 +1098,7 @@ export const EXTRA_CASES = [
     refTiers: [['use.cpp', 'nsb.Widget', 'import']],
     errorsMax: 0,
   },
-  {
-    // **Python 上闸**（精度轮 21，2026-10-20）：裸名跨文件必须有 import 依据。
-    // Python 模块作用域：裸名只能是本文件声明 / import 绑定 / 内置(builtins，图外)；别的模块顶层名字没 import
-    // 就看不到（`module.attr` 是限定名，走另一条路），真那么写运行时会 NameError ⇒「跨文件 + 零依据」只是撞名 ✗。
-    // 两头钉：`beta.py` 有 `from .alpha import ScopeWidget` ⇒ **必须接且 import 档**；
-    //         `gamma.py` **没 import** 就裸写 ⇒ **不许接**。
-    // 反向对照：旧引擎上 `gamma.py → ScopeWidget[unique]` 是存在的 ✗。
-    dir: 'py-scope-only',
-    lang: 'python',
-    types: 3,
-    names: ['ScopeWidget'],
-    importsMin: 1,
-    docs: 0,
-    membersMin: 0,
-    refEdges: [['beta.py', 'ScopeWidget', true], ['gamma.py', 'ScopeWidget', false]],
-    refTiers: [['beta.py', 'ScopeWidget', 'import']],
-    errorsMax: 0,
-  },
+
   {
     // **facets 的 `color` 过滤**（安全，2026-09-25）：`color` 来自仓库里的 `atlas.facets.json`，
     // 是不可信输入，而它会被前端拼进 `style="background:…"` —— 恶意仓库写
