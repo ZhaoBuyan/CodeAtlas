@@ -7,6 +7,59 @@
  */
 export const EXTRA_CASES = [
   {
+    dir: 'go-qualified', lang: 'go', errorsMax: 0,
+    refEdges: [['client.AliasUse','actual.Coincidence',true], ['client.WrongUse','actual.OnlyChild',false],
+      ['client.WrongUse','actual.OnlyTest',false], ['client.VersionUse','actual.Version',true],
+      ['client.WrongUse','actual.OnlyLocal',false],
+      ['client.DotUse','actual.Kept',true], ['client.ForeignUse','actual.OtherModule',true], ['client.PrefixUse','actual.Kept',true]],
+    edgeWeights: [['mixed.go','actual.Coincidence','ref',1], ['client.AliasUse','actual.Coincidence','ref',1],
+      ['locals.go','client.LocalType','ref',1], ['actual_test.ExternalTest','actual.OnlyTest','ref',1]],
+    fileEdges: [['package_value.go','package_value.go','dep/types.go','actual.Coincidence','ref',false],
+      ['package_value.go','package_value.go','dep/types.go','actual.Kept','ref',true]],
+  },
+  {
+    dir: 'rust-enum-roles', lang: 'rust', errorsMax: 0,
+    refEdges: [['Declaration','Coincidence',false], ['Declaration','Kept',true],
+      ['Discriminant','Kept',true], ['Genuine','Coincidence',true]],
+    edgeWeights: [['Declaration','Kept','ref',2], ['Discriminant','Kept','ref',1], ['Genuine','Coincidence','ref',1]],
+  },
+  ...['tsx', 'vue'].map(lang => ({
+    dir: `${lang}-catch-scope`, lang, errorsMax: 0,
+    refEdges: [['CatchOnly','Signal',false], ['Outside','Signal',true], ['TypePosition','Signal',true]],
+    edgeWeights: [['Outside','Signal','ref',2], ['TypePosition','Signal','ref',1]],
+  })),
+  {
+    dir: 'ts-catch-scope', lang: 'typescript', errorsMax: 0,
+    refEdges: [['CatchOnly','Signal',false], ['Outside','Signal',true], ['TypePosition','Signal',true]],
+    edgeWeights: [['Outside','Signal','ref',2], ['TypePosition','Signal','ref',1]],
+  },
+  {
+    dir: 'java-enum-roles', lang: 'java', errorsMax: 0,
+    refEdges: [['roles.Declaration','roles.Coincidence',false], ['roles.Declaration','roles.Kept',true], ['roles.Genuine','roles.Coincidence',true]],
+  },
+  {
+    dir: 'csharp-default-private', lang: 'csharp', errorsMax: 0,
+    refEdges: [['External','Math',false], ['Container','Math',true], ['Child','Math',true],
+      ['External','PublicThing',true], ['External','Shared',true]],
+    fileEdges: [['Users.cs','Container','Container.cs','Math','ref',true]],
+  },
+  {
+    dir: 'python-qualified', lang: 'python', errorsMax: 0,
+    names: ['Qualified', 'Bare', 'Explicit', 'Request', 'Hidden', 'Response'],
+    refEdges: [['Qualified','Request',true], ['Qualified','Response',false], ['Qualified','Hidden',false],
+      ['Bare','Request',false], ['Bare','Coincidence',false], ['Explicit','Request',true], ['DynamicUse','DynRequest',true]],
+    refTiers: [['Qualified','Request','import'], ['Explicit','Request','import']],
+    edgeWeights: [['Qualified','Request','ref',3]],
+    extends: ['Inherited -> Request'],
+    fileEdges: [['use.py','Qualified','tests/shadows/pkg.py','ShadowRequest','ref',false]],
+  },
+  {
+    dir: 'csharp-ancestor', lang: 'csharp', errorsMax: 0,
+    names: ['AncGlobalGuard','AncParentGuard','AncChild'],
+    refEdges: [['Ancestors.Configuration.AncChild','AncGlobalGuard',true], ['Ancestors.Configuration.AncChild','Ancestors.AncParentGuard',true]],
+    refTiers: [['Ancestors.Configuration.AncChild','AncGlobalGuard','import'], ['Ancestors.Configuration.AncChild','Ancestors.AncParentGuard','import']],
+  },
+  {
     // C# reference roles: declarations and value-member names are not global types.
     // Preserve real global/nested/generic types and private access across partial files.
     // The pre-fix fixture contains each negative edge; MixedOwner's false member use

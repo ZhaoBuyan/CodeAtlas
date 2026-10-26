@@ -22,7 +22,7 @@ import path from 'node:path';
 // 导入的 t 会被它们遮住（这种错是静默的），所以这里显式取别名。
 import { t as T, isEn, sysLabel } from './i18n.mjs';
 // 模块名归一 / import 是否能指到目标 —— 与扫描期（scan.mjs 的 resolveName）**共用同一套口径**
-import { moduleKey, importMatchesTarget } from './modules.mjs';
+import { moduleKey, importMatchesTarget, ancestorNamespaceEvidence } from './modules.mjs';
 import { validateBundle } from '../shared/bundle-contract.mjs';
 import { fileVersion, readStableJson } from './storage.mjs';
 import { queryUnresolved } from './unresolved.mjs';
@@ -307,6 +307,8 @@ function agoText(ms) {
 function evidenceOf(idx, e) {
   const t = e?.tier;
   if (t === 'same' || t === 'import') return t;
+  const a = idx.byId.get(e?.from), b = idx.byId.get(e?.to);
+  if (a && b && ancestorNamespaceEvidence(a.ns, b.ns, idx.files.get(a.file)?.lang, idx.files.get(b.file)?.lang)) return 'import';
   if (t === 'name') return 'name';
   if (t === 'unique') return 'unique';
   return evidenceRecomputed(idx, e);      // 老 bundle（或边来自手写数据）

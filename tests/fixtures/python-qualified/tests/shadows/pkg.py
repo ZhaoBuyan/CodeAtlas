@@ -1,0 +1,2 @@
+class ShadowRequest:
+    pass

@@ -150,6 +150,99 @@ console.log('✓ cache is scoped to roots; unchanged files are still reused');
   console.log('✓ dense files preserve reference weights, owner identity and call positions across cold/warm scans');
 }
 
+// Go qualified type provenance must survive cache reuse and bare-name shadowing.
+{
+  fs.cpSync(path.join(repo, 'tests/fixtures/go-qualified'), path.join(work, 'go-qualified'), { recursive: true });
+  const cold = scan(['go-qualified'], 'go-qualified-output', false, ['--lang', 'go']).bundle;
+  const warm = scan(['go-qualified'], 'go-qualified-output', true, ['--lang', 'go']).bundle;
+  assert.deepEqual(warm.types, cold.types); assert.deepEqual(warm.files, cold.files); assert.deepEqual(warm.edges, cold.edges);
+  const ref = (from, to) => cold.edges.filter(e => cold.types[e.from].fqn === from && cold.types[e.to].fqn === to);
+  assert.deepEqual(ref('mixed.go', 'actual.Coincidence').map(e => [e.w,e.tier]), [[1,'import']]);
+  assert.equal(ref('client.WrongUse', 'actual.OnlyChild').length, 0);
+  assert.equal(ref('client.WrongUse', 'actual.OnlyTest').length, 0);
+  assert.equal(ref('client.WrongUse', 'actual.OnlyLocal').length, 0);
+  assert.deepEqual(ref('actual_test.ExternalTest', 'actual.OnlyTest').map(e => e.w), [1]);
+  assert.deepEqual(ref('locals.go', 'client.LocalType').map(e => e.w), [1]);
+  assert.deepEqual(ref('client.PrefixUse', 'actual.Kept').map(e => e.w), [1]);
+  assert.ok(cold.types.every(t => !Object.hasOwn(t, 'goLocalType')));
+  assert.deepEqual(cold.types.find(t => t.name === 'AliasUse').uses.map(u => u.q), ['renamed.Coincidence']);
+  assert.ok(cold.files.find(f => f.path === 'mixed.go').uses.some(u => u.q === 'actual.Coincidence'));
+  console.log('✓ Go package-qualified types preserve provenance and exact weights across cold/warm scans');
+}
+
+// Rust variant names declare constructors; payloads/discriminants remain real refs.
+{
+  fs.cpSync(path.join(repo, 'tests/fixtures/rust-enum-roles'), path.join(work, 'rust-enum'), { recursive: true });
+  const cold = scan(['rust-enum'], 'rust-enum-output', false, ['--lang', 'rust']).bundle;
+  const warm = scan(['rust-enum'], 'rust-enum-output', true, ['--lang', 'rust']).bundle;
+  assert.deepEqual(warm.types, cold.types); assert.deepEqual(warm.edges, cold.edges);
+  const refs = (from, to) => cold.edges.filter(e => cold.types[e.from].name === from && cold.types[e.to].name === to);
+  assert.equal(refs('Declaration', 'Coincidence').length, 0);
+  assert.deepEqual(refs('Declaration', 'Kept').map(e => e.w), [2]);
+  assert.deepEqual(refs('Discriminant', 'Kept').map(e => e.w), [1]);
+  assert.deepEqual(refs('Genuine', 'Coincidence').map(e => e.w), [1]);
+  assert.ok(cold.types.find(t => t.name === 'Declaration').memberList.some(m => m.k === 'enumValue' && m.n === 'Coincidence'));
+  console.log('✓ Rust enum declarations preserve members, payload/discriminant refs and cold/warm identity');
+}
+
+// Catch values must not hide type names or references outside the catch block.
+{
+  fs.cpSync(path.join(repo, 'tests/fixtures/ts-catch-scope'), path.join(work, 'ts-catch'), { recursive: true });
+  const cold = scan(['ts-catch'], 'ts-catch-output', false, ['--lang', 'typescript']).bundle;
+  const warm = scan(['ts-catch'], 'ts-catch-output', true, ['--lang', 'typescript']).bundle;
+  assert.deepEqual(warm.types, cold.types); assert.deepEqual(warm.edges, cold.edges);
+  const refs = name => cold.edges.filter(e => cold.types[e.from].name === name && cold.types[e.to].name === 'Signal');
+  assert.equal(refs('CatchOnly').length, 0);
+  assert.deepEqual(refs('Outside').map(e => e.w), [2]);
+  assert.deepEqual(refs('TypePosition').map(e => e.w), [1]);
+  console.log('✓ TS catch values keep type-space and outer references intact across cold/warm scans');
+}
+
+// Python keeps qualified syntax through cache reuse; importlib evidence never
+// requires executing the input. Ancestor labels also apply to old tier tags.
+{
+  fs.cpSync(path.join(repo, 'tests/fixtures/python-qualified'), path.join(work, 'python-qualified'), { recursive: true });
+  const loaderSource = fs.readFileSync(path.join(work, 'python-qualified/dynamic_loader.py'), 'utf8');
+  write('python-qualified/shadow_loader.py', loaderSource
+    .replace('DynRequest = load_annotations()', 'def load_annotations():\n    return foreign.Value\n\nDynRequest = load_annotations()')
+    .replace('class DynamicUse:', 'class ShadowDynamicUse:'));
+  write('python-qualified/spaced_base.py', 'import pkg\nclass SpacedInherited(pkg . Request):\n    pass\n');
+  const cold = scan(['python-qualified'], 'python-output', false, ['--lang', 'python']).bundle;
+  const warm = scan(['python-qualified'], 'python-output', true, ['--lang', 'python']).bundle;
+  assert.deepEqual(warm.types, cold.types); assert.deepEqual(warm.edges, cold.edges);
+  const qualified = cold.types.find(t => t.name === 'Qualified');
+  assert.deepEqual(qualified.uses.filter(u => u.n === 'Request').map(u => u.q), ['pkg.Request', 'alias.Request', 'relative.Request']);
+  assert.deepEqual(cold.types.find(t => t.name === 'Inherited').bases, ['pkg.Request']);
+  assert.equal(cold.files.find(f => f.path === 'dynamic_loader.py').pythonDynamicBindings.DynRequest, '.pkg.dynamic.DynRequest');
+  assert.equal(cold.files.find(f => f.path === 'shadow_loader.py').pythonDynamicBindings?.DynRequest, undefined);
+  const shadow = cold.types.find(t => t.name === 'ShadowDynamicUse');
+  const dynamicTarget = cold.types.find(t => t.name === 'DynRequest');
+  assert.ok(!cold.edges.some(e => e.from === shadow.id && e.to === dynamicTarget.id));
+  const spaced = cold.types.find(t => t.name === 'SpacedInherited');
+  assert.deepEqual(spaced.bases, ['pkg.Request']);
+  assert.ok(cold.edges.some(e => e.from === spaced.id && cold.types.find(t => t.id === e.to)?.name === 'Request' && e.kind === 'inherit'));
+  fs.cpSync(path.join(repo, 'tests/fixtures/csharp-ancestor'), path.join(work, 'ancestor-label'), { recursive: true });
+  fs.cpSync(path.join(repo, 'tests/fixtures/csharp-default-private'), path.join(work, 'ancestor-label/default-private'), { recursive: true });
+  const labels = scan(['ancestor-label'], 'ancestor-output', false, ['--lang', 'csharp']).bundle;
+  const warmLabels = scan(['ancestor-label'], 'ancestor-output', true, ['--lang', 'csharp']).bundle;
+  assert.deepEqual(warmLabels.types, labels.types); assert.deepEqual(warmLabels.edges, labels.edges);
+  const defaultPrivate = labels.types.find(t => t.name === 'Math');
+  // Access flags are internal facts and are deliberately stripped from published types.
+  assert.ok(labels.edges.some(e => labels.types[e.from].name === 'Child' && e.to === defaultPrivate.id));
+  assert.ok(labels.edges.some(e => labels.types[e.from].name === 'External' && labels.types[e.to].name === 'Shared'));
+  assert.ok(!labels.edges.some(e => labels.types[e.from].name === 'External' && e.to === defaultPrivate.id));
+  for (const e of labels.edges) e.tier = 'unique'; // Old stored labels must be upgraded without rescanning.
+  fs.writeFileSync(path.join(work, 'ancestor-output/bundle.json'), JSON.stringify(labels));
+  const client = connectMcp('ancestor-output');
+  try {
+    const response = await client.call('tools/call', { name: 'refs', arguments: { name: 'AncChild', direction: 'out' } });
+    assert.equal(response.result.isError, false);
+    const targets = response.result.content[0].text.split('\n').filter(line => /AncGlobalGuard|AncParentGuard/.test(line));
+    assert.equal(targets.length, 2); assert.ok(targets.every(line => line.includes('backed')));
+  } finally { client.child.kill(); }
+  console.log('✓ Python qualified syntax, inheritance, static importlib bindings and legacy ancestor labels survive cold/warm reads');
+}
+
 // Rejected C# targets must be visible in the existing diagnostic sidecar.
 {
   const out = path.join(work, 'csharp-diagnostics');

@@ -11,6 +11,13 @@
 
 import path from 'node:path';
 
+// Labels only: C# and VB can refer to types in enclosing namespaces,
+// including the global namespace. Do not use this to choose a target.
+export function ancestorNamespaceEvidence(fromNs, toNs, fromLang, toLang) {
+  if (!['csharp', 'vb'].includes(fromLang) || fromLang !== toLang) return false;
+  return !toNs || fromNs === toNs || String(fromNs || '').startsWith(`${toNs}.`);
+}
+
 /** 源码后缀：判“import 是否指到这个文件”时用来去掉尾部扩展名（'util.log-or-console' 这种不能被当成扩展名切掉） */
 export const SRC_EXT = new Set([
   'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'py', 'java', 'cs', 'kt', 'kts', 'go', 'rs', 'rb', 'php',

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { Parser, Language } from 'web-tree-sitter';
 import { resolveWasm, LANGUAGES, languageForExt, resolveLanguages, expandUseTree } from './languages.mjs';
 // 模块名归一 / import 是否能指到目标 —— 与读期（mcp.mjs 的证据分档）**共用同一套口径**
-import { moduleKey, importMatchesTarget } from './modules.mjs';
+import { moduleKey, importMatchesTarget, ancestorNamespaceEvidence } from './modules.mjs';
 import { rmrf, rmFile } from './fsx.mjs';
 import { t } from './i18n.mjs';
 import { preprocess, csharpAsyncIdentifier } from './preprocess.mjs';
@@ -1061,21 +1061,24 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   const skipIds = new Set();
   // ① 调用 / 成员访问的“位置”记录（每行同一个名字只记一次）：`${ownerIndex}|${name}|${line}|${kind}` -> entry
   const useSeen = new Map();
+  const pythonModules = new Map();
+  const pythonDynamicBindings = {};
   const fileUses = [];            // 没有类型归属的（脚本的顶层代码）—— 挂到后面合成的 module 节点上
   function noteUse(node) {
     if (skipIds.has(node.id)) return;                     // 参数名之类不算
-    const k = sourceUseKind(lines, node);
+    const q = lang.qualifiedReferenceOf?.(node);
+    const k = sourceUseKind(lines, node) || (lang.id === 'go' && q ? 'member' : null);
     if (!k) return;
     const name = node.text;
     const line = node.startPosition.row + 1;
     const c = k === 'call' ? 1 : 0;
     const t = currentType();
     if (!t) {
-      if (!fileUses.some((u) => u.n === name && u.l === line && u.c === c)) fileUses.push({ n: name, l: line, c });
+      if (!fileUses.some((u) => u.n === name && u.l === line && u.c === c && u.q === (q || undefined))) fileUses.push({ n: name, l: line, c, ...(q ? { q } : {}) });
       return;
     }
-    const key = `${t.index}|${name}|${line}|${c}`;
-    if (!useSeen.has(key)) useSeen.set(key, { t: t.index, n: name, l: line, c });
+    const key = `${t.index}|${name}|${line}|${c}|${q || ''}`;
+    if (!useSeen.has(key)) useSeen.set(key, { t: t.index, n: name, l: line, c, ...(q ? { q } : {}) });
   }
   const namespaces = new Set();
   const nsStack = [];
@@ -1236,8 +1239,9 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
     const name = node.text;
     const memberName = !!lang.memberReferenceOf?.(node);
     const arity = lang.refArityOf?.(node);
-    const role = memberName || arity > 0 ? { ...(memberName ? { memberName: true } : null), ...(arity > 0 ? { arity } : null) } : null;
-    const suffix = `${memberName ? '|member' : ''}${arity > 0 ? `|arity:${arity}` : ''}`;
+    const q = lang.qualifiedReferenceOf?.(node);
+    const role = { ...(memberName ? { memberName: true } : null), ...(arity > 0 ? { arity } : null), ...(q ? { q } : null) };
+    const suffix = `${memberName ? '|member' : ''}${arity > 0 ? `|arity:${arity}` : ''}${q ? `|qualified:${q}` : ''}`;
     const t = currentType();
     if (!t) {
       const key = `${name}${suffix}`;
@@ -1277,7 +1281,8 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
     const bases = [];
     const baseArities = lang.refArityOf ? [] : null;
     const genericArity = lang.typeArityOf?.(node);
-    for (const field of lang.baseFields || []) {
+    if (lang.baseNamesOf) bases.push(...lang.baseNamesOf(node));
+    for (const field of lang.baseNamesOf ? [] : lang.baseFields || []) {
       const b = node.childForFieldName(field);
       if (b) collectBaseNames(b, bases, baseArities, lang.refArityOf);
     }
@@ -1311,6 +1316,7 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
       complexity: 1,
       parent: currentType() ? currentType().index : null,
       ...(currentType() && lang.privateTypeOf?.(node) ? { privateNested: true } : null),
+      ...(lang.id === 'go' && node.parent?.type !== 'source_file' ? { goLocalType: true } : null),
     };
     // 类型本身也留一份签名：JS/TS 的顶层函数、C#/Java 的 record 主构造函数都算"类型"，
     // 它们的参数表不在任何成员上（不给的话 symbol 里就完全看不到它收什么参数）。
@@ -1448,6 +1454,9 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
 
     const impKind = lang.importKindOf ? lang.importKindOf(node) : lang.imports[type];
     if (impKind) {
+      for (const [name, module] of lang.moduleBindingsOf?.(node) || []) {
+        const paths = pythonModules.get(name) || new Set(); paths.add(module); pythonModules.set(name, paths);
+      }
       const targets = parseImports(lang.importTextOf ? lang.importTextOf(node) : node.text);
       for (const target of targets) {
         if (!target) continue;
@@ -1613,7 +1622,7 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
       // 而这两者在语法树上**类型相同、父节点也区分不了**。钩子返回 false 表示"这条不算引用"。
       if (!lang.refFilter || lang.refFilter(node)) {
         // **局部变量身上的成员名不算跨文件引用**（精度轮，见 memberOfLocalValue）。
-        if (!memberOfLocalValue(node)) addRef(node);
+        if ((lang.id === 'go' && lang.qualifiedReferenceOf?.(node)) || !memberOfLocalValue(node)) addRef(node);
         noteUse(node);     // ① 同一处标识符：顺手记下“这个名字在这一行是调用还是成员访问”
       }
     } else if (USE_ID_TYPES.has(type)) {
@@ -1659,7 +1668,16 @@ function extractFile(source, tree, lang, fileRel, scannedRels) {
   if (process.env.CA_DEBUG_REFS && lang.id === process.env.CA_DEBUG_REFS) {
     console.error(`[REFS] ${(refs || []).slice(0, 12).map((r) => `${r.name}×${r.n}`).join('  ')}`);
   }
-  return { types, abstractScopes, aliases, localNames, localByOwner, imports, importBinds, importBindsAll, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
+  for (const [name, module] of lang.dynamicBindingsOf?.(tree.rootNode, pythonModules) || []) {
+    const raw = module.slice(0, module.lastIndexOf('.'));
+    imports.push(raw);
+    const bound = importBinds.get(name) || new Set(); bound.add(raw); importBinds.set(name, bound);
+    const modules = pythonModules.get(name) || new Set(); modules.add(module); pythonModules.set(name, modules);
+    pythonDynamicBindings[name] = module;
+  }
+  const goImports = lang.packageImportsOf?.(tree.rootNode) || [];
+  const goConstants = lang.packageConstantsOf?.(tree.rootNode) || [];
+  return { types, abstractScopes, aliases, localNames, localByOwner, imports, importBinds, importBindsAll, pythonModules, pythonDynamicBindings, goImports, goConstants, reexports, partOf, fileDoc: headerDocOf(tree), refs, uses: [...useSeen.values()], fileUses, namespaces: [...namespaces], mask, lines, errors, fileScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -2108,6 +2126,7 @@ async function extractFiles(files) {
         ...(t.p ? { p: t.p } : null),
         ...(t.r ? { r: t.r } : null),
         ...(t.privateNested ? { privateNested: true } : null),
+        ...(t.goLocalType ? { goLocalType: true } : null),
         ...(Number.isInteger(t.genericArity) ? { genericArity: t.genericArity } : null),
         ...(t.baseArities ? { baseArities: t.baseArities } : null),
         members: t.members,
@@ -2123,10 +2142,10 @@ async function extractFiles(files) {
         tags: GENERATED_NAME_RE.test(t.name) ? ['compiler-generated'] : [],
       };
       for (const r of refsByOwner.get(t.index) || []) {
-        part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
+        part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null), ...(r.q ? { q: r.q } : {}) });
       }
       for (const u of usesByOwner.get(t.index) || []) {
-        part.uses.push({ t: id, n: u.n, l: u.l, c: u.c });
+        part.uses.push({ t: id, n: u.n, l: u.l, c: u.c, ...(u.q ? { q: u.q } : {}) });
       }
     }
 
@@ -2175,7 +2194,7 @@ async function extractFiles(files) {
         system: null,
         systemRule: null,
       });
-      for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
+      for (const r of facts.fileScope.refs) part.refs.push({ t: id, name: r.name, n: r.n, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null), ...(r.q ? { q: r.q } : {}) });
     }
 
     // ① 文件级（类型之外）的调用位置：挂到**文件**上，不管有没有合成 module 节点 ——
@@ -2201,6 +2220,10 @@ async function extractFiles(files) {
       nonUtf8,
       namespaces: facts.namespaces,
       imports: facts.imports,
+      ...(facts.goImports.length ? { goImports: facts.goImports } : {}),
+      ...(facts.goConstants.length ? { goConstants: facts.goConstants } : {}),
+      ...(facts.pythonModules.size ? { pythonModules: Object.fromEntries([...facts.pythonModules].map(([name, modules]) => [name, [...modules]])) } : {}),
+      ...(Object.keys(facts.pythonDynamicBindings).length ? { pythonDynamicBindings: facts.pythonDynamicBindings } : {}),
       // 被 import 引进来的名字 → 绑定它的 import 路径（见 facts.importBinds）：
       // 只在这个文件真有的时候才写，别给每个文件加空对象
       ...(facts.importBinds?.size
@@ -2341,8 +2364,8 @@ function mergeParts(parts) {
         out.allTypes.push({ ...t, id: t.id + tOff, file: fileId, parent: t.parent == null ? null : t.parent + tOff });
       }
       // n = 这个"解析前的名字"在同一个 owner 里被引用了几次（权重就是从这里来的）
-      for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name, n: r.n || 1, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null) });
-      for (const u of pf.uses || []) out.allUses.push({ owner: u.t + tOff, n: u.n, l: u.l, c: u.c });
+      for (const r of pf.refs || []) out.allRefs.push({ owner: r.t + tOff, name: r.name, n: r.n || 1, ...(r.memberName ? { memberName: true } : null), ...(r.arity > 0 ? { arity: r.arity } : null), ...(r.q ? { q: r.q } : {}) });
+      for (const u of pf.uses || []) out.allUses.push({ owner: u.t + tOff, n: u.n, l: u.l, c: u.c, ...(u.q ? { q: u.q } : {}) });
       out.fileNamespaces.push(pf.ns || {});
     }
     out.failures.push(...(p.failures || []));
@@ -2515,6 +2538,7 @@ function stripResolveOnlyKeys(merged) {
     delete t.abstract;
     delete t.synthModule;
     delete t.privateNested;
+    delete t.goLocalType;
     delete t.genericArity;
     delete t.baseArities;
   }
@@ -2630,7 +2654,7 @@ function elixirIsDecision(node) {
  * 以前这里自己走全树、把遇到的**每个文件**都读进内存（图外 4 万多个样本文件也读），
  * 而且不遵守跳过规则（图外的 176 个包名会泄进图内，给图内的边错发“有支撑”）。现在只处理**图内**的清单。
  */
-function discoverPackages(manifests) {
+function discoverPackages(manifests, goModules = []) {
   const out = [];
   const seen = new Set();
   const push = (name, dir) => {
@@ -2655,6 +2679,7 @@ function discoverPackages(manifests) {
     } else if (m.name === 'go.mod') {
       const mm = txt.match(/^\s*module\s+(\S+)/m);
       push(mm ? mm[1] : '', pkgDir);
+      if (mm) goModules.push({ name: mm[1].replace(/^["`]|["`]$/g, ''), dir: pkgDir });
     } else if (m.name === 'pubspec.yaml') {
       // Dart：包名写在 pubspec.yaml 的第一层（name: riverpod）—— import 里写作 package:riverpod/…
       const mm = txt.match(/^name:\s*([^\s#]+)/m);
@@ -2756,7 +2781,8 @@ async function scanProject(opts) {
     .sort((a, b) => a[0].localeCompare(b[0])))).update(opts.ignorePatterns || '').digest('hex');
   // ③ 仓库自身的包名（package.json 的 name → 包目录）：解释/生成两侧的“包名自引用”都用（见 modules.mjs）
   // （清单来自 collectFiles —— 遵守跳过规则，图外的包不再泄进图内）
-  const packages = timed(operations, 'collectMs', 'config.discoverPackages', () => discoverPackages(manifests));
+  const goModules = [];
+  const packages = timed(operations, 'collectMs', 'config.discoverPackages', () => discoverPackages(manifests, goModules));
   // ③b TS/JS 的路径别名（tsconfig/jsconfig 的 paths）—— 同一套 ctx 一起传下去
   const aliases = timed(operations, 'collectMs', 'config.discoverPathAliases', () => discoverPathAliases(manifests));
   mark('collectMs');
@@ -3034,7 +3060,7 @@ async function scanProject(opts) {
     const t = allTypes[u.owner];
     if (!t) continue;
     if (!t.uses) t.uses = [];
-    t.uses.push({ n: u.n, l: u.l, c: u.c });
+    t.uses.push({ n: u.n, l: u.l, c: u.c, ...(u.q ? { q: u.q } : {}) });
   }
   // ① 再筛一道：**只留“名字在项目里确实是个成员或类型”的**（父进程才知道全部名字）。
   // 不筛的话每个标识符都留一份位置，体积会翻倍（实测真实样本 0.16 MB → 0.36 MB）。
@@ -3551,7 +3577,7 @@ async function scanProject(opts) {
   const referenceArityMatches = (ref, target) => !(ref?.arity > 0 && Number.isInteger(target.genericArity)
     && ref.arity !== target.genericArity);
 
-  const resolveNameCandidate = (name, fromTypeId) => {
+  const resolveNameCandidate = (name, fromTypeId, qualifiedGo = false) => {
     // 限定名（`Env.normalize`、`Mach.fundecl`、`X.t`、`Types.Uid.Tbl.t`）：候选表是按**简单名**建的，
     // 所以必须按完整限定名精确匹配 —— 匹配不上就**放弃**，绝不能退化成"按叶子名撞"。
     //
@@ -3807,7 +3833,7 @@ async function scanProject(opts) {
      * 与"引用按 currentType() 归属"是同一层，所以判得准；判不准时**偏向少砍**（宁可留错边，不砍真边）。
      */
     const fromFile = fileRecs[allTypes[fromTypeId]?.file];
-    const isLocalName = Boolean(
+    const isLocalName = !qualifiedGo && Boolean(
       (fromFile?.locals && fromFile.locals.includes(name))
       || (fromFile?.localOwners && fromFile.localOwners[fromTypeId]?.includes(name)),
     );
@@ -3959,12 +3985,157 @@ async function scanProject(opts) {
     return null;
   };
 
+  // Go package paths come from the nearest go.mod plus the file's exact
+  // directory. Same package names in other directories are not evidence.
+  const goPackageIndex = new Map();
+  const orderedGoModules = [...goModules].sort((a,b) => b.dir.length - a.dir.length);
+  for (const file of fileRecs) if (file.lang === 'go') {
+    const module = orderedGoModules.find(m => !m.dir || file.path.startsWith(`${m.dir}/`));
+    if (!module) continue;
+    const dir = path.posix.dirname(file.path), sub = dir === '.' ? '' : dir.slice(module.dir.length).replace(/^\//, '');
+    const importPath = `${module.name}${sub ? `/${sub}` : ''}`;
+    const ns = file.namespaces?.[0];
+    if (!ns || ns.endsWith('_test')) continue;
+    if (!goPackageIndex.has(importPath)) goPackageIndex.set(importPath, new Map());
+    const groups = goPackageIndex.get(importPath), key = `${file.rootId}|${dir}|${ns}`;
+    if (!groups.has(key)) groups.set(key, { ns, dir, rootId: file.rootId, files: new Set(), tests: new Set() });
+    const pkg = groups.get(key);
+    (file.path.endsWith('_test.go') ? pkg.tests : pkg.files).add(file.id);
+  }
+  const goQualified = (q, fromTypeId) => {
+    const file = fileRecs[allTypes[fromTypeId]?.file], [head, leaf, extra] = q.split('.');
+    // Without a scanned module root there is no authoritative package-path map.
+    // Preserve the existing legacy/GOPATH choice rather than inventing a root.
+    if (!orderedGoModules.some(m => !m.dir || file.path.startsWith(`${m.dir}/`))) return resolveNameCandidate(leaf, fromTypeId);
+    const packages = new Set();
+    if (head && leaf && !extra && /^\p{Lu}/u.test(leaf)) for (const imp of file.goImports || []) {
+      if (imp.alias === '.' || imp.alias === '_') continue;
+      for (const pkg of goPackageIndex.get(imp.path)?.values() || []) {
+        if ((imp.alias || pkg.ns) === head) packages.add(pkg);
+      }
+    }
+    if (packages.size === 1) {
+      const pkg = [...packages][0];
+      // External tests import their own package's test build, including export_test.go.
+      const testBuild = file.path.endsWith('_test.go') && file.namespaces?.[0] === `${pkg.ns}_test`
+        && file.rootId === pkg.rootId && path.posix.dirname(file.path) === pkg.dir;
+      const ids = (bySimpleName.get(leaf) || []).filter(id => {
+        const target = allTypes[id];
+        return target.parent == null && !target.synthModule && !target.goLocalType
+          && (pkg.files.has(target.file) || (testBuild && pkg.tests.has(target.file)));
+      });
+      if (ids.length === 1) return { id: ids[0], import: true };
+      if (ids.length > 1) {
+        // Keep an existing choice only if it belongs to this exact package.
+        // Do not select a different conditional-build declaration after rejection.
+        const existing = resolveNameCandidate(leaf, fromTypeId, true);
+        if (existing && ids.includes(existing.id)) return { ...existing, import: true };
+        if (existing) noteUnresolved('ambiguous', q, fromTypeId, 'go-qualified-ambiguous');
+        return null;
+      }
+    }
+    noteUnresolved(packages.size > 1 ? 'ambiguous' : 'unknown', q, fromTypeId, 'go-qualified-unresolved');
+    return null;
+  };
+  const goBareVisible = (file, target) => {
+    const other = fileRecs[target.file];
+    if (target.file === file.id || target.synthModule) return true;
+    if (target.goLocalType) return false;
+    if (file.rootId === other.rootId && path.posix.dirname(file.path) === path.posix.dirname(other.path)
+      && file.namespaces?.[0] === target.ns) return true;
+    if (!/^\p{Lu}/u.test(target.name)) return false;
+    return (file.goImports || []).some(imp => {
+      if (imp.alias !== '.') return false;
+      const groups = goPackageIndex.get(imp.path);
+      if (groups) return [...groups.values()].some(pkg => pkg.files.has(target.file)
+        || (file.path.endsWith('_test.go') && file.namespaces?.[0] === `${pkg.ns}_test`
+          && file.rootId === pkg.rootId && path.posix.dirname(file.path) === pkg.dir && pkg.tests.has(target.file)));
+      if (orderedGoModules.some(m => !m.dir || file.path.startsWith(`${m.dir}/`))) return false;
+      return importMatchesTarget(imp.path, { ns: target.ns, fqn: target.fqn, name: target.name, path: other.path },
+        { packages, fromPath: file.path });
+    });
+  };
+
   // Validate the existing choice, without resolving again against a smaller pool:
   // rejecting one impossible target does not prove another same-name target valid.
+  const pythonModuleFiles = new Map(), pythonExactFiles = new Map();
+  for (const f of fileRecs) if (f.lang === 'python') {
+    const rel = (f.relativePath || f.path).replace(/\\/g, '/');
+    const stem = rel.replace(/\.py$/, '').replace(/(?:^|\/)__init__$/, '');
+    pythonExactFiles.set(`${f.rootId}|${stem}`, f);
+    // Absolute imports start at the project root or its conventional src root;
+    // arbitrary nested test files must not masquerade as installed packages.
+    for (const moduleStem of [stem, ...(stem.startsWith('src/') ? [stem.slice(4)] : [])]) {
+      const module = moduleStem.replaceAll('/', '.');
+      if (!module) continue;
+      const list = pythonModuleFiles.get(module) || []; list.push(f); pythonModuleFiles.set(module, list);
+    }
+  }
+  const pythonModuleRoots = (module, f) => {
+    if (module.startsWith('.')) {
+      const dots = module.match(/^\.+/)[0].length;
+      let dir = path.posix.dirname(f.relativePath || f.path);
+      for (let i = 1; i < dots; i++) dir = path.posix.dirname(dir);
+      const stem = path.posix.normalize(path.posix.join(dir, module.slice(dots).replaceAll('.', '/')));
+      const file = pythonExactFiles.get(`${f.rootId}|${stem}`); return file ? [file] : [];
+    }
+    return pythonModuleFiles.get(module) || [];
+  };
+  const pythonExports = (file, leaf, seen = new Set()) => {
+    const key = `${file.id}|${leaf}`;
+    if (seen.has(key)) return new Set(); seen.add(key);
+    const ids = new Set((bySimpleName.get(leaf) || []).filter(id => {
+      const t = allTypes[id]; return t.file === file.id && t.parent == null && !t.synthModule;
+    }));
+    for (const binding of Object.hasOwn(file.pythonModules || {}, leaf) ? file.pythonModules[leaf] : []) {
+      const dot = binding.lastIndexOf('.'); if (dot < 0) continue;
+      const module = binding.slice(0, dot) || '.', name = binding.slice(dot + 1);
+      const roots = pythonModuleRoots(module, file);
+      if (roots.length === 1) for (const id of pythonExports(roots[0], name, seen)) ids.add(id);
+    }
+    for (const module of file.pythonModules?.['*'] || []) {
+      const roots = pythonModuleRoots(module, file);
+      if (roots.length === 1) for (const id of pythonExports(roots[0], leaf, seen)) ids.add(id);
+    }
+    return ids;
+  };
+  const pythonExportCache = new Map();
+  const pythonQualified = (q, fromTypeId) => {
+    const from = allTypes[fromTypeId], f = fileRecs[from?.file];
+    const parts = q.split('.'), head = parts.shift(), leaf = parts.pop();
+    const modules = f?.pythonModules?.[head];
+    if (!leaf || !modules || modules.length !== 1 || parts.some(p => !p)
+      || f.locals?.includes(head) || f.localOwners?.[fromTypeId]?.includes(head)) return null;
+    const module = `${modules[0]}${parts.length ? `.${parts.join('.')}` : ''}`;
+    const roots = pythonModuleRoots(module, f);
+    if (roots.length !== 1) return null;
+    const key = `${roots[0].id}|${leaf}`;
+    if (!pythonExportCache.has(key)) pythonExportCache.set(key, [...pythonExports(roots[0], leaf)]);
+    const candidates = pythonExportCache.get(key);
+    return candidates.length === 1 ? { id: candidates[0], import: true } : null;
+  };
   const resolveName = (name, fromTypeId, refInfo) => {
-    const hit = resolveNameCandidate(name, fromTypeId);
+    const sourceFile = fileRecs[allTypes[fromTypeId]?.file];
+    const qualified = sourceFile?.lang === 'python' && (refInfo?.q
+      || (name.includes('.') && sourceFile.pythonModules?.[name.split('.')[0]] ? name : null));
+    const dynamic = sourceFile?.lang === 'python' && Object.hasOwn(sourceFile.pythonDynamicBindings || {}, name) ? sourceFile.pythonDynamicBindings[name] : null;
+    let dynamicHit = null;
+    if (dynamic && !sourceFile.localOwners?.[fromTypeId]?.includes(name)) {
+      const dot = dynamic.lastIndexOf('.'), roots = pythonModuleRoots(dynamic.slice(0,dot) || '.', sourceFile);
+      if (roots.length === 1) {
+        const ids = [...pythonExports(roots[0], dynamic.slice(dot+1))];
+        if (ids.length === 1) dynamicHit = { id: ids[0], import: true };
+      }
+    }
+    const hit = sourceFile?.lang === 'go' && refInfo?.q ? goQualified(refInfo.q, fromTypeId)
+      : qualified ? pythonQualified(qualified, fromTypeId) : dynamic ? dynamicHit : resolveNameCandidate(name, fromTypeId);
+    if (qualified && !hit) noteUnresolved('unknown', qualified, fromTypeId, 'python-qualified-unresolved');
     if (!hit) return null;
     const target = allTypes[hit.id];
+    if (sourceFile?.lang === 'go' && !refInfo?.q && !goBareVisible(sourceFile, target)) {
+      if (!sourceFile.goConstants?.includes(name)) noteUnresolved('unknown', name, fromTypeId, 'go-bare-out-of-package');
+      return null;
+    }
     const fromLang = fileRecs[allTypes[fromTypeId]?.file]?.lang;
     const invalidMember = fromLang === 'csharp' && refInfo?.memberName && !target.ns && target.parent == null;
     const rejection = invalidMember ? 'csharp-member-global'
@@ -4020,6 +4191,7 @@ async function scanProject(opts) {
     // 判据与 hasImportBacking 里那条保持一致 —— 两处口径必须相同，否则又会出现"扫描说有、
     // 读侧说没有"的自相矛盾（modules.mjs 文件头记的就是这类事故）。
     if (a && b && a.ns && a.ns === b.ns) return 'import';
+    if (a && b && ancestorNamespaceEvidence(a.ns, b.ns, fileRecs[a.file]?.lang, fileRecs[b.file]?.lang)) return 'import';
     /**
      * **C/C++ 的传递 include 链 = 依据**（第 15 轮）：只影响**档位**，不影响选边 ——
      * 解析仍按 `closure`（≤2 跳）挑候选 ⇒ **边集合一条不变**，只是那些"经多层 include 用到"的真依赖

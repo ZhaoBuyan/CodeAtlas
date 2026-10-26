@@ -315,6 +315,113 @@ const pyImportedBindings = (node) => {
 const pyImportBindsAll = (node) => node.type === 'import_from_statement'
   && node.namedChildren.some((c) => c.type === 'wildcard_import');
 
+// A deliberately narrow, non-executing importlib flow: literal path relative
+// to __file__, spec -> module -> exec_module, returned attributes, unpacked by
+// a module-level zero-argument call. Anything less explicit is left unknown.
+const pyDynamicBindings = (root, bindings) => {
+  const functions = new Map(), result = [];
+  const args = node => node?.childForFieldName('arguments')?.namedChildren || [];
+  const callee = node => {
+    const text = node?.type === 'call' ? node.childForFieldName('function')?.text : '';
+    const [head, ...tail] = String(text || '').split('.');
+    const modules = bindings.get(head);
+    return modules?.size === 1 ? `${[...modules][0]}${tail.length ? `.${tail.join('.')}` : ''}` : text;
+  };
+  for (const fn of root.namedChildren.filter(n => n.type === 'function_definition')) {
+    if (fn.childForFieldName('parameters')?.namedChildren.length) continue;
+    const env = new Map(), executed = new Set(); let exports = null, valid = true;
+    for (const statement of fn.childForFieldName('body')?.namedChildren || []) {
+      if (statement.type === 'comment') continue;
+      if (statement.type === 'expression_statement') {
+        const expr = statement.namedChildren[0];
+        if (expr?.type === 'assignment' && expr.childForFieldName('left')?.type === 'identifier') {
+          const name = expr.childForFieldName('left').text;
+          if (env.has(name)) { valid = false; break; }
+          env.set(name, expr.childForFieldName('right')); continue;
+        }
+        if (expr?.type === 'call' && /\.loader\.exec_module$/.test(expr.childForFieldName('function')?.text || '')) {
+          const specName = expr.childForFieldName('function').text.split('.')[0];
+          const moduleName = args(expr)[0]?.text;
+          const module = env.get(moduleName);
+          if (callee(module) === 'importlib.util.module_from_spec' && args(module)[0]?.text === specName) executed.add(moduleName);
+          else valid = false;
+          continue;
+        }
+        valid = false; break;
+      }
+      if (statement.type !== 'return_statement') { valid = false; break; }
+      const value = statement.namedChildren[0];
+      const items = ['expression_list', 'tuple'].includes(value?.type) ? value.namedChildren : [value];
+      exports = [];
+      for (const item of items) {
+        if (item?.type !== 'attribute') { valid = false; break; }
+        const mod = item.childForFieldName('object')?.text, name = item.childForFieldName('attribute')?.text;
+        if (!executed.has(mod)) { valid = false; break; }
+        const spec = env.get(args(env.get(mod))[0]?.text);
+        if (callee(spec) !== 'importlib.util.spec_from_file_location') { valid = false; break; }
+        const location = args(spec)[1], locationExpr = location?.type === 'identifier' ? env.get(location.text) : location;
+        if (callee(locationExpr) !== 'os.path.join') { valid = false; break; }
+        const pathArgs = args(locationExpr);
+        if (pathArgs.length !== 2 || callee(pathArgs[0]) !== 'os.path.dirname' || args(pathArgs[0])[0]?.text !== '__file__') { valid = false; break; }
+        const literal = pathArgs[1]?.text.match(/^(['"])((?:[A-Za-z_]\w*\/)*[A-Za-z_]\w*\.py)\1$/);
+        if (!literal || !name) { valid = false; break; }
+        exports.push(`.${literal[2].slice(0,-3).replaceAll('/','.')}.${name}`);
+      }
+      break;
+    }
+    if (valid && exports?.length) functions.set(fn.childForFieldName('name').text, exports);
+  }
+  const writes = new Map(), definitions = new Map();
+  for (const statement of root.namedChildren) {
+    const definition = statement.type === 'decorated_definition'
+      ? statement.namedChildren.find(n => ['function_definition', 'class_definition'].includes(n.type)) : statement;
+    if (['function_definition', 'class_definition'].includes(definition?.type)) {
+      const name = definition.childForFieldName('name')?.text;
+      if (!definitions.has(name)) definitions.set(name, []);
+      definitions.get(name).push(definition);
+    }
+    const assignment = statement.type === 'expression_statement' ? statement.namedChildren[0] : null;
+    const left = assignment?.type === 'assignment' ? assignment.childForFieldName('left') : null;
+    for (const name of left?.type === 'identifier' ? [left] : left?.namedChildren || []) if (name.type === 'identifier') writes.set(name.text,(writes.get(name.text)||0)+1);
+  }
+  for (const statement of root.namedChildren) {
+    const assignment = statement.type === 'expression_statement' ? statement.namedChildren[0] : null;
+    if (assignment?.type !== 'assignment') continue;
+    const value = assignment.childForFieldName('right'), left = assignment.childForFieldName('left');
+    if (value?.type !== 'call' || args(value).length) continue;
+    const helper = value.childForFieldName('function')?.text;
+    // Only a single, already-defined helper with no competing binding is evidence.
+    // A same-named invalid definition must invalidate a previously valid loader too.
+    const defs = definitions.get(helper);
+    if (defs?.length !== 1 || defs[0].endIndex > statement.startIndex || writes.has(helper) || bindings.has(helper)) continue;
+    const exports = functions.get(helper);
+    const names = left?.type === 'identifier' ? [left] : left?.namedChildren || [];
+    if (exports?.length === names.length && names.every(n => n.type === 'identifier' && writes.get(n.text) === 1 && !bindings.has(n.text))) names.forEach((n,i) => result.push([n.text,exports[i]]));
+  }
+  return result;
+};
+
+// Preserve the actual module behind an alias, separately from name bindings.
+const pyModuleBindings = (node) => {
+  const out = [];
+  if (node.type === 'import_statement') {
+    for (const c of node.childrenForFieldName('name')) {
+      const name = c.type === 'aliased_import' ? c.childForFieldName('name')?.text : c.text;
+      const alias = c.type === 'aliased_import' ? c.childForFieldName('alias')?.text : null;
+      if (name) out.push([alias || name.split('.')[0], alias ? name : name.split('.')[0]]);
+    }
+  } else if (node.type === 'import_from_statement') {
+    const module = node.childForFieldName('module_name')?.text || '';
+    if (node.namedChildren.some(c => c.type === 'wildcard_import')) out.push(['*', module]);
+    for (const c of node.childrenForFieldName('name')) {
+      const name = c.type === 'aliased_import' ? c.childForFieldName('name')?.text : c.text;
+      const alias = c.type === 'aliased_import' ? c.childForFieldName('alias')?.text : null;
+      if (name && name !== '*') out.push([alias || name, `${module}${module.endsWith('.') ? '' : '.'}${name}`]);
+    }
+  }
+  return out;
+};
+
 const jsImportKind = (node) => {
   if (node.type === 'import_statement') return 'import';
   if (node.type === 'call_expression') {
@@ -371,6 +478,39 @@ const jsBindingNames = (node) => {
   return out;
 };
 
+// Preserve explicit Go import aliases; the default name comes from the target
+// package declaration, not the last segment of its import path (e.g. /v2).
+const goPackageImports = root => {
+  const out = [];
+  for (const statement of root.namedChildren.filter(n => n.type === 'import_declaration')) {
+    const specs = statement.namedChildren.flatMap(n => n.type === 'import_spec_list' ? n.namedChildren : [n]);
+    for (const spec of specs.filter(n => n.type === 'import_spec')) {
+      const literal = spec.childForFieldName('path') || spec.namedChildren.find(n => ['interpreted_string_literal', 'raw_string_literal'].includes(n.type));
+      const match = literal?.text.match(/^(["`])([^\r\n]*)\1$/);
+      if (!match || (match[1] === '"' && match[2].includes('\\'))) continue;
+      out.push({ path: match[2], alias: spec.childForFieldName('name')?.text || null });
+    }
+  }
+  return out;
+};
+
+// Catch bindings shadow values, not TS type names. Limit this check to a simple
+// binding's own block: nested blocks/functions may introduce another binding.
+// Do not register the name on the whole type owner (that also hides outer uses).
+const tsCatchValueReference = (node) => {
+  if (node.type !== 'identifier') return true;
+  for (let scope = node.parent; scope; scope = scope.parent) {
+    if (scope.type === 'catch_clause') {
+      const binding = scope.namedChildren.find(c => c.type === 'identifier');
+      return !binding || binding.text !== node.text;
+    }
+    if (scope.type === 'statement_block' && scope.parent?.type !== 'catch_clause') return true;
+    if (['function_declaration', 'function_expression', 'generator_function', 'generator_function_declaration',
+      'arrow_function', 'method_definition', 'class_body', 'class_declaration', 'abstract_class_declaration'].includes(scope.type)) return true;
+  }
+  return true;
+};
+
 /**
  * **CommonJS 的 `require` 绑定不是局部变量**（2026-10-03 实测踩到）。
  *
@@ -398,6 +538,7 @@ const isRequireDeclaration = (decl) => Boolean(decl) && (decl.namedChildren || [
 
 // TS 与 TSX 的语法节点名完全一致（tsx 只是多了 JSX），共用一份
 const TS_SHAPE = {
+  refFilter: tsCatchValueReference,
   importKindOf: jsImportKind,
   // 被 import 引进来的**名字**（见 jsImportedBindings 的说明）：让"名字已被 import 绑定"那条闸对 TS/TSX/Vue 生效
   importedBindingsOf: jsImportedBindings,
@@ -1002,7 +1143,10 @@ export const LANGUAGES = {
     privateTypeOf: (node) => {
       const modifiers = node.namedChildren.filter((c) => c.type === 'modifier').map((c) => c.text);
       // `private protected` also permits derived types in the same assembly.
-      return modifiers.includes('private') && !modifiers.includes('protected');
+      if (modifiers.includes('private')) return !modifiers.includes('protected');
+      if (modifiers.some(m => ['public', 'internal', 'protected'].includes(m))) return false;
+      // Class/struct members default to private; interface nested types default to public.
+      return ['class_declaration', 'struct_declaration', 'record_declaration'].includes(node.parent?.parent?.type);
     },
     typeArityOf: (node) => {
       const params = node.namedChildren.find((c) => c.type === 'type_parameter_list');
@@ -1157,6 +1301,10 @@ export const LANGUAGES = {
     // （Kotlin 官方支持与 Java 互操作）。实测不认这条会丢：akka `java↔scala` 6,517 条、
     // kotlin 工程 `kotlin↔java` 487/233 条。
     family: 'jvm',
+    // Enum constants declare fields, not references to same-named classes.
+    // Keep argument expressions and anonymous constant bodies traversable.
+    refFilter: node => !(node.parent?.type === 'enum_constant'
+      && node.parent.childForFieldName('name')?.id === node.id),
     namespaces: { package_declaration: 1 },
     namespaceScope: 'file',
     // 局部绑定（规则与保守边界见 Go profile 的同一项）：参数 + 本地变量声明 + 增强 for 的变量
@@ -1228,6 +1376,7 @@ export const LANGUAGES = {
       typed_default_parameter: 'name',
     },
     imports: { import_statement: 1, import_from_statement: 1 },
+    bareNameScope: 'import-only',
     /**
      * **裸名跨文件必须有 import 依据**（Python，2026-10-20）。
      *
@@ -1242,8 +1391,17 @@ export const LANGUAGES = {
     // 实测 django 上 `class DateFunctionTests → tests/db_functions/models.py::DTModel`（×142）这类
     // 真引用其实来自 `from .models import DTModel` —— 以前只记路径、不记符号名，于是既没依据、也挡不住同名巧合。
     importedBindingsOf: pyImportedBindings,
+    moduleBindingsOf: pyModuleBindings,
+    dynamicBindingsOf: pyDynamicBindings,
+    qualifiedReferenceOf: node => node.parent?.type === 'attribute'
+      && node.parent.childForFieldName('attribute')?.id === node.id ? node.parent.text.replace(/\s+/g, '') : null,
     importBindsAllOf: pyImportBindsAll,
     baseFields: ['superclasses'],
+    baseNamesOf: node => (node.childForFieldName('superclasses')?.namedChildren || [])
+      .filter(c => ['identifier', 'attribute', 'subscript'].includes(c.type))
+      .map(c => c.type === 'subscript' ? (c.childForFieldName('value') || c.namedChildren[0])?.text : c.text)
+      .map(name => name?.replace(/\s+/g, ''))
+      .filter(name => name && /^[\p{ID_Start}_][\p{ID_Continue}.]*$/u.test(name)),
     baseNodes: [],
     skipNameNodes: { typed_parameter: 'name', default_parameter: 'name', parameters: 'identifier' },
     decisions: [
@@ -1871,6 +2029,15 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.go'],
     wasm: 'go/tree-sitter-go.wasm',
+    packageImportsOf: goPackageImports,
+    packageConstantsOf: root => root.namedChildren.filter(n => n.type === 'const_declaration')
+      .flatMap(n => n.namedChildren.filter(c => c.type === 'const_spec'))
+      .flatMap(n => n.childrenForFieldName('name').filter(c => c.type === 'identifier').map(c => c.text)),
+    qualifiedReferenceOf: node => node.parent?.type === 'qualified_type'
+      && node.parent.childForFieldName('name')?.id === node.id
+      ? `${node.parent.namedChildren.find(n => n.type === 'package_identifier')?.text}.${node.text}` : null,
+    refFilter: node => !(node.parent?.type === 'const_spec'
+      && node.parent.childrenForFieldName('name').some(n => n.id === node.id)),
     namespaces: { package_clause: 1 },
     namespaceScope: 'file',
     // ⚠ `package_clause` 的文本是**整串** `package cobra` —— 不取里面的 `package_identifier`，
@@ -1923,6 +2090,9 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.rs'],
     wasm: 'rust/tree-sitter-rust.wasm',
+    // Variant names declare constructors; payload types and discriminants still contain refs.
+    refFilter: node => !(node.parent?.type === 'enum_variant'
+      && node.parent.childForFieldName('name')?.id === node.id),
     namespaces: {},
     types: { struct_item: 'struct', enum_item: 'enum', trait_item: 'trait', impl_item: 'impl', union_item: 'union', type_item: 'type' },
     members: {
