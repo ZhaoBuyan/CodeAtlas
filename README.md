@@ -152,7 +152,7 @@ npm run publish:lite   # lite only
 npm run launcher       # dev-mode launcher -> CodeAtlas.exe in the repo root (no embedded engine: it reads src/ next to it)
 ```
 
-One line on how it works: the engine (`src` / `web` / `configs` / 32 grammar wasm files / d3) is zipped by
+One line on how it works: the engine (`src` / `web` / `configs` / supported grammar wasm files / d3) is zipped by
 `tools/build-payload.mjs` and embedded into the exe as an `<EmbeddedResource>`; on **first run** it is
 extracted to `%LocalAppData%\CodeAtlas\engine\<version-payloadfingerprint>\` and reused from there.
 What the full edition has beyond the lite one: `node.exe` in the payload (88 MB) plus the trimmed Java
@@ -164,7 +164,7 @@ runtime (about 30 MB).
 - `dist/` and `ingest/` are written **next to the exe** (the engine directory is a cache; user data never
   goes in there).
 - **Updating = replacing the exe.** A different version/payload fingerprint re-extracts the matching engine.
-- The payload ships wasm only for the **32 code languages + 6 file-level formats** we support
+- The payload ships wasm only for the **35 code languages + 6 file-level formats** we support
   and nothing else (the unused grammars in the npm package stay out).
 - Third-party components and licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
   (a copy also ships in the extracted engine directory).
@@ -488,7 +488,7 @@ Decompilation supports three things: **.NET assemblies**, **.NET single-file pub
 (see the known limits under "Scanning without source" above).
 Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, point at it and it scans.
 
-### Supported languages (32 code languages)
+### Supported languages (35 code languages)
 
 | Language | Extensions | Status |
 | --- | --- | --- |
@@ -524,8 +524,17 @@ Unity games are the exception: `<game>_Data\Managed\*.dll` is a .NET assembly, p
 | SystemRDL | `.rdl` | ✅ fixtures (addrmap / reg / field components; the wasm is built by us — see the note below) |
 | Emacs Lisp | `.el` | ✅ fixtures (no type concept → top-level functions/variables hang off a synthetic module node) |
 | Elixir | `.ex` `.exs` | ✅ fixtures (module / function / struct; note `defmodule`/`def` are `call` nodes in the tree, recognized by dedicated hooks; `alias` counts as an import but is not linked into an edge yet) |
+| Haskell | `.hs` | ✅ fixtures + measured (containers / parsec); nominal types, function members and type references with explicit module evidence. Imports, aliases, export lists and reexports are checked; value calls, CPP and Template Haskell execution are outside this profile. |
+| Clojure | `.clj` | ✅ fixtures + measured (core.async / tools.reader / data.json); top-level records, types, protocols and function members. Type hints, JVM constructors and protocol implementations use explicit class/namespace bindings; macros are not executed. |
+| Elm | `.elm` | ✅ fixtures + measured (elm/core, elm/url, elm/browser); custom types, aliases, function/signature members and explicit type references. Exact modules, import aliases, exposing lists and default type imports determine visibility. |
 
-**No profile yet** (the grammar loads; what's missing is our layer): `Elm`, `QL`, `Haskell`, `Julia`, `Svelte`…
+Haskell dependency resolution is conservative: files requiring preprocessing or containing parse errors, package-qualified imports, type families, ambiguous modules and uncertain external exports remain unresolved. Standard Prelude names participate in ambiguity checks; explicit Prelude imports and `NoImplicitPrelude` are respected. `.lhs` and `.hs-boot` are not included.
+
+Clojure support is limited to `.clj`: `.cljs` / `.cljc`, macro expansion, `reify` protocol inference, generated factory calls (`->Type` / `map->Type`) and general function-call dependencies are outside this profile. Dynamic namespace operations, unsupported namespace clauses, reader evaluation and uncertain bindings remain unresolved; quoted/discarded forms do not create declarations.
+
+Elm dependencies cover type positions only; constructor/value calls and package dependency solving are outside this profile. Missing external exports, duplicate modules and files with parse errors remain unresolved. Compiler-provided types without a source declaration, such as `List`, are not fabricated as nodes.
+
+**No profile yet** (the grammar loads; what's missing is our layer): `QL`, `Julia`, `Svelte`…
 `Objective-C`'s `.m` clashes with MATLAB's extension (needs a switch to disambiguate), so it is deliberately deferred.
 `TLA+` has no usable upstream wasm, so it is maintained in `vendor/wasm/`; the same goes for `SystemRDL` —
 we compile it ourselves with emscripten (clang + wasm-ld, no emcc needed) and keep the wasm in `vendor/wasm/`
@@ -631,8 +640,8 @@ so the whole file does not vanish from the map; their members (functions/variabl
 
 ### What it cannot read (the boundaries, stated plainly)
 
-1. **Unsupported languages** (Dart / Haskell / Svelte…) are skipped, but **not silently** — the report and the UI
-   both show "unsupported languages: N files (.dart 2 · .vue 1 …)". The same principle covers skipped **directories**:
+1. **Unsupported languages** (Erlang / Julia / Svelte…) are skipped, but **not silently** — the report and the UI
+   both show "unsupported languages: N files (.jl 2 · .svelte 1 …)". The same principle covers skipped **directories**:
    a header chip says "skipped 10 dir names (10) · 3 by project rules" and its tooltip names them (and which rule
    file they came from). There is also an easily confused case:
    files in a language we *do* support but that were outside this scan (that language was not ticked, or a
@@ -652,7 +661,7 @@ Every item below is in the current build; what changed in each version lives in 
 - [x] v1: CLI scan + local web UI (tree map / tree list / inspector / permalinks)
 - [x] Grouping layer: system rules (facets config) + directory / namespace / flat
 - [x] MCP server (search symbols / find references / export subgraphs) for AI
-- [x] Language coverage: 32 code languages + 6 file-level formats (including **Markdown heading structure**)
+- [x] Language coverage: 35 code languages + 6 file-level formats (including **Markdown heading structure**)
 - [x] Dependency graph view (force-directed) + package-level dependency matrix
 - [x] Pick languages to scan in the launcher (UI + `--lang`)
 - [x] Search improvements: type names + member names (web and MCP) · per-language filtering in the map

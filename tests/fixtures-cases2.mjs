@@ -7,6 +7,72 @@
  */
 export const EXTRA_CASES = [
   {
+    dir: 'csharp-member-call-roles', lang: 'csharp', types: 16, errorsMax: 0,
+    refEdges: [['MemberCallRoles.StaticOnly','MemberCallRoles.Collision',false], ['MemberCallRoles.GenericOnly','MemberCallRoles.GenericCollision',false], ['MemberCallRoles.ConditionalOnly','MemberCallRoles.Collision',false], ['MemberCallRoles.InheritedCallback','MemberCallRoles.Callback',true]],
+    edgeWeights: [['MemberCallRoles.Mixed','MemberCallRoles.Collision','ref',2], ['MemberCallRoles.NestedType','MemberCallRoles.Nested','ref',3]],
+  },
+  {
+    dir: 'csharp-call-roles', lang: 'csharp', types: 12, errorsMax: 0,
+    refEdges: [['CallRoles.BareOnly','CallRoles.Collision',false], ['CallRoles.GenericOnly','CallRoles.GenericCollision',false], ['CallRoles.TypeArguments','CallRoles.GenericCollision',false], ['CallRoles.DerivedCallback','CallRoles.Callback',true]],
+    edgeWeights: [['CallRoles.Mixed','CallRoles.Collision','ref',2], ['CallRoles.TypeArguments','CallRoles.Token','ref',3], ['CallRoles.TypedUses','CallRoles.Collision','ref',3]],
+  },
+  {
+    dir: 'csharp-method-declarations', lang: 'csharp', types: 11, errorsMax: 0,
+    refEdges: [['MethodRoles.Declaration','MethodRoles.Collision',false], ['MethodRoles.Signature','MethodRoles.Collision',false], ['MethodRoles.Generic','MethodRoles.Collision',false]],
+    edgeWeights: [['MethodRoles.Combined','MethodRoles.Collision','ref',2], ['MethodRoles.Explicit','MethodRoles.Collision','ref',2], ['MethodRoles.IContract','MethodRoles.Collision','ref',1]],
+  },
+  {
+    dir: 'elm', lang: 'elm', types: 28, errorsMax: 0,
+    refEdges: [['User.Model','Alpha.Public',true], ['User.Model','Alpha.Hidden',false], ['User.NegativePrefix','Alpha.Public',false], ['ConstructorOnly.elm','Alpha.Public',false]],
+    edgeWeights: [['User.Model','Alpha.Public','ref',2], ['User.Extended','Alpha.Public','ref',1]],
+    refTiers: [['User.Model','Alpha.Public','import'], ['Alpha.Choice','Alpha.Public','same']],
+  },
+  {
+    dir: 'scala-method-declarations', lang: 'scala', types: 6, errorsMax: 0,
+    refEdges: [['methodroles.Declaration','methodroles.Collision',false], ['methodroles.Signature','methodroles.Collision',false]],
+    edgeWeights: [['methodroles.Combined','methodroles.Collision','ref',2], ['methodroles.Genuine','methodroles.Kept','ref',2], ['methodroles.Signature','methodroles.Kept','ref',1]],
+  },
+  {
+    dir: 'java-member-declarations', lang: 'java', types: 5, errorsMax: 0,
+    refEdges: [['memberroles.Declaration','memberroles.Coincidence',false], ['memberroles.Genuine','memberroles.Kept',true]],
+    edgeWeights: [['memberroles.Mixed','memberroles.Coincidence','ref',2]],
+  },
+  {
+    dir: 'rust-member-declarations', lang: 'rust', types: 6, errorsMax: 0,
+    refEdges: [['src/declaration.rs','Coincidence',false], ['SignatureDeclaration','Coincidence',false]],
+    edgeWeights: [['src/mixed.rs','Coincidence','ref',2], ['src/mixed.rs','Kept','ref',2], ['SignatureDeclaration','Kept','ref',1]],
+  },
+  {
+    dir: 'php-member-declarations', lang: 'php', types: 8, errorsMax: 0,
+    refEdges: [['MemberRoles.Declaration','MemberRoles.Coincidence',false], ['MemberRoles.Choice','MemberRoles.Coincidence',false], ['owners.php','MemberRoles.Coincidence',false]],
+    edgeWeights: [['MemberRoles.Combined','MemberRoles.Coincidence','ref',2], ['MemberRoles.Genuine','MemberRoles.Kept','ref',2], ['MemberRoles.WithValue','MemberRoles.Kept','ref',1]],
+  },
+  {
+    dir: 'csharp-private-ancestors', lang: 'csharp', types: 14, errorsMax: 0,
+    refEdges: [['AncestorAccess.Outside','AncestorAccess.Math',false], ['AncestorAccess.MissingBinding','AncestorAccess.Coincidence',false],
+      ['AncestorAccess.Sibling','AncestorAccess.Math',true], ['AncestorAccess.AnotherVault','AncestorAccess.Coincidence',true],
+      ['AncestorAccess.Outside','AncestorAccess.Visible',true]],
+    refTiers: [['AncestorAccess.Sibling','AncestorAccess.Math','same']],
+  },
+  {
+    dir: 'clojure', lang: 'clojure', types: 34,
+    names: ['Contract','Box','Item','ViaAlias','ViaRefer','HyphenBox','ExplicitType'],
+    importsMin: 10, docs: 1, membersMin: 20, errorsMax: 0,
+    refEdges: [['atlas.use.ViaAlias','atlas.types.Contract',true], ['atlas.use.ViaRefer','atlas.types.Contract',true],
+      ['atlas.hyphen-use.HyphenUser','atlas.hyphen-types.HyphenBox',true], ['atlas.negative.NoRefer','atlas.types.Contract',false],
+      ['atlas.negative.AliasIsNotClass','atlas.types.Box',false], ['atlas.negative.HiddenUser','atlas.types.Hidden',false]],
+    refTiers: [['atlas.use.ViaAlias','atlas.types.Contract','import']],
+  },
+  {
+    dir: 'haskell', lang: 'haskell', types: 47,
+    names: ['Box', 'Shown', 'Secret', 'Marker', 'Qualified', 'Holder', 'Wrapped', 'ThroughBarrel'],
+    importsMin: 4, docs: 1, membersMin: 8, errorsMax: 0,
+    refEdges: [['Atlas.Use.Qualified', 'Atlas.Dep.Box', true], ['Atlas.Bare.Kept', 'Atlas.Dep.Box', true],
+      ['Atlas.Reexport.ThroughBarrel', 'Atlas.Dep.Box', true], ['Atlas.Use.BareNotImported', 'Atlas.Dep.Box', false],
+      ['Atlas.Use.Private', 'Atlas.Dep.Secret', false], ['Atlas.NoImport.Unrelated', 'Atlas.Other.Unique', false]],
+    refTiers: [['Atlas.Use.Qualified', 'Atlas.Dep.Box', 'import']],
+  },
+  {
     dir: 'go-qualified', lang: 'go', errorsMax: 0,
     refEdges: [['client.AliasUse','actual.Coincidence',true], ['client.WrongUse','actual.OnlyChild',false],
       ['client.WrongUse','actual.OnlyTest',false], ['client.VersionUse','actual.Version',true],

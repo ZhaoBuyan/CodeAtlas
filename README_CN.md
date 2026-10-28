@@ -133,7 +133,7 @@ npm run publish:lite   # 只出精简版
 npm run launcher       # 开发模式的启动器 → 仓库根的 CodeAtlas.exe（不嵌引擎，直接读旁边的 src/）
 ```
 
-原理一句话：引擎（`src` / `web` / `configs` / 32 个语法包 wasm / d3）先由 `tools/build-payload.mjs`
+原理一句话：引擎（`src` / `web` / `configs` / 已支持的语法包 wasm / d3）先由 `tools/build-payload.mjs`
 打成 zip，构建时作为 `<EmbeddedResource>` 整个嵌进 exe；**首次运行**解到
 `%LocalAppData%\CodeAtlas\engine\<版本-包指纹>\`，之后直接用，不再重复解
 （目录名用的是**包内容指纹**而不是大小：内容变了但大小没变时也会重新解，避得用错旧引擎）。
@@ -143,7 +143,7 @@ npm run launcher       # 开发模式的启动器 → 仓库根的 CodeAtlas.exe
   不是当前版本的旧解包目录会在**每次启动**时自动清掉（只留**当前在用的 + 最近用过的那个**），免得换个版本就多留一百多 MB。
 - `dist/` 和 `ingest/` 落在 **exe 旁边**（引擎目录只当缓存，不往里写用户数据）。
 - **更新方式：换 exe**。新 exe 的版本 / **包内容指纹**不同 → 自动重新释放配套引擎。
-- 打包只带**我们支持的 32 门代码语言 + 6 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
+- 打包只带**我们支持的 35 门代码语言 + 6 种文件级格式**的 wasm（汇总包里用不到的那些不进去）。
 - 第三方组件与许可证：见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)（解包目录里也放了一份）。
 - **反编译在完全版里无需安装**：扫 `.dll` / `.exe` 用链接进启动器的反编译器（ILSpy 引擎）；扫 `.jar` 用自带的裁剪版 Java 运行时 + cfr.jar —— 都不需要先装 ilspycmd / sfextract / Java。精简版不带 Java 运行时（它本来就要求 .NET 9 + Node），扫 `.jar` 仍需自己装 Java。
 - 开发模式不受影响：exe 旁边就有 `src/cli.mjs` 时（比如把 exe 放进仓库里），直接用仓库里的引擎，不碰内置的。
@@ -406,7 +406,7 @@ npm run diff:rescan -- <基线复扫日志> <新复扫日志>                  #
 反编译只支持三类：**.NET 程序集**、**.NET 单文件发行版**、**Java .jar**（详见下面「没有源码也能扫」的已知限制）。
 Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集，直接指它就能扫。
 
-### 认识的语言（32 门代码语言）
+### 认识的语言（35 门代码语言）
 
 | 语言 | 后缀 | 状态 |
 | --- | --- | --- |
@@ -442,8 +442,17 @@ Unity 游戏是例外：`<游戏名>_Data\Managed\*.dll` 就是 .NET 程序集�
 | SystemRDL | `.rdl` | ✅ fixtures（addrmap / reg / field 组件；wasm 是我们自己编的 —— 见下方说明） |
 | Emacs Lisp | `.el` | ✅ fixtures（无类型概念 → 顶层函数/变量挂在合成的 module 节点上） |
 | Elixir | `.ex` `.exs` | ✅ fixtures（module / function / struct；注：`defmodule`/`def` 在语法树里是 call 节点，靠专属钩子识别；`alias` 会计入导入，但暂不连成依赖边） |
+| Haskell | `.hs` | ✅ 夹具 + 实测（containers / parsec）；名义类型、函数成员及有明确模块依据的类型引用。检查导入、别名、导出清单和重导出；不推断值调用，不执行 CPP 或 Template Haskell。 |
+| Clojure | `.clj` | ✅ 夹具 + 实测（core.async / tools.reader / data.json）；顶层 record、type、protocol 与函数成员。类型提示、JVM 构造器和协议实现按明确的类/命名空间绑定取证，不执行宏。 |
+| Elm | `.elm` | ✅ 夹具 + 实测（elm/core、elm/url、elm/browser）；自定义类型、类型别名、函数/签名成员及明确的类型引用。按精确模块名、导入别名、exposing 清单和默认类型导入判断可见性。 |
 
-**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`Elm`、`QL`、`Haskell`、`Julia`、`Svelte`…
+Haskell 依赖解析采用保守规则：需要预处理或存在解析错误的文件、指定包的导入、类型族、重名模块，以及无法确认的外部导出，均保留为未解析。标准 Prelude 名称参与歧义检查，并尊重显式 Prelude 导入与 `NoImplicitPrelude`。暂不包含 `.lhs` 和 `.hs-boot`。
+
+Clojure 目前仅支持 `.clj`，不包含 `.cljs` / `.cljc`、宏展开、`reify` 协议推断、生成工厂调用（`->Type` / `map->Type`）和一般函数调用依赖。运行时命名空间操作、未支持的 ns 子句、reader 求值与无法确认的绑定保留为未解析；quote/discard 内的表单不生成类型声明。
+
+Elm 依赖目前仅覆盖类型位置，不推断构造器/值调用，不解析包依赖图。未知外部导出、重名模块和存在解析错误的文件保留为未解析；`List` 等由编译器提供、源码无声明的类型不伪造节点。
+
+**还没做 profile 的**（语法包能加载，缺的是我们这一层的支持）：`QL`、`Julia`、`Svelte`…
 `Objective-C` 的 `.m` 与 MATLAB 扩名冲突（只能靠开关指定），因此刻意留待后续处理。
 `TLA+` 的上游没有可直接用的 wasm，放在 `vendor/wasm/` 自己维护；`SystemRDL` 同理 —— 它是我们用 emscripten
 （clang + wasm-ld，不需要 emcc）自己编的，wasm 也放 `vendor/wasm/`（配方见 `src/languages.mjs`）。
@@ -524,7 +533,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ### 读不了什么（边界，说清楚）
 
-1. **没支持的语言**（Dart / Haskell / Svelte…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.dart 2 · .vue 1 …）」；
+1. **没支持的语言**（Erlang / Julia / Svelte…）会被跳过，但**不是静默忽略**——报告和界面上都会写「未支持语言 N 个文件（.jl 2 · .svelte 1 …）」；
    同一条原则也用在**跳过的目录**上：网页抬头的 chip 写「跳过 10 类目录（10 个） · 规则跳了 3 个」，
    悬停能看到是哪几个目录、规则来自哪个文件（命令行报告与 MCP 的 `overview` 里也有同一份数据）；
    还有一种容易误会的：「我们支持、但这次没在扫描范围内」的文件（没勾那门语言，或者 JSON/YAML 这类默认不扫的格式），会单独报成「**语言范围外** N 个文件没扫」，不会被算成“不支持”；
@@ -539,7 +548,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 - [x] v1：CLI 扫描 + 本地网页（树形图 / 树状列表 / 检查器 / permalink）
 - [x] 分组层：系统规则（facets 配置）+ 目录 / 命名空间 / 平铺
 - [x] MCP server（搜符号 / 找引用 / 导出子图），给 AI 用
-- [x] 语言覆盖：32 门代码语言 + 6 种文件级格式（含 **Markdown 的标题层级**）
+- [x] 语言覆盖：35 门代码语言 + 6 种文件级格式（含 **Markdown 的标题层级**）
 - [x] 依赖图视图（力导向）+ 包级依赖矩阵
 - [x] 启动器里勾选要扫的语言（界面 + `--lang`）
 - [x] 搜索增强：类型名 + 成员名（web 与 MCP 都支持）· 地图内按语言过滤

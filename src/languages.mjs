@@ -35,6 +35,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HASKELL } from './language-haskell.mjs';
+import { CLOJURE } from './language-clojure.mjs';
+import { ELM } from './language-elm.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const ENGINE_ROOT = path.join(HERE, '..');
@@ -1114,6 +1117,9 @@ const csharpReferenceArity = (node) => {
 };
 
 export const LANGUAGES = {
+  clojure: CLOJURE,
+  elm: ELM,
+  haskell: HASKELL,
   csharp: {
     id: 'csharp',
     label: 'C#',
@@ -1127,10 +1133,25 @@ export const LANGUAGES = {
     preprocess: 'csharp',
     // 参数名的标识符不算"引用"（否则参数名与类型重名时会产生假依赖）
     skipNameNodes: { parameter: 'name' },
-    // Enum member names declare values; their initializer expressions still contain refs.
-    // Do not turn `MemberList.Source = 1` into a dependency on an unrelated class Source.
-    refFilter: (node) => !(node.parent?.type === 'enum_member_declaration'
+    // Enum members and methods declare names; keep initializers, signatures,
+    // explicit interface specifiers and bodies as reference sources.
+    refFilter: (node) => !(['enum_member_declaration', 'method_declaration'].includes(node.parent?.type)
       && node.parent.childForFieldName('name')?.id === node.id),
+    // An invocation name denotes a method/delegate value, not a class. Keep its
+    // call site for member queries; only the selected type edge is reconsidered.
+    referenceRoleOf: node => {
+      const callee = node.parent?.type === 'generic_name' && node.parent.firstNamedChild?.id === node.id
+        ? node.parent : node;
+      let expression = callee;
+      if (['member_access_expression', 'member_binding_expression'].includes(callee.parent?.type)
+        && callee.parent.childForFieldName('name')?.id === callee.id) {
+        expression = callee.parent;
+        if (expression.parent?.type === 'conditional_access_expression'
+          && expression.parent.lastNamedChild?.id === expression.id) expression = expression.parent;
+      }
+      return node.type === 'identifier' && expression.parent?.type === 'invocation_expression'
+        && expression.parent.childForFieldName('function')?.id === expression.id ? 'csharp-callable' : undefined;
+    },
     // Preserve the RHS role of `receiver.Name`, including generic member wrappers.
     // Nested types remain candidates; only an incompatible global top-level target is vetoed.
     memberReferenceOf: (node) => {
@@ -1301,9 +1322,8 @@ export const LANGUAGES = {
     // （Kotlin 官方支持与 Java 互操作）。实测不认这条会丢：akka `java↔scala` 6,517 条、
     // kotlin 工程 `kotlin↔java` 487/233 条。
     family: 'jvm',
-    // Enum constants declare fields, not references to same-named classes.
-    // Keep argument expressions and anonymous constant bodies traversable.
-    refFilter: node => !(node.parent?.type === 'enum_constant'
+    // Declaration names are not type refs or calls; signatures/bodies still walk.
+    refFilter: node => !(['enum_constant', 'method_declaration'].includes(node.parent?.type)
       && node.parent.childForFieldName('name')?.id === node.id),
     namespaces: { package_declaration: 1 },
     namespaceScope: 'file',
@@ -2090,8 +2110,8 @@ export const LANGUAGES = {
     status: 'ok',
     exts: ['.rs'],
     wasm: 'rust/tree-sitter-rust.wasm',
-    // Variant names declare constructors; payload types and discriminants still contain refs.
-    refFilter: node => !(node.parent?.type === 'enum_variant'
+    // Variant/function names declare symbols; payloads, signatures and bodies still contain refs.
+    refFilter: node => !(['enum_variant', 'function_item', 'function_signature_item'].includes(node.parent?.type)
       && node.parent.childForFieldName('name')?.id === node.id),
     namespaces: {},
     types: { struct_item: 'struct', enum_item: 'enum', trait_item: 'trait', impl_item: 'impl', union_item: 'union', type_item: 'type' },
@@ -2287,6 +2307,10 @@ export const LANGUAGES = {
     // 类型引用在这个语法里是 `name` / `qualified_name`（不像别的语言叫 identifier / type_identifier）——
     // 不加这两类就一个引用也采不到（实测 guzzle：132 个文件、0 条 ref 边）。
     refTypes: ['name', 'qualified_name'],
+    // Member extraction returns before skipNameNodes runs. Filter these exact
+    // declaration-name nodes here; return types, enum values and bodies remain refs.
+    refFilter: node => !(['method_declaration', 'function_definition', 'enum_case'].includes(node.parent?.type)
+      && node.parent.childForFieldName('name')?.id === node.id),
     // 但声明处的名字也是 `name` —— 那些不算引用
     skipNameNodes: {
       class_declaration: 'name', interface_declaration: 'name', trait_declaration: 'name', enum_declaration: 'name',
@@ -2376,6 +2400,10 @@ export const LANGUAGES = {
     family: 'jvm',      // 与 Java / Kotlin 同族（见 java profile 的说明）
     namespaces: { package_clause: 1 },
     namespaceScope: 'file',
+    // A method name declares a term; it is not a reference to a same-named type.
+    // Keep the signature and body, including return types and constructor uses.
+    refFilter: node => !(['function_definition', 'function_declaration'].includes(node.parent?.type)
+      && node.parent.childForFieldName('name')?.id === node.id),
     /**
      * 局部绑定（A3，2026-09-25 实测）—— 规则与保守边界见 Go profile 的同一项。
      *   · `def f(xs: List[Int])` 的参数有 `name` 字段；
