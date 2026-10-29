@@ -686,7 +686,7 @@ Every item below is in the current build; what changed in each version lives in 
 
 ## Support
 
-If CodeAtlas saved you some time, you can buy me a coffee with the Alipay QR code below:
+If CodeAtlas saved you some time, you can buy me a coffee with the WeChat reward QR code below:
 
 <p align="left"><img src="assets/donate.jpg" alt="Tip QR code" width="220" /></p>
 

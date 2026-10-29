@@ -575,7 +575,7 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
 
 ## 支持这个项目
 
-如果 CodeAtlas 帮到了你，欢迎请我喝杯咖啡 —— 用支付宝扫下面这个码：
+如果 CodeAtlas 帮到了你，欢迎请我喝杯咖啡 —— 用微信扫下面这个码：
 
 <p align="left"><img src="assets/donate.jpg" alt="赞赏码" width="220" /></p>
 
