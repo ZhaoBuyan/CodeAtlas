@@ -573,6 +573,14 @@ node src/cli.mjs scan ./repo --lang cs               # 只看 C#
   `impact` 的一行是一个类型，可能被好几档的边带进来 → 按“强 → 弱”全列（`[有支撑 + 仅同名]`），不只报最强那一档；
   `overview` 热点榜按有证据的引用次数排（“仅同名”里既有名字巧合、也可能有没认出来的真引用，不计入但别当成噪声一概丢掉）
 
+## 支持这个项目
+
+如果 CodeAtlas 帮到了你，欢迎请我喝杯咖啡 —— 用支付宝扫下面这个码：
+
+<p align="left"><img src="assets/donate.jpg" alt="赞赏码" width="220" /></p>
+
+不想花钱也完全没问题：提 issue、点个 star、或者把踩到的坑告诉我，同样是支持。
+
 ## 协议
 
 MIT（见 [LICENSE](LICENSE)）。

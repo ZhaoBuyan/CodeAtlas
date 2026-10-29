@@ -684,6 +684,14 @@ Every item below is in the current build; what changed in each version lives in 
 - **“Clear selection”** at the bottom-right of the map; hovering or clicking a module's *name* now hits the module itself
 - **Evidence strength**: every `refs` edge is tagged (same file / backed / only candidate / same name only), every `impact` line carries the tiers of the edges that brought it in (strongest first — a line can list several), and the overview hot list ranks by evidenced references
 
+## Support
+
+If CodeAtlas saved you some time, you can buy me a coffee with the Alipay QR code below:
+
+<p align="left"><img src="assets/donate.jpg" alt="Tip QR code" width="220" /></p>
+
+No pressure at all — filing issues, starring the repo, or telling me where it fell short helps just as much.
+
 ## License
 
 MIT (see [LICENSE](LICENSE)).
